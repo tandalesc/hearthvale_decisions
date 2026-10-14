@@ -1,0 +1,33 @@
+{
+  "fixture": "dense crowd, fixed geography, 80 × 0.1s steps",
+  "mode": "cooperative 2ms planning slices",
+  "results": [
+    {
+      "population": 28,
+      "firstMs": 0.62,
+      "p50Ms": 2.3,
+      "p95Ms": 2.92,
+      "maxMs": 3.51,
+      "totalMs": 185.4,
+      "pending": 4
+    },
+    {
+      "population": 250,
+      "firstMs": 0.92,
+      "p50Ms": 2.36,
+      "p95Ms": 2.76,
+      "maxMs": 3.19,
+      "totalMs": 189.24,
+      "pending": 128
+    },
+    {
+      "population": 1000,
+      "firstMs": 1.79,
+      "p50Ms": 2.85,
+      "p95Ms": 3.52,
+      "maxMs": 3.91,
+      "totalMs": 231.36,
+      "pending": 128
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "fixture": "dense crowd, fixed geography, 80 × 0.1s steps",
+  "results": [
+    {
+      "population": 28,
+      "firstMs": 174.81,
+      "p50Ms": 0.05,
+      "p95Ms": 9.02,
+      "maxMs": 174.81,
+      "totalMs": 342.44
+    },
+    {
+      "population": 250,
+      "firstMs": 1257.5,
+      "p50Ms": 0.34,
+      "p95Ms": 82.83,
+      "maxMs": 1257.5,
+      "totalMs": 1985.21
+    },
+    {
+      "population": 1000,
+      "firstMs": 5044.47,
+      "p50Ms": 1.35,
+      "p95Ms": 342.34,
+      "maxMs": 5044.47,
+      "totalMs": 8141.74
+    }
+  ]
+}

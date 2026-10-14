@@ -1,0 +1,80 @@
+{
+  "backend": "Chrome headless, SwiftShader, 1164×703, DPR1",
+  "results": [
+    {
+      "population": 28,
+      "frames": 36,
+      "p50Ms": 115.9,
+      "p95Ms": 124.5,
+      "uiNextFrameMs": 115.7,
+      "view": {
+        "cameraDistance": 112.00000000000001,
+        "chunks": 9,
+        "renderedPeople": 28,
+        "peopleBatches": 9,
+        "simplifiedPeople": 0,
+        "staticBatches": 79,
+        "peopleCapacity": 32,
+        "constructionSites": 0,
+        "spatialRevision": "35:35:0",
+        "drawCalls": 161,
+        "navigation": {
+          "mode": "worker",
+          "pending": 0,
+          "completed": 30,
+          "cacheHits": 0
+        }
+      }
+    },
+    {
+      "population": 250,
+      "frames": 27,
+      "p50Ms": 153.7,
+      "p95Ms": 160.1,
+      "uiNextFrameMs": 154.8,
+      "view": {
+        "cameraDistance": 112.00000000000001,
+        "chunks": 9,
+        "renderedPeople": 250,
+        "peopleBatches": 9,
+        "simplifiedPeople": 0,
+        "staticBatches": 79,
+        "peopleCapacity": 256,
+        "constructionSites": 0,
+        "spatialRevision": "35:35:0",
+        "drawCalls": 161,
+        "navigation": {
+          "mode": "worker",
+          "pending": 0,
+          "completed": 250,
+          "cacheHits": 57
+        }
+      }
+    },
+    {
+      "population": 1000,
+      "frames": 30,
+      "p50Ms": 137.8,
+      "p95Ms": 157.5,
+      "uiNextFrameMs": 138.4,
+      "view": {
+        "cameraDistance": 112.00000000000001,
+        "chunks": 9,
+        "renderedPeople": 1000,
+        "peopleBatches": 9,
+        "simplifiedPeople": 1000,
+        "staticBatches": 79,
+        "peopleCapacity": 1024,
+        "constructionSites": 0,
+        "spatialRevision": "35:35:0",
+        "drawCalls": 154,
+        "navigation": {
+          "mode": "worker",
+          "pending": 0,
+          "completed": 1000,
+          "cacheHits": 772
+        }
+      }
+    }
+  ]
+}

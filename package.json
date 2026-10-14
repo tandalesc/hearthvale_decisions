@@ -1,0 +1,19 @@
+{
+  "name": "hearthvale",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "test": "node --test tests/*.test.js",
+    "benchmark:simulation": "node scripts/benchmark-simulation.js",
+    "benchmark:browser": "node scripts/benchmark-browser.js"
+  },
+  "dependencies": {
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0",
+    "@playwright/test": "^1.56.0"
+  }
+}

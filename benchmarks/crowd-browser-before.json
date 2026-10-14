@@ -1,0 +1,50 @@
+{
+  "backend": "Chrome headless, SwiftShader, 1164×703, DPR1",
+  "results": [
+    {
+      "population": 28,
+      "frames": 25,
+      "p50Ms": 166.1,
+      "p95Ms": 173.5,
+      "uiNextFrameMs": 164.4,
+      "view": {
+        "cameraDistance": 112.00000000000001,
+        "chunks": 9,
+        "renderedPeople": 28,
+        "constructionSites": 0,
+        "spatialRevision": "35:35:0",
+        "drawCalls": 682
+      }
+    },
+    {
+      "population": 250,
+      "frames": 19,
+      "p50Ms": 219.9,
+      "p95Ms": 224.1,
+      "uiNextFrameMs": 227.9,
+      "view": {
+        "cameraDistance": 112.00000000000001,
+        "chunks": 9,
+        "renderedPeople": 250,
+        "constructionSites": 0,
+        "spatialRevision": "35:35:0",
+        "drawCalls": 2236
+      }
+    },
+    {
+      "population": 1000,
+      "frames": 10,
+      "p50Ms": 417.8,
+      "p95Ms": 424.8,
+      "uiNextFrameMs": 508.7,
+      "view": {
+        "cameraDistance": 112.00000000000001,
+        "chunks": 9,
+        "renderedPeople": 1000,
+        "constructionSites": 0,
+        "spatialRevision": "35:35:0",
+        "drawCalls": 7486
+      }
+    }
+  ]
+}
