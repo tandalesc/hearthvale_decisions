@@ -1,6 +1,6 @@
 # Hearthvale — handoff (evolving-city rework)
 
-Branch: `evolving-city`. The baseline (the game before this rework) is the single commit on `main`. All of the work below is **uncommitted** in the working tree.
+Repo: `github.com/tandalesc/hearthvale_decisions` (private for now). `main` and `evolving-city` point at the same commit. The original game is the first commit (`c1ca36a`, "Baseline").
 
 State at handoff: `npm test` passes 223/223, `npm run build` is clean, and the game boots on the real 3D renderer.
 
@@ -69,11 +69,32 @@ npx playwright test              # browser suite (start the dev server first; ru
 ## Known gaps and judgement calls
 
 - **Riverbank mismatch, left as is on purpose.** A towpath cell at the water's edge counts as land for navigation while `waterAt` says it's ~0.1 units into the river. The walker test tolerates 0.15.
+- **Treasury hoards late in the game.** A real year-169 save held about 1.9 million coin (+286k a year). Early-game spending was fixed; late-game spending wasn't.
+- **Too many centres in long games.** That same save had 7 towns in the valley, against a target of 2–5.
 - **Bridge load timing.** The first upgrade card comes 15–29 years after a bridge opens (median ~19). Fast-growing towns fill bridges in ~10 years; some bridges never fill because their traffic stays flat.
 - **Late growth plateau.** Balanced towns reach ~4,300 people at year 100 and level off (~4,100 at year 140), short of the 6,000–9,000 design target.
 - **Port archetype** rarely appears; mercantile play usually becomes an Exchange town.
 - **Not measured on a real iPhone.** Frame numbers come from desktop Chrome (Metal) with phone sizes emulated: city at medium is ~3 ms per frame at phone size and ~6–7 ms at desktop size, 50–57 draw calls.
 - **Live-dev hazard.** Agents edited the same tree the owner was playing. Multi-file edits briefly broke the 3D view several times. For future parallel work, edit in a separate worktree and apply finished diffs in one step.
+
+## Recent fixes (the end of the session)
+
+- **Bridges:**
+  - Capacity is sized per bridge from its own early traffic, so timber wears out over decades.
+  - Upgrade cards come 15–29 years after a bridge opens.
+  - A bridge that collapses closes until it is repaired or rebuilt (`collapseBridge` / `rebuildBridge`).
+- **Duplicate questions:** every card has normalised subjects (`src/sim/subjects.js`). A subject that is open, under way or cooling down is never offered again, whatever its source.
+- **Tick spikes:**
+  - Yearly world work runs one step per tick.
+  - Business founding runs one attempt per tick.
+  - New businesses reuse one site search per type each year, stored in state so replay stays exact.
+- **Decision service:** requests always carry a `state`, and each request holds at most 64 questions.
+
+## Before making the repo public
+
+1. **Infrastructure names.** The code and docs name `rrh-llm-1:4000` and the `ramblerun/*` models. The decision endpoint answered requests with no key during testing, so either confirm the service is reachable only on the LAN, or make the host configurable-only and scrub the names.
+2. **A license.** There isn't one yet.
+3. **Secrets.** The API key has never been in any commit (checked across all history).
 
 ## Design documents
 
