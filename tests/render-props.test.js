@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Geo, buildFoot, buildEmbankment, buildCrossing } from '../src/render/props.js';
+import { riverX, heightAt, WATER_HALF } from '../src/terrain.js';
+import { BRIDGE_DECK } from '../src/sim/people.js';
+
+const ys = (g) => g.p.filter((_, i) => i % 3 === 1);
+
+test('footbridge: a narrow plank walkway at the walkers deck height', () => {
+  const g = new Geo();
+  const z = 10, x = riverX(z);
+  buildFoot(g, { id: 1, z, x0: x - WATER_HALF - 3, x1: x + WATER_HALF + 3, style: 'footbridge', built: 1 }, heightAt);
+  assert.ok(g.p.length > 300, 'has geometry');
+  const deckTops = ys(g).filter((y) => Math.abs(y - BRIDGE_DECK) < 0.08);
+  assert.ok(deckTops.length > 20, 'planks sit at the deck height walkers use');
+  for (let i = 2; i < g.p.length; i += 3) assert.ok(Math.abs(g.p[i] - z) < 1.2, 'narrow: within 1.2 of the centreline');
+});
+
+test('embankment: walkable top flush with the ground, nothing proud on the land side early on', () => {
+  const g = new Geo();
+  const run = { side: 'west', z0: 0, z1: 20, crossings: [] };
+  buildEmbankment(g, run, heightAt, 1, []);
+  const top = Math.max(...ys(g));
+  const ground = Math.max(...[0, 5, 10, 15, 20].map((z) => heightAt(riverX(z) - WATER_HALF - 0.7, z)));
+  // Bollards (0.56 m) are the only things above the coping before era 3.
+  assert.ok(top < ground + 0.03 + 0.6, `top ${top} vs ground ${ground}`);
+  const civic = new Geo();
+  buildEmbankment(civic, run, heightAt, 3, []);
+  assert.ok(Math.max(...ys(civic)) > top - 0.1, 'era 3 adds a parapet');
+});
+
+test('crossings: steps, ramps and slipways all build oriented geometry', () => {
+  for (const kind of ['steps', 'ramp', 'slipway']) {
+    const g = new Geo();
+    buildCrossing(g, { x: riverX(40) - WATER_HALF, z: 40, side: 'west', kind, dir: [1, 0] }, heightAt, 2, []);
+    assert.ok(g.p.length > 50, `${kind} has geometry`);
+    for (const v of g.p) assert.ok(Number.isFinite(v));
+  }
+  // A ramp follows the ground: no vertex hovers more than 0.3 above it.
+  const g = new Geo();
+  buildCrossing(g, { x: riverX(40) - WATER_HALF, z: 40, side: 'west', kind: 'ramp', dir: [1, 0] }, heightAt, 2, []);
+  for (let i = 0; i < g.p.length; i += 3) {
+    const gy = Math.max(heightAt(g.p[i], g.p[i + 2]), -0.3);
+    assert.ok(g.p[i + 1] - gy < 0.35, 'draped');
+  }
+});

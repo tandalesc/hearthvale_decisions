@@ -1,3 +1,5 @@
+> **Historical.** This describes the game before the evolving-city rework (16-question batches, one request in flight, placed buildings). For current numbers and design, see HANDOFF.md.
+
 # Hearthvale performance pass
 
 The game now reuses validated activity distributions, schedules navigation away from input/render work, and batches the town and its residents. The measured 1,000-resident crowd workload renders about three times faster. These results are a local comparison, not a hardware FPS guarantee.

@@ -58,3 +58,44 @@ export function validatePlacement(s,type,x,z,axis,ignoreId){
  for(const other of [...s.buildings,...(s.projects??[])]){if(other.id===ignoreId)continue;if((type==='road'||type==='bridge')&&(other.type==='road'||other.type==='bridge'))continue;const gap=['road','bridge'].includes(type)||['road','bridge'].includes(other.type)?.35:3.2;if(overlaps(bounds,plotBounds(other),gap))return {ok:false,error:'Leave space for foundations, gardens and access paths.'};}
  return {ok:true};
 }
+
+// ---------------------------------------------------------------------------
+// LEGACY (pre-v2). The old continuous-space navigation, kept only so that
+// src/simulation.js and src/world.js keep building until they are replaced by
+// src/sim/ and src/render/. New code uses src/navigation.js and src/sim/roads.js.
+import {riverX as legacyRiverX} from './terrain.js';
+class LegacyHeap {
+ constructor(){this.items=[];}
+ push(item){const a=this.items;a.push(item);let i=a.length-1;while(i>0){const p=(i-1)>>1;if(a[p].f<=item.f)break;a[i]=a[p];i=p;}a[i]=item;}
+ pop(){const a=this.items,first=a[0],last=a.pop();if(a.length){let i=0;while(i*2+1<a.length){let c=i*2+1;if(c+1<a.length&&a[c+1].f<a[c].f)c++;if(a[c].f>=last.f)break;a[i]=a[c];i=c;}a[i]=last;}return first;}
+ get length(){return this.items.length;}
+}
+export function nearestWalkable(context,point,maxRadius=10){if(context.walkable(point.x,point.z))return {...point};for(let r=.5;r<=maxRadius;r+=.5)for(let i=0;i<24;i++){const a=i*Math.PI/12,p={x:point.x+Math.cos(a)*r,z:point.z+Math.sin(a)*r};if(context.walkable(p.x,p.z))return p;}return null;}
+export function accessPoint(s,target,p,kind){const c=spatialContext(s),r=plotBounds(target);const candidates=[];
+ if(target.type==='bridge'){const side=Math.sign(p.x-legacyRiverX(p.z))||-1;candidates.push({x:target.x+side*10,z:target.z});}
+ else if(target.type==='park'&&kind!=='build'){for(let i=0;i<8;i++){const a=(p.id%8+i)*Math.PI/4+.22;candidates.push({x:target.x+Math.cos(a)*3.1,z:target.z+Math.sin(a)*3.1});}}
+ else{const offset=((p.id%5)-2)*.4;candidates.push({x:target.x+offset,z:r.maxZ+.8},{x:r.minX-.8,z:(r.minZ+r.maxZ)/2+offset},{x:r.maxX+.8,z:(r.minZ+r.maxZ)/2+offset},{x:target.x+offset,z:r.minZ-.8});}
+ return candidates.filter(p=>c.walkable(p.x,p.z)).sort((a,b)=>Math.hypot(a.x-p.x,a.z-p.z)-Math.hypot(b.x-p.x,b.z-p.z))[0]??nearestWalkable(c,{x:target.x,z:r.maxZ+1},6);
+}
+const legacyDirections=[[1,0],[0,1],[-1,0],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
+function legacySearch(context,start,goal,bounds,budget){
+ const sx=Math.round(start.x),sz=Math.round(start.z),gx=Math.round(goal.x),gz=Math.round(goal.z);const key=(x,z)=>`${x},${z}`;
+ const open=new LegacyHeap(),nodes=new Map(),closed=new Set();const h=(x,z)=>Math.hypot(x-gx,z-gz)*.55;
+ const first={x:sx,z:sz,g:0,f:h(sx,sz),parent:null};nodes.set(key(sx,sz),first);open.push(first);let count=0;
+ while(open.length&&count++<budget){const current=open.pop(),id=key(current.x,current.z);if(closed.has(id))continue;closed.add(id);
+ if(Math.hypot(current.x-goal.x,current.z-goal.z)<1.5&&context.segmentClear(current,goal)){const path=[goal];let n=current;while(n){path.push({x:n.x,z:n.z});n=n.parent;}path.reverse();if(!context.segmentClear(start,path[0]))return null;return [start,...path];}
+ for(const [dx,dz]of legacyDirections){const x=current.x+dx,z=current.z+dz;if(x<bounds.minX||x>bounds.maxX||z<bounds.minZ||z>bounds.maxZ||closed.has(key(x,z))||!context.walkable(x,z))continue;
+ if(dx&&dz&&(!context.walkable(current.x+dx,current.z)||!context.walkable(current.x,current.z+dz)))continue;
+ if(!context.segmentClear(current,{x,z}))continue;const g=current.g+Math.hypot(dx,dz)*(context.onRoad(x,z)?.55:1.2)+Math.abs(context.walkHeight(x,z)-context.walkHeight(current.x,current.z))*.3;
+ const known=nodes.get(key(x,z));if(!known||g<known.g){const n={x,z,g,f:g+h(x,z),parent:current};nodes.set(key(x,z),n);open.push(n);}}
+ }
+ return null;
+}
+export function findPath(s,start,target){const context=spatialContext(s);if(!context.walkable(start.x,start.z)||!context.walkable(target.x,target.z))return null;
+ const candidates=[];for(let dx=-2;dx<=2;dx++)for(let dz=-2;dz<=2;dz++)candidates.push({x:Math.round(start.x)+dx,z:Math.round(start.z)+dz});const snapped=candidates.sort((a,b)=>Math.hypot(a.x-start.x,a.z-start.z)-Math.hypot(b.x-start.x,b.z-start.z)).find(p=>context.walkable(p.x,p.z)&&context.segmentClear(start,p));if(!snapped)return null;
+ const cross=(start.x-legacyRiverX(start.z))*(target.x-legacyRiverX(target.z))<0;const bridge=cross?s.buildings.filter(b=>b.type==='bridge').sort((a,b)=>(Math.hypot(a.x-start.x,a.z-start.z)+Math.hypot(a.x-target.x,a.z-target.z))-(Math.hypot(b.x-start.x,b.z-start.z)+Math.hypot(b.x-target.x,b.z-target.z)))[0]:null;
+ if(cross&&!bridge)return null;
+ for(const margin of [10,24,48]){const bounds={minX:Math.floor(Math.min(start.x,target.x,bridge?.x??start.x)-margin),maxX:Math.ceil(Math.max(start.x,target.x,bridge?.x??start.x)+margin),minZ:Math.floor(Math.min(start.z,target.z,bridge?.z??start.z)-margin),maxZ:Math.ceil(Math.max(start.z,target.z,bridge?.z??start.z)+margin)};const route=legacySearch(context,snapped,target,bounds,20000);if(route){route[0]={...start};return route;}}
+ return null;
+}
+export function moveOnRoute(context,p,distance){let remaining=distance;while(p.task.route.length&&remaining>0){const point=p.task.route[0],dx=point.x-p.x,dz=point.z-p.z,d=Math.hypot(dx,dz);if(d<.001){p.task.route.shift();continue;}const step=Math.min(d,remaining),next={x:p.x+dx/d*step,z:p.z+dz/d*step};if(!context.segmentClear(p,next)){p.task.route=[];p.task.blocked=true;p.task.navRevision=null;break;}p.x=next.x;p.z=next.z;p.heading=Math.atan2(dx,dz);remaining-=step;if(step===d)p.task.route.shift();}return remaining<distance;}

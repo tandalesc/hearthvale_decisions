@@ -1,0 +1,315 @@
+/* Regions: paper sheets laid over the table (design-visual §8.1).
+   Everything is position:fixed over the canvas; no grid steals scene pixels.
+   data-layout on .ui: desk (≥1000), tablet (720–999 or short landscape), phone (<720). */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: #a9c98a;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-15);
+  line-height: 1.45;
+  color: var(--ink);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#world {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: var(--z-scene);
+  touch-action: none;
+  outline: none;
+}
+
+/* The renderer's centre name labels: over the scene, under every panel. */
+.hv-centre-labels { z-index: 1; pointer-events: none !important; }
+
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: none; padding: 0; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+[hidden] { display: none !important; }
+.i { width: 20px; height: 20px; flex-shrink: 0; display: block; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.ui {
+  /* The dock is always there on desk and tablet; the panel opens beside it.
+     --binder-user is the dragged width, clamped to the layout's limits (the
+     time strip keeps at least 420 px). */
+  --dock-w: 52px;
+  --rail-w: var(--dock-w);
+  --drawer-max: min(600px, 40vw, calc(100vw - var(--rail-w) - var(--dock-w) - var(--binder-w) - var(--gap) * 6 - var(--safe-l) - var(--safe-r) - 160px));
+  --drawer-w: clamp(300px, var(--drawer-user, clamp(320px, 26vw, 380px)), var(--drawer-max));
+  --binder-max: min(720px, 55vw, calc(100vw - var(--dock-w) - var(--rail-w) - var(--gap) * 5 - var(--safe-l) - var(--safe-r) - 420px));
+  --binder-w: clamp(320px, var(--binder-user, clamp(360px, 29vw, 432px)), var(--binder-max));
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: var(--z-chrome);
+  transition: color var(--t-moment) ease;
+}
+.ui > * { pointer-events: auto; }
+.ui > .vignette, .ui > .feed { pointer-events: none; }
+
+/* Paper glass sheets with a quiet grain. */
+.paper {
+  background-color: var(--paper-glass);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .3 0 0 0 0 .3 0 0 0 0 .2 0 0 0 .035 0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+  backdrop-filter: blur(14px) saturate(1.1);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow), var(--sheet-edge);
+  transition: background-color var(--t-moment) ease, border-color var(--t-moment) ease, color var(--t-moment) ease;
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .paper { background-color: color-mix(in srgb, var(--paper) 96%, transparent); }
+}
+
+/* Ink vignette toward the rail side so the paper reads as on top. */
+.vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(90deg, transparent 62%, rgba(35, 52, 38, 0.06)), radial-gradient(ellipse at 50% 45%, transparent 60%, rgba(35, 52, 38, 0.08));
+}
+.ui[data-layout="phone"] .vignette { background: linear-gradient(180deg, rgba(35, 52, 38, 0.06), transparent 18%, transparent 70%, rgba(35, 52, 38, 0.08)); }
+
+/* ---------- Top bar ---------- */
+.topbar {
+  position: fixed;
+  top: calc(var(--gap) + var(--safe-t));
+  left: calc(var(--gap) + var(--safe-l));
+  right: calc(var(--gap) + var(--safe-r));
+  height: var(--top-h);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 8px 0 10px;
+  z-index: var(--z-chrome);
+}
+
+/* ---------- Left rail: the right dock's mirror ---------- */
+.rail {
+  position: fixed;
+  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
+  left: calc(var(--gap) + var(--safe-l));
+  width: var(--rail-w);
+  /* Never runs into the time strip; short screens scroll the views. */
+  max-height: calc(100dvh - var(--safe-t) - var(--top-h) - var(--strip-h) - var(--gap) * 4 - var(--safe-b));
+  z-index: calc(var(--z-chrome) + 3);
+}
+
+/* ---------- Drawer (left, desktop/tablet) ---------- */
+.drawer {
+  position: fixed;
+  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
+  left: calc(var(--gap) * 2 + var(--rail-w) + var(--safe-l));
+  bottom: calc(var(--strip-h) + var(--gap) * 2 + var(--safe-b));
+  width: var(--drawer-w);
+  display: flex;
+  flex-direction: column;
+  z-index: var(--z-chrome);
+  transform-origin: left center;
+  transition: opacity var(--t-base) var(--ease-out), transform var(--t-base) var(--ease-out), visibility 0s linear var(--t-base);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-10px);
+}
+.drawer.is-open { opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
+
+/* ---------- Binder (right panel, beside the dock) ---------- */
+.binder {
+  position: fixed;
+  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
+  right: calc(var(--gap) * 2 + var(--dock-w) + var(--safe-r));
+  /* The binder hugs its content and grows with the town, up to the screen. */
+  max-height: calc(100dvh - var(--safe-t) - var(--top-h) - var(--gap) * 3 - var(--safe-b));
+  width: var(--binder-w);
+  display: flex;
+  flex-direction: column;
+  z-index: var(--z-chrome);
+  transition: transform var(--t-slow) var(--ease-out), opacity var(--t-slow) var(--ease-out);
+}
+/* The dock: a slim column of body crests at the right edge, always there.
+   Tucked away, the binder slides in under it. */
+.dock {
+  position: fixed;
+  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
+  right: calc(var(--gap) + var(--safe-r));
+  width: var(--dock-w);
+  max-height: calc(100dvh - var(--safe-t) - var(--top-h) - var(--gap) * 3 - var(--safe-b));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 0;
+  z-index: calc(var(--z-chrome) + 3);
+}
+.ui.docked .binder {
+  transform: translateX(calc(100% + var(--gap) * 2 + var(--dock-w)));
+  opacity: 0;
+  visibility: hidden;
+  transition: transform var(--t-slow) var(--ease-in), opacity var(--t-base) var(--ease-in), visibility 0s linear var(--t-slow);
+}
+.petition-host {
+  position: fixed;
+  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
+  right: calc(var(--gap) * 2 + var(--dock-w) + var(--safe-r));
+  z-index: var(--z-notice);
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+/* With the panel open, the chip slides out beside it. */
+.ui:not(.docked) .petition-host { right: calc(var(--gap) * 3 + var(--dock-w) + var(--binder-w) + var(--safe-r)); }
+.ui.is-resizing, .ui.is-resizing * { cursor: col-resize !important; user-select: none; -webkit-user-select: none; }
+
+/* ---------- Time strip ---------- */
+.timestrip {
+  position: fixed;
+  left: calc(var(--gap) + var(--safe-l));
+  bottom: calc(var(--gap) + var(--safe-b));
+  width: min(700px, calc(100vw - var(--binder-w) - var(--dock-w) - var(--gap) * 4 - var(--safe-l) - var(--safe-r)));
+  height: var(--strip-h);
+  z-index: var(--z-chrome);
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+}
+
+/* ---------- Chronicle feed & inspector (bottom-left) ---------- */
+.feed, .inspector {
+  position: fixed;
+  left: calc(var(--gap) * 2 + var(--rail-w) + var(--safe-l));
+  bottom: calc(var(--strip-h) + var(--gap) * 2 + var(--safe-b));
+  width: min(380px, calc(100vw - var(--binder-w) - var(--dock-w) - var(--rail-w) - var(--gap) * 6));
+  z-index: var(--z-float);
+}
+.ui.drawer-open .feed { opacity: 0; }
+
+/* ---------- Notices ---------- */
+.nudge-host {
+  position: fixed;
+  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2 + 6px);
+  right: calc(var(--binder-w) + var(--dock-w) + var(--gap) * 3 + var(--safe-r));
+  z-index: var(--z-notice);
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+.banner-host {
+  position: fixed;
+  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-notice);
+  pointer-events: none;
+  width: min(520px, calc(100vw - 32px));
+  display: flex;
+  justify-content: center;
+}
+.ui.docked .nudge-host { right: calc(var(--dock-w) + var(--gap) * 2 + var(--safe-r)); }
+.ui[data-layout="desk"] .banner-host { left: calc((100vw - var(--binder-w) - var(--dock-w) - var(--gap) * 2) / 2 + var(--rail-w) / 2); }
+.ui[data-layout="desk"].docked .banner-host { left: calc((100vw - var(--dock-w) - var(--gap)) / 2 + var(--rail-w) / 2); }
+
+/* ---------- Phone sheet (hidden on desk/tablet) ---------- */
+.sheet, .sheet-scrim { display: none; }
+
+/* ======================= Tablet ======================= */
+.ui[data-layout="tablet"] {
+  --binder-max: min(720px, 55vw, calc(100vw - var(--rail-w) - var(--dock-w) - var(--gap) * 5 - var(--safe-l) - var(--safe-r)));
+  --binder-w: clamp(min(320px, var(--binder-max)), var(--binder-user, 380px), var(--binder-max));
+}
+.ui[data-layout="tablet"] .binder {
+  max-height: calc(100dvh - var(--safe-t) - var(--top-h) - var(--strip-h) - var(--gap) * 4 - var(--safe-b));
+  box-shadow: var(--shadow-lift), var(--sheet-edge);
+  z-index: calc(var(--z-chrome) + 2);
+}
+.ui[data-layout="tablet"] .timestrip {
+  width: auto;
+  right: calc(var(--gap) * 2 + var(--dock-w) + var(--safe-r));
+  max-width: 760px;
+}
+.ui[data-layout="tablet"] .feed,
+.ui[data-layout="tablet"] .inspector { width: min(360px, calc(100vw - var(--rail-w) - var(--dock-w) - var(--gap) * 5)); }
+.ui[data-layout="tablet"] .nudge-host { right: calc(var(--gap) * 2 + var(--dock-w) + var(--safe-r)); top: auto; bottom: calc(var(--strip-h) + var(--gap) * 2 + var(--safe-b)); }
+.ui[data-layout="tablet"]:not(.docked) .nudge-host { opacity: 0; }
+
+/* Short screens: tighten vertical rhythm. */
+@media (max-height: 520px) {
+  :root { --top-h: 52px; --strip-h: 48px; --gap: 8px; }
+}
+
+/* ======================= Phone ======================= */
+.ui[data-layout="phone"] {
+  --top-h: 52px;
+  --gap: 10px;
+  --peek: calc(116px + var(--safe-b)); /* the sheet sets the measured value */
+}
+.ui[data-layout="phone"] .binder,
+.ui[data-layout="phone"] .drawer,
+.ui[data-layout="phone"] .timestrip,
+.ui[data-layout="phone"] .dock,
+.ui[data-layout="phone"] .petition-host { display: none; }
+.ui[data-layout="phone"] .topbar { padding: 0 4px 0 8px; gap: 8px; }
+.ui[data-layout="phone"] .feed {
+  left: calc(var(--gap) + var(--safe-l));
+  right: calc(var(--gap) + var(--safe-r));
+  width: auto;
+  bottom: calc(var(--peek) + var(--gap));
+}
+.ui[data-layout="phone"] .inspector {
+  left: calc(var(--gap) + var(--safe-l) + var(--rail-w) + var(--gap));
+  right: calc(var(--gap) + var(--safe-r));
+  width: auto;
+  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
+  bottom: auto;
+}
+.ui[data-layout="phone"] .nudge-host {
+  right: calc(var(--gap) + var(--safe-r));
+  left: calc(var(--gap) + var(--safe-l));
+  top: auto;
+  bottom: calc(var(--peek) + var(--gap));
+  justify-content: center;
+}
+.ui[data-layout="phone"] .banner-host { top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2); }
+
+.ui[data-layout="phone"] .sheet {
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  left: var(--safe-l);
+  right: var(--safe-r);
+  bottom: 0;
+  height: calc(var(--vh, 1vh) * 92);
+  z-index: var(--z-sheet);
+  border-radius: 20px 20px 0 0;
+  border-bottom: 0;
+  box-shadow: 0 -6px 30px rgba(35, 59, 41, 0.16), var(--sheet-edge);
+  will-change: transform;
+  touch-action: none;
+}
+.ui[data-layout="phone"] .sheet-scrim {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-scrim);
+  background: var(--paper-scrim);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--t-slow) var(--ease-out), visibility 0s linear var(--t-slow);
+}
+.ui[data-layout="phone"][data-sheet="1"] .sheet-scrim { visibility: visible; opacity: 0; transition-delay: 0s; }
+.ui[data-layout="phone"][data-sheet="2"] .sheet-scrim { visibility: visible; opacity: 1; transition-delay: 0s; }

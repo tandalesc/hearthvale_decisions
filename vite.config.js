@@ -1,7 +1,8 @@
 import {defineConfig} from 'vite';
 import {system1Plugin} from './server/system1.js';
+import {narratorPlugin} from './server/narrator.js';
 export default defineConfig({
-  plugins:[system1Plugin()],
+  plugins:[system1Plugin(), narratorPlugin()],
   server:{fs:{deny:['**/.git/**','**/local.env','**/.env*','**/*.{crt,pem}']}},
   build:{rollupOptions:{output:{manualChunks:{three:['three'],controls:['three/addons/controls/OrbitControls.js']}}}}
 });

@@ -1,0 +1,89 @@
+import { createWorld } from '../index.js';
+import { createStandinView } from './standin.js';
+
+// Renderer dev page: /src/render/dev/render-dev.html?fixture=town&tier=medium&yearT=0.4
+// Uses sim-core's fixtures when present, else the local stand-in.
+const params = new URLSearchParams(location.search);
+const fixture = params.get('fixture') ?? 'town';
+const tier = params.get('tier') ?? 'auto';
+const yearT = Number(params.get('yearT') ?? 0.38);
+const frozen = params.has('freeze');
+const hud = params.get('hud') !== '0';
+
+async function loadView() {
+  if (params.get('source') !== 'standin') {
+    try {
+      const [{ createRenderView }, sim] = await Promise.all([
+        import('../../sim/render-view.js'),
+        import('../../sim/index.js'),
+      ]);
+      const { stepTick } = sim;
+      // ?seed=N starts a fresh town on that terrain seed (hilly / floodplain
+      // comparisons); otherwise load the named fixture.
+      const state = params.has('seed')
+        ? sim.createState(Number(params.get('seed')))
+        : sim.loadFixture ? await sim.loadFixture(fixture) : sim.fixtureState(fixture);
+      const view = createRenderView(state, { rowFloats: 20 });
+      window.__state = state;
+      const speed = Number(params.get('speed') ?? 1);
+      let t0 = null;
+      return {
+        view,
+        source: 'sim',
+        sync(t, dt) {
+          if (t0 === null) t0 = t;
+          if (speed > 0) stepTick(state, dt * speed);
+          view.sync(state, { now: t, speed });
+          // Pin the season for screenshots: yearT param, advancing unless frozen.
+          if (params.has('yearT')) view.time.yearT = (yearT + (frozen ? 0 : (t - t0) / 60)) % 1;
+        },
+      };
+    } catch (err) {
+      console.info('sim fixtures unavailable, using the stand-in:', err.message);
+    }
+  }
+  const view = createStandinView(fixture, { yearT, yearSpeed: frozen ? 0 : 1 / 60 });
+  return { view, sync: (t) => view.sync(t), source: 'standin' };
+}
+
+const { view, sync, source } = await loadView();
+const world = createWorld(document.querySelector('#world'), { quality: tier });
+world.setDayCycle(params.get('cycle') ?? 'seasonal');
+world.setSimSpeed(Number(params.get('speed') ?? 1));
+if (params.has('overlay')) world.setOverlay(params.get('overlay'));
+// Explicit camera: applied after the world's own first framing.
+const camAt = params.has('cx') ? [Number(params.get('cx')), Number(params.get('cz') ?? 0), params.has('dist') ? Number(params.get('dist')) : null] : null;
+world.onPick((p) => console.log('pick', JSON.stringify(p)));
+
+let last = performance.now();
+let frames = 0;
+window.__world = world;
+window.__view = view;
+window.__frames = () => frames;
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  sync(now / 1000, dt);
+  world.update(view, now / 1000, dt);
+  if (camAt && frames === 0) world.camera.home(...camAt);
+  // Optional low camera: &elev=12 (degrees above the horizon).
+  if (frames === 1 && params.has('elev')) {
+    const rig = world.camera;
+    const t = rig.controls.target;
+    const cam = rig.camera.position;
+    const d = cam.distanceTo(t);
+    const el = (Number(params.get('elev')) * Math.PI) / 180;
+    const az = Math.atan2(cam.x - t.x, cam.z - t.z);
+    cam.set(t.x + Math.sin(az) * Math.cos(el) * d, t.y + Math.sin(el) * d, t.z + Math.cos(az) * Math.cos(el) * d);
+    rig.controls.update();
+    world.requestFrame();
+  }
+  frames++;
+  if (hud && frames % 15 === 0) {
+    const s = world.stats();
+    document.querySelector('#hud').textContent =
+      `${fixture} (${source}) · ${s.tier}\n${s.fps} fps · ${s.frameMs} ms js\n${s.drawCalls} calls · ${(s.triangles / 1000).toFixed(0)}k tris\n${s.buildings} lots · ${s.instances} pieces · ${s.people} people\nyearT ${view.time.yearT.toFixed(3)}`;
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);

@@ -1,117 +1,340 @@
-import {AdaptiveRoutinePolicy} from './routine-policy.js';
-import {createRoutePlanner} from './route-planner.js';
-import './style.css';
-import { createWorld } from './world.js';
-import { createState, queueProject, TYPES, resolveDecision, finance, stepDay, stepAgents, landValue, serialize, restore, updateStats, applyRoutineIntents } from './simulation.js';
-const icons={leaf:'<path d="M20 4C10 2 3 8 5 16c6 5 14-1 15-12Z"/><path d="m4 21 11-11"/>',home:'<path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/>',farm:'<path d="M12 21V4m0 7C5 11 5 6 5 6c6 0 7 5 7 5Zm0 6c7 0 7-5 7-5-6 0-7 5-7 5Z"/>',market:'<path d="M4 10v10h16V10M3 4h18l1 6H2Zm5 16v-6h5v6"/>',park:'<path d="m12 2-7 10h4l-5 5h16l-5-5h4ZM12 17v5"/>',utility:'<path d="M3 21V10l6 3V8l6 3V3h4v18Zm4-4h1m4 0h1m4 0h1"/>',road:'<path d="m6 2-3 20M18 2l3 20M12 3v3m0 4v3m0 4v3"/>',bridge:'<path d="M2 18h20M3 15V6m18 9V6M3 9c6 7 12 7 18 0M7 12v6m5-4v4m5-6v6"/>',people:'<circle cx="9" cy="7" r="3"/><path d="M2 21v-3a7 7 0 0 1 14 0v3m0-17a3 3 0 0 1 0 6m3 4c3 1 3 4 3 7"/>',coin:'<circle cx="12" cy="12" r="9"/><path d="M15 8h-4a2 2 0 0 0 0 4h2a2 2 0 0 1 0 4H9m3-10v12"/>',heart:'<path d="M20 5c-4-4-8 1-8 1S8 1 4 5c-5 5 8 15 8 15S25 10 20 5Z"/>',sun:'<circle cx="12" cy="12" r="4"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2"/>',pause:'<path d="M8 5v14M16 5v14"/>',play:'<path d="m8 4 12 8-12 8Z"/>',council:'<path d="m2 8 10-5 10 5ZM4 10v8m5-8v8m6-8v8m5-8v8M2 21h20"/>',settings:'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/>',save:'<path d="M4 3h14l3 3v15H3V3Zm3 0v6h9V3M7 21v-7h10v7"/>',arrow:'<path d="M4 12h16m-6-6 6 6-6 6"/>',close:'<path d="m6 6 12 12M6 18 18 6"/>',map:'<path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2Zm6-2v16m6-14v16"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/>'};
-const icon=(name)=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]??icons.leaf}</svg>`;
-const money=n=>`¤${Math.round(n).toLocaleString()}`;const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let state;try{state=restore(localStorage.getItem('hearthvale-save'));}catch{state=createState();}
-let speed=1,tool=null,tab='council',overlay='beauty',selected=null,lastSave=0,dayAccumulator=0;
-let modelEnabled=localStorage.getItem('hearthvale-model-enabled')!=='false',modelPending=false,modelRetryAt=0,policyNextAt=0,frameCost=16;
-let decisionSettings={mode:'auto',utilization:.8,cap:100};try{const saved=JSON.parse(localStorage.getItem('hearthvale-decision-settings'));if(saved?.mode==='manual'||saved?.mode==='auto')decisionSettings={mode:saved.mode,utilization:Number.isFinite(saved.utilization)?Math.max(.25,Math.min(1,saved.utilization)):.8,cap:Number.isFinite(saved.cap)?Math.max(1,Math.min(2000,Math.round(saved.cap))):100};}catch{}
-const modelPolicy=new AdaptiveRoutinePolicy({maxQuestions:decisionSettings.mode==='manual'?decisionSettings.cap:null,utilization:decisionSettings.utilization});
-let routineStatus={active:false,applied:0,model:null};
-let panelOpen=innerWidth>1000,lastPulse=0,lastHistoryKey='',lastPanelSignature='';
-document.querySelector('#app').innerHTML=`
- <div id="world-labels" aria-hidden="true"></div><canvas id="world" aria-label="Interactive 3D town. Drag to orbit, right drag to pan, scroll to zoom. Choose a building then click terrain to commission it. Focus this canvas and use arrow keys to pan."></canvas>
- <header class="topbar"><div class="brand"><div class="crest">${icon('leaf')}</div><div><h1>hearthvale<span>•</span></h1><p>YOUR TOWN, IN MOTION</p></div></div><div class="metrics"><button class="metric" data-open="people">${icon('people')}<span><b id="population">28</b><small>residents</small></span></button><button class="metric" data-open="economy">${icon('coin')}<span><b id="treasury">¤14,200</b><small id="net">town treasury</small></span></button><button class="metric" data-open="people">${icon('heart')}<span><b id="happiness">78%</b><small>wellbeing</small></span></button><div class="metric food-metric">${icon('farm')}<span><b id="food">210</b><small>food reserve</small></span></div></div><button class="icon-button" id="settings" aria-label="Settings and save">${icon('settings')}</button></header>
- <div class="valley-title"><span class="eyebrow">WILLOW RIVER VALLEY</span><span class="live-pill"><i></i><span id="village-pulse">28 little lives unfolding</span></span></div>
- <button id="toggle-panel" class="council-toggle ${panelOpen?'active':''}" aria-expanded="${panelOpen}">${icon('council')}<span>Council</span><b id="council-badge">2</b></button>
- <aside class="panel" ${panelOpen?'':'hidden'}><nav class="panel-tabs" aria-label="Town management"><button data-tab="council" class="active">${icon('council')} Council <span id="decision-count">2</span></button><button data-tab="people">${icon('people')} People</button><button data-tab="economy">${icon('coin')} Economy</button><button id="close-panel" aria-label="Close town management">${icon('close')}</button></nav><div id="panel-content"></div></aside>
- <section id="activity-feed" aria-label="Recent village activity"><div class="feed-title"><span class="system-light"></span> LIFE IN THE VILLAGE <small id="project-count"></small></div><div id="activity-events"></div></section>
- <div class="view-tools"><button id="home-view" class="icon-button" aria-label="Return to village">${icon('home')}</button><button id="overlay-toggle" class="icon-button" aria-label="Change land value overlay">${icon('map')}</button><button id="night-toggle" class="icon-button" aria-label="Toggle dusk">${icon('sun')}</button><button id="help" class="icon-button" aria-label="How to play">${icon('info')}</button></div>
- <div id="overlay-legend" hidden></div><div class="location-label"><span class="location-dot"></span> A town worth calling home</div>
- <div class="bottom-row"><section class="time-control"><div class="date">${icon('sun')}<span><b id="date">Spring · Day 1</b><small id="time-label">A new beginning</small></span></div><div class="speed-controls"><button id="pause" aria-label="Pause simulation">${icon('pause')}</button><button data-speed="1" class="active">1×</button><button data-speed="3">3×</button><button data-speed="8">8×</button></div></section><section class="build-bar">${Object.entries(TYPES).map(([key,t])=>`<button data-tool="${key}" aria-label="Build ${t.name}, cost ${t.cost}">${icon(key)}<span>${t.name}</span><small>${money(t.cost)}</small></button>`).join('')}</section></div>
- <div class="hint" id="hint">Drag to orbit <span>·</span> Scroll to explore <span>·</span> Right-drag to wander</div><div id="toast" role="status"></div><dialog id="modal"><div id="modal-content"></div><button id="close-modal" class="icon-button" aria-label="Close dialog">${icon('close')}</button></dialog>`;
-// Reserve real layout space for every control group. The canvas stays behind it.
-const appElement=document.querySelector('#app');const playArea=document.createElement('main');playArea.className='play-area';const sceneSpace=document.createElement('div');sceneSpace.className='scene-space';const panelShell=document.createElement('div');panelShell.className='panel-shell';
-for(const selector of ['#activity-feed','.location-label','#overlay-legend'])sceneSpace.append(document.querySelector(selector));
-for(const selector of ['#toggle-panel','.panel'])panelShell.append(document.querySelector(selector));
-playArea.append(document.querySelector('.valley-title'),document.querySelector('.view-tools'),sceneSpace,panelShell);appElement.insertBefore(playArea,document.querySelector('.bottom-row'));
-const notice=document.createElement('div');notice.className='notice-region';notice.append(document.querySelector('.hint'),document.querySelector('#toast'));document.querySelector('.bottom-row').append(notice);appElement.classList.toggle('panel-is-open',panelOpen);
-const world=createWorld(document.querySelector('#world'),state,pick=>{
- if(pick.tool){const result=queueProject(state,pick.tool,pick.x,pick.z);toast(result.ok?`${TYPES[pick.tool].name} approved. Builders will bring it to life.`:result.error);if(result.ok){updateStats(state);render();if(overlay!=='beauty')world.setOverlay(overlay,state);}return;}
- if(pick.building){selected=pick.building;tab='people';setPanelOpen(true);renderPanel();}else if(selected){selected=null;renderPanel();}
+// Hearthvale bootstrap (contract §7). Wires state, the sim step, the
+// decision client, the route planner, the renderer and the UI, then runs
+// the frame loop. Dev URL params:
+//   ?fixture=hamlet|town|city   load a fixture town (no autosave unless &save=1)
+//   ?paused=1                   start paused
+//   ?stub=1 / ?renderer=stub    force the development stubs
+import {createDecisionClient} from './decision-client.js';
+import {loadNarrator, loadRenderer, loadSim} from './ui/bridge.js';
+import {createApp} from './ui/app.js';
+import {createPrefs} from './ui/prefs.js';
+import {createAudio} from './audio/index.js';
+import {createSaveStore} from './save-store.js';
+
+const SAVE_KEY = 'hearthvale-save';
+// Town saves go to IndexedDB (gzip); SAVE_KEY is only the legacy localStorage key.
+const saves = createSaveStore({legacyKey: SAVE_KEY});
+const MODEL_KEY = 'hearthvale-model-enabled';
+const DECISION_KEY = 'hearthvale-decision-settings';
+const NEW_SEED_KEY = 'hearthvale-new-seed';
+const AUTOSAVE_MS = 30000;
+
+const params = new URLSearchParams(location.search);
+const store = {
+  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
+  set(key, value) { try { localStorage.setItem(key, value); return true; } catch { return false; } },
+  remove(key) { try { localStorage.removeItem(key); } catch { /* ignore */ } },
+};
+
+boot().catch((err) => {
+  console.error(err);
+  document.body.insertAdjacentHTML('beforeend', '<p style="position:fixed;inset:auto 16px 16px;padding:12px 16px;border-radius:12px;background:#fafbf2;color:#2f3f2f;font:15px system-ui">Hearthvale could not start. Reload the page to try again.</p>');
 });
-function setPanelOpen(open){panelOpen=open;appElement.classList.toggle('panel-is-open',open);document.querySelector('.panel').hidden=!open;document.querySelector('#toggle-panel').setAttribute('aria-expanded',String(open));document.querySelector('#toggle-panel').classList.toggle('active',open);world.resize();}
-const compactScreen=matchMedia('(max-width:1000px)');compactScreen.addEventListener('change',e=>setPanelOpen(!e.matches));
-function updatePulse(){
- const projects=state.projects??[];document.querySelector('#project-count').textContent=projects.length?`${projects.length} building`:'';document.querySelector('#village-pulse').textContent=projects.length?`${projects.length} project${projects.length>1?'s':''} taking shape`:`${state.people.length} little lives unfolding`;
- const historyKey=JSON.stringify(state.history.slice(0,2));if(historyKey!==lastHistoryKey){lastHistoryKey=historyKey;document.querySelector('#activity-events').innerHTML=state.history.slice(0,2).map(event=>`<div class="activity-event"><span>DAY ${event.day}</span><p>${esc(event.text)}</p></div>`).join('')||'<div class="activity-event"><p>Your neighbours are getting to work. Watch the village find its rhythm.</p></div>';}
- document.querySelectorAll('[data-person-activity]').forEach(el=>{const p=state.people.find(p=>p.id===Number(el.dataset.personActivity));if(p)el.textContent=p.activity;});
- for(const project of projects){const bar=document.querySelector(`[data-project-progress="${project.id}"]`);if(bar)bar.style.width=`${project.progress*100}%`;}
+
+async function boot() {
+  const [sim, renderer] = await Promise.all([loadSim(params), loadRenderer(params)]);
+  const narrator = await loadNarrator(sim.kind);
+  const prefs = createPrefs();
+  const audio = createAudio(prefs);
+
+  // ---------- state ----------
+  const fixture = params.get('fixture');
+  const persist = !fixture || params.get('save') === '1';
+  let notice = null;
+  let state = null;
+  if (fixture) {
+    try {
+      state = sim.loadFixture ? await sim.loadFixture(fixture) : sim.fixtureState?.(fixture);
+    } catch (err) {
+      console.warn('[hearthvale] fixture failed to load', err);
+    }
+  }
+  if (!state) {
+    const raw = await saves.load();
+    if (raw) {
+      try {
+        state = sim.restore(raw);
+      } catch {
+        notice = 'Your old town was made with an earlier version. A new town begins.';
+        await saves.remove();
+      }
+    }
+  }
+  if (!state) {
+    // "Start a new town from seed…" leaves the seed here across the reload.
+    let seed = null;
+    try {
+      seed = sessionStorage.getItem(NEW_SEED_KEY);
+      sessionStorage.removeItem(NEW_SEED_KEY);
+    } catch { /* storage blocked */ }
+    state = seed ? sim.createState(seed) : sim.createState();
+  }
+
+  // ---------- decisions ----------
+  let modelEnabled = store.get(MODEL_KEY) !== 'false';
+  let decisionSettings = {mode: 'auto', cap: 100};
+  try {
+    const saved = JSON.parse(store.get(DECISION_KEY));
+    if (saved?.mode === 'auto' || saved?.mode === 'manual') {
+      decisionSettings = {mode: saved.mode, cap: Number.isFinite(saved.cap) ? Math.max(1, Math.min(5000, Math.round(saved.cap))) : 100};
+    }
+  } catch { /* defaults */ }
+  const client = createDecisionClient({now: () => performance.now()});
+  client.configure(decisionSettings);
+  // With the model off every ask resolves to null, so actors use local rules.
+  const decisions = new Proxy(client, {
+    get(target, key) {
+      if (key === 'ask' && !modelEnabled) return () => Promise.resolve(null);
+      const v = target[key];
+      return typeof v === 'function' ? v.bind(target) : v;
+    },
+  });
+
+  // ---------- routes ----------
+  let routes = null;
+  try {
+    const {createRoutePlanner} = await import('./route-planner.js');
+    routes = createRoutePlanner();
+  } catch (err) {
+    console.warn('[hearthvale] route planner unavailable', err);
+  }
+
+  // ---------- renderer ----------
+  const makeCanvas = () => {
+    document.getElementById('world')?.remove();
+    const canvas = document.createElement('canvas');
+    canvas.id = 'world';
+    canvas.setAttribute('aria-label', 'The town of Hearthvale');
+    document.body.prepend(canvas);
+    return canvas;
+  };
+  let world;
+  try {
+    world = renderer.createWorld(makeCanvas(), {quality: prefs.get('quality')});
+  } catch (err) {
+    // A canvas keeps its first context type, so the fallback gets a new one.
+    console.error('[hearthvale] renderer failed; using the simple map', err);
+    const {createWorld} = await import('./ui/dev/stub-world.js');
+    world = createWorld(makeCanvas(), {quality: prefs.get('quality')});
+    renderer.kind = 'stub-fallback';
+  }
+  // The in-game Motion setting also calms the 3D world (weather, birds, sway).
+  const applyWorldMotion = () => world?.setReducedMotion?.(prefs.get('motion') === 'reduced');
+  applyWorldMotion();
+  prefs.onChange(applyWorldMotion);
+  // 20 floats per walker: the extra slots carry waypoint arrival times so the
+  // villager shader stops at the waypoint instead of overshooting at 3×/8×.
+  let view = sim.createRenderView ? sim.createRenderView(state, {rowFloats: 20}) : null;
+
+  // ---------- speed ----------
+  let speed = params.get('paused') === '1' ? 0 : 1;
+  let lastSpeed = 1;
+  world.setSimSpeed?.(speed);
+  const setSpeed = (s) => {
+    if (s === speed) return;
+    if (s > 0) lastSpeed = s;
+    speed = s;
+    world?.setSimSpeed?.(s);
+    app?.refresh();
+  };
+
+  // ---------- persistence ----------
+  let lastSave = performance.now();
+  // Set when we navigate away on purpose (new town, import) so the pagehide
+  // autosave can't write the outgoing town back over the new save.
+  let leaving = false;
+  function reloadFresh() {
+    leaving = true;
+    location.replace(location.pathname);
+  }
+  // One writer per browser: the newest tab owns the save. An older tab that
+  // kept autosaving would write its stale town over the new one.
+  let writer = true;
+  let warnedFull = false;
+  const tabId = Math.random().toString(36).slice(2);
+  try {
+    const channel = new BroadcastChannel('hearthvale-save');
+    channel.onmessage = (e) => {
+      if (e.data?.type !== 'claim' || e.data.id === tabId || !writer) return;
+      writer = false;
+      // `app` may not exist yet if the claim lands during boot.
+      try { app.notices.toast('This town is open in another tab. This tab will not save. Reload it to play here.', 12000); } catch { /* booting */ }
+    };
+    channel.postMessage({type: 'claim', id: tabId});
+  } catch { /* no BroadcastChannel: single-tab behaviour */ }
+  async function save(manual) {
+    if (leaving || !writer) return;
+    if (!persist && !manual) return;
+    try {
+      const ok = await saves.save(sim.serialize(state));
+      if (manual) app.notices.toast(ok ? 'Town saved on this device.' : 'Storage is full. Export your town instead.');
+      else if (!ok && !warnedFull) {
+        warnedFull = true;
+        app.notices.toast('Your town could not be saved. Storage is full. Export it from Settings.', 10000);
+      }
+    } catch (err) {
+      console.warn('[hearthvale] save failed', err);
+      if (manual) app.notices.toast('The town could not be saved.');
+    }
+  }
+  // Rulings and other player actions save shortly after, debounced so a burst
+  // of choices writes once. This also resets the regular autosave clock.
+  let actionSaveTimer = 0;
+  function saveSoon() {
+    clearTimeout(actionSaveTimer);
+    actionSaveTimer = setTimeout(() => {
+      save(false);
+      lastSave = performance.now();
+    }, 400);
+  }
+  function exportSave() {
+    const blob = new Blob([sim.serialize(state)], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `hearthvale-year-${state.time?.year ?? 0}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  async function importSave(file) {
+    try {
+      const raw = await file.text();
+      sim.restore(raw);
+      if (!(await saves.save(raw))) throw new Error('save failed');
+      reloadFresh();
+    } catch {
+      app.notices.toast('That file is not a Hearthvale town this version can open.');
+    }
+  }
+  // The app asks first (a styled modal); this only does the deed.
+  async function newTown({seed} = {}) {
+    await saves.remove();
+    try {
+      if (seed) sessionStorage.setItem(NEW_SEED_KEY, String(seed));
+    } catch { /* storage blocked: a random valley it is */ }
+    reloadFresh();
+  }
+
+  // ---------- app ----------
+  let simMs = 0;
+  const app = createApp({
+    sim, world, prefs, audio, narrator,
+    state: () => state,
+    speed: () => speed,
+    lastSpeed: () => lastSpeed,
+    setSpeed,
+    simMs: () => simMs,
+    seedCode: () => (sim.seedCode && Number.isFinite(state.seed) ? sim.seedCode(state.seed) : null),
+    act(name, ...args) {
+      const fn = sim.actions[name];
+      if (!fn) return {ok: false, text: 'That is not ready yet.'};
+      const result = fn(state, ...args);
+      if (result?.ok !== false) saveSoon();
+      return result;
+    },
+    setIndividualCap(v) {
+      if (sim.actions.setIndividualCap) sim.actions.setIndividualCap(state, v);
+      else if (state.settings) state.settings.individualCap = v;
+      saveSoon();
+    },
+    save, exportSave, importSave, newTown,
+    decisions: {
+      stats: () => client.stats(),
+      settings: () => ({...decisionSettings}),
+      configure(next) {
+        decisionSettings = {...decisionSettings, ...next};
+        client.configure(decisionSettings);
+        store.set(DECISION_KEY, JSON.stringify(decisionSettings));
+      },
+      enabled: () => modelEnabled,
+      setEnabled(on) {
+        modelEnabled = on;
+        store.set(MODEL_KEY, String(on));
+        if (!on) client.reset();
+        syncProse();
+      },
+    },
+  });
+  if (notice) app.notices.toast(notice, 6000);
+  else if (!persist) app.notices.toast(`Test town (${fixture}): progress is not saved.`, 8000);
+
+  // LLM prose for docket cards and chronicle lines, only with the model on.
+  let proseKeeper = null;
+  const syncProse = () => {
+    if (modelEnabled && !proseKeeper && narrator?.startProseKeeper) proseKeeper = narrator.startProseKeeper(() => state);
+    else if (!modelEnabled && proseKeeper) { proseKeeper.stop(); proseKeeper = null; }
+  };
+  syncProse();
+
+  // ---------- loop ----------
+  let last = performance.now();
+  const services = {decisions, routes, now: 0};
+  let worldErrors = 0, simErrors = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const dt = Math.min((now - last) / 1000, 0.1);
+    last = now;
+    services.now = now;
+    if (speed > 0) {
+      const t0 = performance.now();
+      try {
+        routes?.tick?.(state);
+        sim.stepTick(state, dt * speed, services);
+        simErrors = 0;
+      } catch (err) {
+        if (simErrors++ === 0) console.error('[hearthvale] sim step failed', err);
+      }
+      simMs = simMs * 0.9 + (performance.now() - t0) * 0.1;
+    }
+    try {
+      view?.sync(state, {now: now / 1000, speed});
+      world.update(view, now / 1000, dt);
+      worldErrors = 0;
+    } catch (err) {
+      if (worldErrors++ === 0) console.error('[hearthvale] render failed', err);
+      if (worldErrors === 30) swapToStubWorld();
+    }
+    app.update(state, now, view);
+    if (now - lastSave > AUTOSAVE_MS) {
+      lastSave = now;
+      const idle = globalThis.requestIdleCallback ?? ((fn) => setTimeout(fn, 0));
+      idle(() => save(false));
+    }
+  }
+  requestAnimationFrame(frame);
+  addEventListener('pagehide', () => save(false));
+  // IndexedDB writes are async, so also save as soon as the tab is hidden and
+  // right before Vite's dev full reload, not only on pagehide.
+  addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') save(false); });
+  import.meta.hot?.on('vite:beforeFullReload', () => save(false));
+
+  async function swapToStubWorld() {
+    const {createWorld} = await import('./ui/dev/stub-world.js');
+    try { world.dispose?.(); } catch { /* already broken */ }
+    world = createWorld(makeCanvas(), {quality: prefs.get('quality')});
+    renderer.kind = 'stub-fallback';
+    window.hearthvale.world = world;
+    app.setWorld(world);
+  }
+
+  // ---------- test and dev hooks ----------
+  const devAction = (fn) => (...args) => { fn?.(state, ...args); app.refresh(); };
+  window.hearthvale = {
+    sim: sim.kind,
+    renderer: renderer.kind,
+    fixture,
+    state: () => state,
+    snapshot: () => structuredClone(state),
+    speed: () => speed,
+    setSpeed,
+    app,
+    world,
+    view: () => ({...(world.stats?.() ?? {}), simMs, layout: app.layout}),
+    decisions: () => client.stats(),
+    screenPoint: (x, z) => world.projectPoint?.(x, z),
+    dev: {
+      advanceEra: devAction(sim.dev.advanceEra),
+      foundBody: devAction(sim.dev.foundBody),
+      addCard: devAction(sim.dev.addCard),
+    },
+  };
 }
-function toast(text){notice.classList.add('has-toast');const el=document.querySelector('#toast');el.textContent=text;el.classList.add('visible');clearTimeout(toast.timeout);toast.timeout=setTimeout(()=>{el.classList.remove('visible');notice.classList.remove('has-toast');},4000);}
-function showModal(html){document.querySelector('#modal-content').innerHTML=html;document.querySelector('#modal').showModal();}
-function render(){updateStats(state);document.querySelector('#population').textContent=state.people.length;document.querySelector('#treasury').textContent=money(state.treasury);document.querySelector('#happiness').textContent=`${state.happiness}%`;document.querySelector('#food').textContent=Math.round(state.food).toLocaleString();document.querySelector('#net').textContent=state.ledger.net!==undefined?`${state.ledger.net>=0?'+':'−'}${money(Math.abs(state.ledger.net))} / day`:'town treasury';document.querySelector('#decision-count').textContent=state.decisions.length;document.querySelector('#council-badge').textContent=state.decisions.length;const seasons=['Spring','Summer','Autumn','Winter'];document.querySelector('#date').textContent=`${seasons[Math.floor((state.day-1)/30)%4]} · Day ${state.day}`;document.querySelector('#time-label').textContent=state.day===1?'A new beginning':`Year ${Math.floor((state.day-1)/120)+1} · ${speed?'Life moves gently':'Time to take a breath'}`;renderPanel();updatePulse();}
-function renderPanel(){document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));const el=document.querySelector('#panel-content');const previousScroll=el.scrollTop;const focusedId=el.contains(document.activeElement)?document.activeElement.id:null;const signature=[tab,selected?.id??'',tab==='council'?state.decisions[0]?.id??'':'',tab==='council'?(state.projects??[]).map(p=>p.id).join(','):''].join('|');if(signature===lastPanelSignature){patchPanel();return;}lastPanelSignature=signature;
- if(tab==='council'){
- const proposal=state.decisions[0];el.innerHTML=`<div class="panel-heading"><span class="eyebrow">YOUR SEAT AT THE TABLE</span><h2>Let’s shape what comes next.</h2><p>They build the everyday. You set the direction.</p></div>${proposal?`<article class="proposal"><div class="proposal-tag"><i></i> A DECISION FOR YOU <span>01 / ${String(state.decisions.length).padStart(2,'0')}</span></div><h3>${esc(proposal.title)}</h3><p>${esc(proposal.text)}</p><div class="speaker"><span class="avatar">${proposal.voice[0]}</span><span>${esc(proposal.voice)}<small>Speaking for the village</small></span></div><div class="choices">${proposal.choices.map((c,i)=>`<button data-choice="${c.key}" data-decision="${proposal.id}" class="${i===0?'primary':'secondary'}"><span>${esc(c.label)}<small>${esc(c.hint)}</small></span>${icon('arrow')}</button>`).join('')}</div></article>`:`<div class="quiet"><div>${icon('leaf')}</div><h3>A little room to breathe.</h3><p>Your villagers are carrying on. The council will meet when there is something to decide.</p></div>`}${state.projects?.length?`<div class="section-label">TAKING SHAPE · ${state.projects.length}</div><div class="construction-list">${state.projects.slice(0,3).map(p=>`<div><span>${TYPES[p.type].name}<small>${esc(p.source)}</small></span><div class="mini-track"><i data-project-progress="${p.id}" style="width:${p.progress*100}%"></i></div></div>`).join('')}</div>`:''}<div class="system-note"><span class="system-light"></span><p><b>Everyday life, on its own.</b> Residents work, shop and settle under your policies. Big choices come to you.</p></div><div class="panel-foot">${icon('leaf')} Build thoughtfully. Let life happen.</div>`;
- }else if(tab==='people'){
- el.innerHTML=`<div class="panel-heading"><span class="eyebrow">A PLACE TO BELONG</span><h2>${selected?TYPES[selected.type].name:'The life between buildings.'}</h2><p>${selected?'A small piece of your growing town.':'Each resident has a home, savings and a daily routine.'}</p></div>${selected?`<div class="stat-grid"><div><small>Land value</small><b data-bind="landValue">${landValue(state,selected.x,selected.z)}</b></div><div><small>Daily upkeep</small><b>${money(TYPES[selected.type].upkeep)}</b></div></div><p class="help-copy">Water and nearby gardens add value. Workshops reduce it through pollution. Higher terrain contributes nature value.</p><button class="text-button" id="clear-selection">Back to residents ${icon('arrow')}</button>`:`<div class="stat-grid"><div><small>Home capacity</small><b data-bind="capacity">${state.people.length} / ${state.stats.capacity}</b></div><div><small>Jobs filled</small><b data-bind="jobs">${state.stats.employed} / ${state.stats.jobs}</b></div><div><small>Wellbeing</small><b data-bind="wellbeing">${state.happiness}%</b></div><div><small>Land value</small><b data-bind="landValue">${state.stats.landValue}</b></div></div><div class="section-label">VILLAGE POLICIES</div><label class="policy-label">Household tax <span id="tax-value">${state.policy.tax}%</span><input id="tax" type="range" min="0" max="25" value="${state.policy.tax}" aria-label="Household tax rate"></label><label class="toggle-label"><span>Let households build<small>Residents fund homes, farms and businesses.</small></span><input id="growth" type="checkbox" ${state.policy.growth?'checked':''}></label><div class="section-label">EVERYDAY ROUTINES</div><div class="residents">${state.people.slice(0,6).map(p=>`<div><span class="avatar small">${['M','E','A','J','N','L'][p.id%6]}</span><span>Resident ${p.id}<small data-person-activity="${p.id}">${esc(p.activity)}</small></span><b data-person-wealth="${p.id}">${money(p.wealth)}</b></div>`).join('')}</div>`}`;
- }else{
- const l=state.ledger;el.innerHTML=`<div class="panel-heading"><span class="eyebrow">MAKE THE FUTURE ADD UP</span><h2>A town that sustains itself.</h2><p>Money circulates between households,<br>businesses and your treasury.</p></div><div class="balance"><small>TOWN TREASURY</small><h3 data-bind="balance">${money(state.treasury)}</h3><span data-net class="${(l.net??0)<0?'negative':''}">${(l.net??0)>=0?'+':'−'}${money(Math.abs(l.net??0))} per day</span></div><div class="ledger">${[['tax','Income & property taxes',l.tax],['upkeep','Public upkeep',-(l.upkeep??0)],['service','Interest & principal',-((l.interest??0)+(l.principal??0))],['dividend','Investor dividends',-(l.dividend??0)]].map(([key,label,value])=>`<div><span>${label}</span><b data-ledger="${key}">${(value??0)<0?'−':'+'}${money(Math.abs(value??0))}</b></div>`).join('')}<div><span>Outstanding debt</span><b data-bind="debt">${money(state.debt)}</b></div><div><span>Investor revenue share</span><b data-bind="investorShare">${Math.round(state.investorShare*100)}%</b></div><div><span>Business reserves</span><b data-bind="businessCash">${money(state.businessCash??12000)}</b></div><div><span>Household savings</span><b data-bind="householdSavings">${money(state.people.reduce((n,p)=>n+p.wealth,0))}</b></div></div><div class="section-label">FINANCE THE NEXT CHAPTER</div><button class="finance-option" data-finance="loan"><b>Community loan ${icon('arrow')}</b><small>+¤10,000 · interest and repayment every day</small></button><button class="finance-option" data-finance="investor"><b>Invite an investor ${icon('arrow')}</b><small>+¤15,000 · permanent 15% tax share after 90 days</small></button><button class="text-button" data-finance="grant">Sandbox cash infusion · +¤5,000</button><p class="economy-warning">${state.treasury<0?'The town is overdrawn. Construction is blocked until reserves recover.':state.food<state.people.length*2?'Food reserves are low. Add a farm or consider imports.':'Keep food and savings in reserve for the quieter days.'}</p>`;
- }
- el.scrollTop=previousScroll;if(focusedId)document.getElementById(focusedId)?.focus({preventScroll:true});
-}
-function patchPanel(){
- const values={capacity:`${state.people.length} / ${state.stats.capacity}`,jobs:`${state.stats.employed} / ${state.stats.jobs}`,wellbeing:`${state.happiness}%`,landValue:selected?landValue(state,selected.x,selected.z):state.stats.landValue,balance:money(state.treasury),debt:money(state.debt),investorShare:`${Math.round(state.investorShare*100)}%`,businessCash:money(state.businessCash??12000),householdSavings:money(state.people.reduce((n,p)=>n+p.wealth,0))};
- document.querySelectorAll('[data-bind]').forEach(el=>{el.textContent=values[el.dataset.bind];});const l=state.ledger,ledger={tax:l.tax??0,upkeep:-(l.upkeep??0),service:-((l.interest??0)+(l.principal??0)),dividend:-(l.dividend??0)};document.querySelectorAll('[data-ledger]').forEach(el=>{const n=ledger[el.dataset.ledger];el.textContent=`${n<0?'−':'+'}${money(Math.abs(n))}`;});
- const net=document.querySelector('[data-net]');if(net){net.textContent=`${(l.net??0)>=0?'+':'−'}${money(Math.abs(l.net??0))} per day`;net.classList.toggle('negative',(l.net??0)<0);}const warning=document.querySelector('.economy-warning');if(warning)warning.textContent=state.treasury<0?'The town is overdrawn. Construction is blocked until reserves recover.':state.food<state.people.length*2?'Food reserves are low. Add a farm or consider imports.':'Keep food and savings in reserve for the quieter days.';document.querySelectorAll('[data-person-wealth]').forEach(el=>{const p=state.people.find(p=>p.id===Number(el.dataset.personWealth));if(p)el.textContent=money(p.wealth);});
-}
-document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
- if(b.dataset.tab||b.dataset.open){tab=b.dataset.tab??b.dataset.open;selected=null;setPanelOpen(true);renderPanel();}
- if(b.id==='toggle-panel')setPanelOpen(!panelOpen);
- if(b.id==='close-panel')setPanelOpen(false);
- if(b.dataset.choice){const result=resolveDecision(state,b.dataset.decision,b.dataset.choice);toast(result.ok?'Decision recorded. Your town will make it happen.':result.error);render();}
- if(b.dataset.tool){tool=tool===b.dataset.tool?null:b.dataset.tool;world.tool(tool);if(tool&&innerWidth<=1000)setPanelOpen(false);document.querySelectorAll('[data-tool]').forEach(n=>n.classList.toggle('active',n.dataset.tool===tool));document.querySelector('#hint').textContent=tool?`Click land to place ${TYPES[tool].name.toLowerCase()} · Esc to cancel`:'Drag to orbit · Scroll to explore · Right-drag to wander';}
- if(b.dataset.speed){speed=Number(b.dataset.speed);updateSpeed();}
- if(b.dataset.finance){const kind=b.dataset.finance;showModal(`<span class="eyebrow">A CHOICE WITH CONSEQUENCES</span><h2>${kind==='loan'?'Borrow from tomorrow':kind==='investor'?'A partner in your future':'Add sandbox funding'}</h2><p>${kind==='loan'?'Receive ¤10,000. Daily interest is 0.08% of outstanding debt, plus 0.2% principal repayment. These funds leave the town economy.':kind==='investor'?'Receive ¤15,000. An additional permanent 15% of tax revenue goes to investors after 90 days. This is not a loan you can repay. Each investment starts its own 90-day grace period. Earlier dividend obligations stay in place.': 'Add ¤5,000 from outside the economy. This is a sandbox tool with no repayment or penalty.'}</p><button class="primary modal-action" id="confirm-finance" data-kind="${kind}">Accept funding ${icon('arrow')}</button>`);}
- if(b.id==='confirm-finance'){const result=finance(state,b.dataset.kind);toast(result.ok?'Funding added to your treasury.':result.error);document.querySelector('#modal').close();render();}
- if(b.id==='pause'){speed=speed?0:1;updateSpeed();}
- if(b.id==='home-view')world.home();
- if(b.id==='overlay-toggle'){overlay=overlay==='beauty'?'value':overlay==='value'?'pollution':'beauty';world.setOverlay(overlay,state);const el=document.querySelector('#overlay-legend');el.hidden=overlay==='beauty';el.innerHTML=overlay==='value'?'<b>Land value</b><span class="low">Lower</span><i class="value-scale"></i><span>Higher</span>':'<b>Pollution sources</b><span class="pollution-dot"></span> Workshops';}
- if(b.id==='night-toggle'){b.classList.toggle('active');world.setNight(b.classList.contains('active'));}
- if(b.id==='clear-selection'){selected=null;renderPanel();}
- if(b.id==='close-modal')document.querySelector('#modal').close();
- if(b.id==='help')showHelp();
- if(b.id==='settings')showSettings();
- if(b.id==='check-system1')refreshConnection();
- if(b.id==='save'){try{localStorage.setItem('hearthvale-save',serialize(state));toast('Town saved on this device.');}catch{toast('Browser storage is full. Export your town instead.');}}
- if(b.id==='export'){const blob=new Blob([serialize(state)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`hearthvale-day-${state.day}.json`;a.click();URL.revokeObjectURL(a.href);}
- if(b.id==='reset'){if(confirm('Start a new town? Your current save will be replaced. Export it first to keep a copy.')){localStorage.removeItem('hearthvale-save');location.reload();}}
-});
-document.addEventListener('input',e=>{if(e.target.id==='tax'){state.policy.tax=Number(e.target.value);document.querySelector('#tax-value').textContent=`${state.policy.tax}%`;}});
-document.addEventListener('change',async e=>{if(['decision-mode','decision-utilization','decision-cap'].includes(e.target.id)){decisionSettings.mode=document.querySelector('#decision-mode').value;decisionSettings.utilization=Number(document.querySelector('#decision-utilization').value)/100;decisionSettings.cap=Math.max(1,Math.min(2000,Number(document.querySelector('#decision-cap').value)||100));modelPolicy.configure({maxQuestions:decisionSettings.mode==='manual'?decisionSettings.cap:null,utilization:decisionSettings.utilization});localStorage.setItem('hearthvale-decision-settings',JSON.stringify(decisionSettings));updatePolicyMetrics();}if(e.target.id==='growth')state.policy.growth=e.target.checked;if(e.target.id==='model-enabled'){modelEnabled=e.target.checked;modelPolicy.reset();policyNextAt=0;localStorage.setItem('hearthvale-model-enabled',String(modelEnabled));if(!modelEnabled){for(const p of state.people)delete p.routineIntent;routineStatus={active:false,applied:0,model:null};}else{modelRetryAt=0;}refreshConnection();}if(e.target.id==='import'){try{const raw=await e.target.files[0].text();const loaded=restore(raw);localStorage.setItem('hearthvale-save',serialize(loaded));location.reload();}catch{toast('That file is not a valid Hearthvale save.');}}});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){tool=null;world.tool(null);document.querySelectorAll('[data-tool]').forEach(b=>b.classList.remove('active'));document.querySelector('#hint').textContent='Drag to orbit · Scroll to explore · Right-drag to wander';}if(e.code==='Space'&&!['INPUT','TEXTAREA','BUTTON'].includes(e.target.tagName)&&!document.querySelector('#modal').open){e.preventDefault();speed=speed?0:1;updateSpeed();}});
-function updateSpeed(){document.querySelector('#pause').innerHTML=icon(speed?'pause':'play');document.querySelector('#pause').setAttribute('aria-label',speed?'Pause simulation':'Resume simulation');document.querySelectorAll('[data-speed]').forEach(b=>b.classList.toggle('active',Number(b.dataset.speed)===speed));render();}
-function showSettings(){showModal(`<span class="eyebrow">YOUR TOWN, YOUR DEVICE</span><h2>Keep your little world.</h2><p>Autosaves every 15 seconds. Export a town to keep a backup or move to another browser.</p><div class="settings-actions"><button id="save" class="primary">${icon('save')} Save town</button><button id="export" class="secondary">Export town</button><label class="import-label">Import town<input type="file" id="import" accept="application/json"></label><button id="reset" class="text-button">Start a new town</button></div><div class="api-note"><b id="system1-label">System 1 · local rules active</b><label class="toggle-label"><span>Local AI villager routines</span><input id="model-enabled" type="checkbox" ${modelEnabled?'checked':''}></label><p id="system1-status" role="status">Checking the local decision service…</p><div class="decision-controls"><label for="decision-mode">Decision pacing<select id="decision-mode"><option value="auto" ${decisionSettings.mode==='auto'?'selected':''}>Automatic · measured throughput</option><option value="manual" ${decisionSettings.mode==='manual'?'selected':''}>Manual · maximum questions / second</option></select></label><label for="decision-utilization">Service utilization<select id="decision-utilization">${[25,50,80,100].map(n=>`<option value="${n}" ${Math.round(decisionSettings.utilization*100)===n?'selected':''}>${n}%${n===80?' · balanced':''}</option>`).join('')}</select></label><label for="decision-cap">Manual ceiling (1–2000 / second)<input id="decision-cap" type="number" min="1" max="2000" step="1" value="${decisionSettings.cap}"></label></div><p>Automatic pacing learns from completed batches. Utilization reserves idle time between requests; one batch runs at a time. Advice applies after the current trip or activity. Local routines keep running while AI waits.</p><p id="routine-metrics" role="status"></p><button id="check-system1" class="secondary">Check connection</button><p>Your API key is loaded only by the local server from local.env. Council decisions stay with you.</p></div>`);refreshConnection();updatePolicyMetrics();}
-async function refreshConnection(){
- const el=document.querySelector('#system1-status');if(!el)return;el.textContent='Checking the local decision service…';
- try{const response=await fetch('/api/system1/status',{cache:'no-store',signal:AbortSignal.timeout(4500)});if(!response.ok)throw new Error();const result=await response.json();
- const messages={ready:`Key authenticated at ${result.endpoint}. ${modelEnabled?'Villager activity batches run as town time advances.':'Local AI is disabled; deterministic routines are active.'}`, 'service-unavailable':`Service unavailable at ${result.endpoint}. Local rules remain active.`, 'authentication-failed':'The service rejected the configured key. Local rules remain active.', 'key-missing':'Add API_KEY to local.env. Local rules remain active.', 'service-error':'The service responded with an error. Local rules remain active.'};
- el.textContent=messages[result.state]??'Check local.env on the server. Local rules remain active.';
- document.querySelector('#system1-label').textContent=modelEnabled&&(result.modelConnected||routineStatus.active)?'System 1 · local AI + rules':'System 1 · local rules active';
- }catch{el.textContent='Connection check unavailable. Restart npm run dev. Local rules remain active.';}
-}
-function movementStatus(){const result={moving:0,active:0,routing:0,blocked:0};for(const p of state.people){if(p.task?.pending||p.task?.needsRoute)result.routing++;else if(p.task?.blocked)result.blocked++;else if(p.moving)result.moving++;else result.active++;}return result;}
-function updatePolicyMetrics(){const el=document.querySelector('#routine-metrics');if(!el)return;const p=modelPolicy.stats,m=movementStatus();el.textContent=`${!modelEnabled?'AI off':modelPending?'AI request in flight':performance.now()<modelRetryAt?'AI retry cooldown':p.status} · ${p.mode==='auto'?'automatic':`manual ceiling ${p.limit}/s`} · measured capacity estimate ${p.capacity.toFixed(1)} questions/s · completed ${p.observedRate.toFixed(1)}/s (last 5s) · last response ${Math.round(p.latencyMs)}ms. ${p.covered}/${p.eligible} residents covered; ${p.questions} questions / ${p.sampled} samples. Residents: ${m.moving} travelling, ${m.active} at activities, ${m.routing} awaiting routes, ${m.blocked} blocked.`;}
-async function requestVillagerRoutines(now){
- if(!modelEnabled||!speed||!state.people.length)return;
- // Cohort sampling is throttled separately from network admission: a fast
- // service can use its measured capacity on the very next animation frame.
- if(now>=policyNextAt){policyNextAt=now+100;const intents=modelPolicy.sample(state,now);if(intents.length){const applied=applyRoutineIntents(state,intents,state.day);routineStatus.applied+=applied;if(intents.some(i=>i.probabilities))routineStatus.active=true;}updatePolicyMetrics();}
- if(modelPending||now<modelRetryAt)return;const batch=modelPolicy.prepare(state,now,frameCost);if(!batch)return;
- modelPending=true;
- try{const response=await fetch('/api/system1/decisions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({day:batch.day,happiness:state.happiness,food:state.food,tax:state.policy.tax,residents:batch.residents.map(({key,...r})=>r)}),signal:AbortSignal.timeout(9500)});
- if(response.status===429){modelPolicy.finish(batch,performance.now(),{busy:true});modelRetryAt=performance.now()+250;return;}if(!response.ok)throw new Error();const data=await response.json();
- if(modelEnabled&&modelPolicy.accept(batch,data,state,performance.now())){routineStatus.model=data.model;const sampled=modelPolicy.sample(state,performance.now());const applied=applyRoutineIntents(state,sampled,state.day);routineStatus.active=applied>0||routineStatus.active;routineStatus.applied+=applied;}
- }catch{if(batch.generation===modelPolicy.generation){modelPolicy.finish(batch,performance.now(),{failed:true});routineStatus.active=false;modelRetryAt=performance.now()+1000;}}finally{modelPending=false;updatePolicyMetrics();}
-}
-function showHelp(){showModal(`<span class="eyebrow">WELCOME TO HEARTHVALE</span><h2>Lead gently. Watch life unfold.</h2><p>Villagers carry out everyday routines. You decide council proposals, place buildings and set policies.</p><ul><li><b>Build:</b> choose a building below, then click suitable land. It becomes a construction site. Escape cancels.</li><li><b>Explore:</b> drag to orbit, right-drag to pan, scroll to zoom. Panning creates more terrain.</li><li><b>Grow:</b> cottages house 6 residents. Farms feed the town; markets and workshops provide jobs. Happy residents attract newcomers.</li><li><b>Govern:</b> council choices spend real treasury funds. Residents pool savings to start construction for housing, food and jobs. Builders travel to sites and finish them over time.</li><li><b>Understand:</b> use the map button for land value and pollution, or click a building to inspect it.</li><li><b>Keep:</b> save/export from the settings button. A day passes every 6 seconds at 1×.</li></ul><p class="api-note">This is a playable foundation. Resources and finances are simplified; traffic, logistics and large-scale performance are not production simulations yet.</p>`);}
-const routePlanner=createRoutePlanner();render();let last=performance.now();function frame(now){const frameStart=performance.now();const dt=Math.min((now-last)/1000,.1);last=now;if(speed){dayAccumulator+=dt*speed;const before=state.buildings.length;routePlanner.tick();stepAgents(state,dt*speed,routePlanner);if(state.buildings.length!==before)render();if(dayAccumulator>=6){dayAccumulator-=6;stepDay(state);render();if(overlay!=='beauty')world.setOverlay(overlay,state);}}
- if(now-lastPulse>800){updatePulse();modelPolicy.observe(now);updatePolicyMetrics();lastPulse=now;}if(now>1500)requestVillagerRoutines(now);world.update(state,now/1000,dt);if(now-lastSave>15000){try{localStorage.setItem('hearthvale-save',serialize(state));}catch{}lastSave=now;}frameCost=frameCost*.9+(performance.now()-frameStart)*.1;requestAnimationFrame(frame);}
-requestAnimationFrame(frame);
-// Expose a read-only snapshot for local verification; game state stays private.
-window.hearthvale={snapshot:()=>structuredClone(state),routineStatus:()=>structuredClone({...routineStatus,policy:modelPolicy.stats,movement:movementStatus()}),view:()=>({...world.debug(),navigation:{...routePlanner.stats},frameWorkMs:frameCost,policy:{...modelPolicy.stats,cacheEntries:modelPolicy.cache.size}}),screenPoint:(x,z)=>world.projectPoint(x,z)};

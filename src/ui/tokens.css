@@ -1,0 +1,140 @@
+/* The Ledger: colour, type and motion tokens (design-visual §8.8, §8.9). */
+
+:root {
+  /* Paper and ink */
+  --paper: #fafbf2;
+  --paper-2: #f2f3e6;
+  --paper-3: #e9ebdb;
+  --paper-card: #fffef9;
+  --paper-glass: rgba(250, 251, 242, 0.86);
+  --paper-scrim: rgba(250, 251, 242, 0.6);
+  --ink: #2f3f2f;
+  --ink-2: #5a6a55;
+  --muted: #7f8a73;
+  --line: #dde3cf;
+  --line-2: #cfd7bd;
+  --green: #526d42;
+  --green-2: #6c8a58;
+  --green-soft: #e3ead3;
+  --on-green: #f7f6ea;
+  --gold: #c9a24a;
+  --gold-soft: rgba(201, 162, 74, 0.2);
+  --rust: #b2563f;
+  --rust-soft: #f3dfd4;
+  --river: #3f8a99;
+  --river-soft: #d9ebec;
+  --focus: #bc963f;
+
+  /* Shape and depth */
+  --radius: 14px;
+  --radius-s: 8px;
+  --radius-xs: 6px;
+  --shadow: 0 8px 28px rgba(35, 59, 41, 0.12), 0 1px 2px rgba(35, 59, 41, 0.06);
+  --shadow-s: 0 2px 10px rgba(35, 59, 41, 0.08), 0 1px 1px rgba(35, 59, 41, 0.05);
+  --shadow-lift: 0 14px 38px rgba(35, 59, 41, 0.16), 0 2px 4px rgba(35, 59, 41, 0.06);
+  --sheet-edge: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+
+  /* Type */
+  --font-display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --font-ui: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --fs-11: 11px;
+  --fs-13: 13px;
+  --fs-15: 15px;
+  --fs-18: 18px;
+  --fs-22: 22px;
+  --fs-28: 28px;
+  --fs-44: 44px;
+
+  /* Motion */
+  --t-fast: 120ms;
+  --t-base: 220ms;
+  --t-slow: 360ms;
+  --t-moment: 900ms;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-in: cubic-bezier(.4, 0, .8, .4);
+  --ease-back: cubic-bezier(.34, 1.3, .64, 1);
+
+  /* Layout */
+  --gap: 12px;
+  --top-h: 60px;
+  --strip-h: 52px;
+  --rail-w: 44px;
+  --binder-w: clamp(360px, 29vw, 432px);
+  --drawer-w: clamp(320px, 26vw, 380px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+
+  /* Layers */
+  --z-scene: 0;
+  --z-float: 10;
+  --z-chrome: 20;
+  --z-pop: 30;
+  --z-notice: 40;
+  --z-scrim: 45;
+  --z-sheet: 50;
+  --z-modal: 80;
+  --z-toast: 90;
+
+  color-scheme: light;
+}
+
+/* Night: the year-end night beat, the system preference, or the setting. */
+:root[data-theme="night"] {
+  --paper: #1f2622;
+  --paper-2: #262e29;
+  --paper-3: #2e3832;
+  --paper-card: #232b26;
+  --paper-glass: rgba(31, 38, 34, 0.86);
+  --paper-scrim: rgba(18, 24, 21, 0.62);
+  --ink: #e8e9dc;
+  --ink-2: #c3c8b6;
+  --muted: #919a87;
+  --line: #36423a;
+  --line-2: #44523f;
+  --green: #93b37a;
+  --green-2: #a9c78f;
+  --green-soft: #2f3d2c;
+  --on-green: #17201a;
+  --gold: #d8b45e;
+  --gold-soft: rgba(216, 180, 94, 0.18);
+  --rust: #dc8467;
+  --rust-soft: #3e2a24;
+  --river: #74b8c6;
+  --river-soft: #22383b;
+  --focus: #e0bf6a;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.38), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-s: 0 2px 10px rgba(0, 0, 0, 0.3);
+  --shadow-lift: 0 16px 40px rgba(0, 0, 0, 0.45);
+  --sheet-edge: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  color-scheme: dark;
+}
+
+:root[data-text="large"] {
+  font-size: 115%;
+  --fs-11: 12.5px;
+  --fs-13: 15px;
+  --fs-15: 17px;
+  --fs-18: 20px;
+  --fs-22: 25px;
+  --fs-28: 32px;
+  --fs-44: 48px;
+}
+
+:root[data-motion="reduced"] {
+  --t-fast: 0ms;
+  --t-base: 0ms;
+  --t-slow: 0ms;
+  --t-moment: 0ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 0ms;
+    --t-base: 0ms;
+    --t-slow: 0ms;
+    --t-moment: 0ms;
+  }
+}

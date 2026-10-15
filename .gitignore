@@ -6,3 +6,5 @@ playwright-report/
 !.env.example
 local.env
 *.local.env
+.claude/
+*.tmp.mjs

@@ -1,9 +1,0 @@
-import * as THREE from 'three';
-import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-// Keep source meshes for accurate picking; draw static surfaces in material / 
-// 100-unit region batches. Animated objects and existing instanced crops stay live.
-export function createStaticTown(scene){const root=new THREE.Group();scene.add(root);let batches=0;
- return {rebuild(buildings,motion){for(const mesh of [...root.children]){root.remove(mesh);mesh.geometry.dispose();}const animated=new Set();for(const m of motion)for(const object of [m.object,...(m.puffs??[]),...(m.drops??[])])object?.traverse(o=>animated.add(o));const groups=new Map();
- for(const g of buildings.values()){g.updateMatrixWorld(true);g.traverse(o=>{if(!o.isMesh||o.isInstancedMesh||animated.has(o))return;const material=o.material;if(Array.isArray(material))return;const key=`${material.id}:${Math.floor(g.position.x/100)}:${Math.floor(g.position.z/100)}:${o.castShadow}`;let entry=groups.get(key);if(!entry){entry={material,cast:o.castShadow,geometry:[]};groups.set(key,entry);}let geometry=o.geometry.clone();if(geometry.index){const expanded=geometry.toNonIndexed();geometry.dispose();geometry=expanded;}for(const name of Object.keys(geometry.attributes))if(!['position','normal',...(material.vertexColors?['color']:[])].includes(name))geometry.deleteAttribute(name);geometry.applyMatrix4(o.matrixWorld);entry.geometry.push(geometry);o.visible=false;});}
- for(const entry of groups.values()){const geometry=mergeGeometries(entry.geometry);for(const g of entry.geometry)g.dispose();if(!geometry)throw new Error('Static surface attributes differ');geometry.computeBoundingSphere();const mesh=new THREE.Mesh(geometry,entry.material);mesh.castShadow=entry.cast;mesh.receiveShadow=true;mesh.matrixAutoUpdate=false;root.add(mesh);}batches=root.children.length;},get count(){return batches;}};
-}

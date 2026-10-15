@@ -1,4 +1,31 @@
-import {RouteScheduler} from './navigation.js';
-const scheduler=new RouteScheduler();let state=null,running=false;
-function pump(){scheduler.tick(6,128);if(scheduler.pending)setTimeout(pump,0);else running=false;}
-self.onmessage=({data})=>{if(data.type==='reset'){state=data.state;scheduler.reset(state);return;}if(data.type==='route'&&state){const accepted=scheduler.request(state,data.start,data.goal,route=>postMessage({id:data.id,revision:data.revision,route,stats:scheduler.stats}));if(!accepted)postMessage({id:data.id,revision:data.revision,route:null});if(!running){running=true;setTimeout(pump,0);}}};
+// Runs grid route searches and flow fields off the main thread.
+// Messages in:  {type: 'grid', grid (with terrainSeed)} | {type: 'route', id, key, from, to}
+// Messages out: {id, key, cells: Int32Array | null, crossings: number[]}
+import { RouteScheduler } from './navigation.js';
+import { setTerrainSeed, terrainSeed } from './terrain.js';
+
+const scheduler = new RouteScheduler({ maxCache: 2048 });
+let running = false;
+
+function pump() {
+  scheduler.tick(8, 1024);
+  if (scheduler.pending) setTimeout(pump, 0);
+  else running = false;
+}
+
+self.onmessage = ({ data }) => {
+  if (data.type === 'grid') {
+    if ((data.grid.terrainSeed ?? null) !== terrainSeed()) setTerrainSeed(data.grid.terrainSeed ?? null);
+    scheduler.setGrid(data.grid);
+    return;
+  }
+  if (data.type !== 'route') return;
+  const reply = result => postMessage({ id: data.id, key: data.key, cells: result.cells, crossings: result.crossings, stats: scheduler.stats });
+  if (!scheduler.request(data.from, data.to, reply)) {
+    postMessage({ id: data.id, key: data.key, cells: null, crossings: [], rejected: true });
+  }
+  if (!running) {
+    running = true;
+    setTimeout(pump, 0);
+  }
+};
