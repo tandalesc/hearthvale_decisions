@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" width="960" height="420" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect width="960" height="420" rx="18" fill="#fafbf2"/>
+  <text x="48" y="58" font-family="Georgia, 'Times New Roman', serif" font-size="28" fill="#2f3f2f">Same valley, different towns</text>
+  <text x="48" y="86" font-size="15" fill="#7f8a73">Every town starts as a few huts by a ford. What it becomes depends on what you allowed, early, and what that made easier later.</text>
+
+  <!-- root -->
+  <rect x="380" y="112" width="200" height="54" rx="27" fill="#ffffff" stroke="#c9a24a" stroke-width="2"/>
+  <text x="480" y="136" text-anchor="middle" font-family="Georgia, serif" font-size="17" fill="#2f3f2f">A hamlet by a river</text>
+  <text x="480" y="155" text-anchor="middle" font-size="12" fill="#7f8a73">28 people · 7 families</text>
+
+  <!-- branches -->
+  <g fill="none" stroke="#dde3cf" stroke-width="2.5">
+    <path d="M480,166 C480,210 135,200 135,262"/>
+    <path d="M480,166 C480,210 273,200 273,262"/>
+    <path d="M480,166 C480,215 411,210 411,262"/>
+    <path d="M480,166 C480,215 549,210 549,262"/>
+    <path d="M480,166 C480,210 687,200 687,262"/>
+    <path d="M480,166 C480,210 825,200 825,262"/>
+  </g>
+
+  <g text-anchor="middle">
+    <!-- cards -->
+    <g>
+      <rect x="72" y="262" width="126" height="118" rx="12" fill="#ffffff" stroke="#dde3cf"/>
+      <rect x="72" y="262" width="126" height="6" rx="3" fill="#7a5a3a"/>
+      <text x="135" y="296" font-family="Georgia, serif" font-size="17" fill="#2f3f2f">Mill town</text>
+      <text x="135" y="320" font-size="12.5" fill="#7f8a73">water rights,</text><text x="135" y="337" font-size="12.5" fill="#7f8a73">chimneys, a union</text><text x="135" y="354" font-size="12.5" fill="#7f8a73">hall, strikes</text>
+    </g>
+    <g>
+      <rect x="210" y="262" width="126" height="118" rx="12" fill="#ffffff" stroke="#dde3cf"/>
+      <rect x="210" y="262" width="126" height="6" rx="3" fill="#c9a24a"/>
+      <text x="273" y="296" font-family="Georgia, serif" font-size="17" fill="#2f3f2f">Exchange</text>
+      <text x="273" y="320" font-size="12.5" fill="#7f8a73">free trade,</text><text x="273" y="337" font-size="12.5" fill="#7f8a73">warehouses, booms</text><text x="273" y="354" font-size="12.5" fill="#7f8a73">and busts</text>
+    </g>
+    <g>
+      <rect x="348" y="262" width="126" height="118" rx="12" fill="#ffffff" stroke="#dde3cf"/>
+      <rect x="348" y="262" width="126" height="6" rx="3" fill="#526d42"/>
+      <text x="411" y="296" font-family="Georgia, serif" font-size="17" fill="#2f3f2f">Garden town</text>
+      <text x="411" y="320" font-size="12.5" fill="#7f8a73">park reserves,</text><text x="411" y="337" font-size="12.5" fill="#7f8a73">clean water, tree-</text><text x="411" y="354" font-size="12.5" fill="#7f8a73">lined avenues</text>
+    </g>
+    <g>
+      <rect x="486" y="262" width="126" height="118" rx="12" fill="#ffffff" stroke="#dde3cf"/>
+      <rect x="486" y="262" width="126" height="6" rx="3" fill="#6d5a8a"/>
+      <text x="549" y="296" font-family="Georgia, serif" font-size="17" fill="#2f3f2f">Cathedral</text>
+      <text x="549" y="320" font-size="12.5" fill="#7f8a73">feast days, a spire</text><text x="549" y="337" font-size="12.5" fill="#7f8a73">on the hill,</text><text x="549" y="354" font-size="12.5" fill="#7f8a73">pilgrims</text>
+    </g>
+    <g>
+      <rect x="624" y="262" width="126" height="118" rx="12" fill="#ffffff" stroke="#dde3cf"/>
+      <rect x="624" y="262" width="126" height="6" rx="3" fill="#3f8a99"/>
+      <text x="687" y="296" font-family="Georgia, serif" font-size="17" fill="#2f3f2f">Scholar town</text>
+      <text x="687" y="320" font-size="12.5" fill="#7f8a73">schools, a press,</text><text x="687" y="337" font-size="12.5" fill="#7f8a73">lamps lit early</text>
+    </g>
+    <g>
+      <rect x="762" y="262" width="126" height="118" rx="12" fill="#ffffff" stroke="#dde3cf"/>
+      <rect x="762" y="262" width="126" height="6" rx="3" fill="#b2563f"/>
+      <text x="825" y="296" font-family="Georgia, serif" font-size="17" fill="#2f3f2f">Commune</text>
+      <text x="825" y="320" font-size="12.5" fill="#7f8a73">common land,</text><text x="825" y="337" font-size="12.5" fill="#7f8a73">courtyards, an</text><text x="825" y="354" font-size="12.5" fill="#7f8a73">open moot</text>
+    </g>
+  </g>
+</svg>

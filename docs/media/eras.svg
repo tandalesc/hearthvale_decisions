@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 430" width="960" height="430" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect width="960" height="430" rx="18" fill="#fafbf2"/>
+  <text x="48" y="58" font-family="Georgia, 'Times New Roman', serif" font-size="28" fill="#2f3f2f">One hundred and fifty years</text>
+  <text x="48" y="86" font-size="15" fill="#7f8a73">Eras arrive when the town earns them: enough people, enough institutions, the right roads.</text>
+  <text x="48" y="108" font-size="15" fill="#7f8a73">A struggling town is still carried along by the years, a little behind its neighbours.</text>
+
+  <!-- ground line -->
+  <line x1="48" y1="300" x2="912" y2="300" stroke="#dde3cf" stroke-width="2"/>
+  <g fill="#c3613f" stroke="#2f3f2f" stroke-width="0"/>
+
+  <!-- Hamlet: thatch hut -->
+  <g transform="translate(118,300)">
+    <rect x="-16" y="-22" width="32" height="22" fill="#efe6cf"/><path d="M-22,-22 L0,-44 L22,-22 z" fill="#c9a86a"/>
+  </g>
+  <!-- Village: two-storey -->
+  <g transform="translate(262,300)">
+    <rect x="-18" y="-40" width="36" height="40" fill="#efe6cf"/><path d="M-23,-40 L0,-62 L23,-40 z" fill="#c3613f"/>
+    <rect x="-8" y="-30" width="6" height="7" fill="#9fc2c8"/><rect x="3" y="-30" width="6" height="7" fill="#9fc2c8"/>
+  </g>
+  <!-- Town: townhouse brick -->
+  <g transform="translate(406,300)">
+    <rect x="-20" y="-64" width="40" height="64" fill="#a8553f"/><path d="M-24,-64 L0,-84 L24,-64 z" fill="#5c6670"/>
+    <g fill="#e6dcc2"><rect x="-12" y="-54" width="7" height="8"/><rect x="5" y="-54" width="7" height="8"/><rect x="-12" y="-34" width="7" height="8"/><rect x="5" y="-34" width="7" height="8"/></g>
+  </g>
+  <!-- Borough: terrace row -->
+  <g transform="translate(550,300)">
+    <rect x="-36" y="-80" width="24" height="80" fill="#9c4e3b"/><rect x="-12" y="-80" width="24" height="80" fill="#a8553f"/><rect x="12" y="-80" width="24" height="80" fill="#9c4e3b"/>
+    <rect x="-38" y="-86" width="76" height="6" fill="#525b64"/>
+    <g fill="#e6dcc2"><rect x="-30" y="-70" width="6" height="8"/><rect x="-6" y="-70" width="6" height="8"/><rect x="18" y="-70" width="6" height="8"/><rect x="-30" y="-48" width="6" height="8"/><rect x="-6" y="-48" width="6" height="8"/><rect x="18" y="-48" width="6" height="8"/><rect x="-30" y="-26" width="6" height="8"/><rect x="-6" y="-26" width="6" height="8"/><rect x="18" y="-26" width="6" height="8"/></g>
+  </g>
+  <!-- City: civic stone with turret -->
+  <g transform="translate(694,300)">
+    <rect x="-30" y="-110" width="60" height="110" fill="#c8b48a"/><rect x="-34" y="-116" width="68" height="8" fill="#a9a89c"/>
+    <rect x="18" y="-140" width="14" height="30" fill="#bba57c"/><path d="M16,-140 L25,-156 L34,-140 z" fill="#5c6670"/>
+    <g fill="#f4efe4"><rect x="-22" y="-98" width="8" height="12"/><rect x="-6" y="-98" width="8" height="12"/><rect x="10" y="-98" width="8" height="12"/><rect x="-22" y="-72" width="8" height="12"/><rect x="-6" y="-72" width="8" height="12"/><rect x="10" y="-72" width="8" height="12"/><rect x="-22" y="-46" width="8" height="12"/><rect x="10" y="-46" width="8" height="12"/></g>
+    <rect x="-7" y="-24" width="14" height="24" fill="#7a5a3a"/>
+  </g>
+  <!-- Metropolis: tall stucco & glass with roof garden -->
+  <g transform="translate(838,300)">
+    <rect x="-26" y="-150" width="52" height="150" fill="#e9dfd0"/><rect x="-30" y="-156" width="60" height="6" fill="#dcd2c3"/>
+    <g fill="#4e7e52"><circle cx="-14" cy="-160" r="6"/><circle cx="2" cy="-162" r="7"/><circle cx="16" cy="-160" r="5"/></g>
+    <g fill="#9fc2c8"><rect x="-18" y="-140" width="36" height="9"/><rect x="-18" y="-118" width="36" height="9"/><rect x="-18" y="-96" width="36" height="9"/><rect x="-18" y="-74" width="36" height="9"/><rect x="-18" y="-52" width="36" height="9"/></g>
+    <rect x="-6" y="-24" width="12" height="24" fill="#8c6a44"/>
+  </g>
+
+  <!-- labels -->
+  <g text-anchor="middle">
+    <g font-family="Georgia, serif" font-size="18" fill="#2f3f2f">
+      <text x="118" y="330">Hamlet</text><text x="262" y="330">Village</text><text x="406" y="330">Town</text>
+      <text x="550" y="330">Borough</text><text x="694" y="330">City</text><text x="838" y="330">Metropolis</text>
+    </g>
+    <g font-size="12" fill="#c9a24a" font-weight="700" letter-spacing="1">
+      <text x="118" y="350">YEAR 0</text><text x="262" y="350">~10</text><text x="406" y="350">~30</text>
+      <text x="550" y="350">~60</text><text x="694" y="350">~95</text><text x="838" y="350">~130</text>
+    </g>
+    <g font-size="12.5" fill="#7f8a73">
+      <text x="118" y="374">thatch, a moot, fords</text><text x="262" y="374">first councils</text><text x="406" y="374">brick, paving, bridges</text>
+      <text x="550" y="374">terraces, unions, debates</text><text x="694" y="374">stone, iron, budgets</text><text x="838" y="374">towers, rooftop gardens</text>
+    </g>
+  </g>
+  <text x="480" y="408" text-anchor="middle" font-size="13" fill="#7f8a73" font-style="italic">The old quarter keeps its thatch. Later eras add materials; they never erase the earlier ones.</text>
+</svg>

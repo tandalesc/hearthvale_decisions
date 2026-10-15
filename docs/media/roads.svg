@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 330" width="960" height="330" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <pattern id="grass" width="12" height="12" patternUnits="userSpaceOnUse">
+      <rect width="12" height="12" fill="#8fb562"/><path d="M3,9 l1,-4 M8,11 l1,-5" stroke="#7da452" stroke-width="1.2"/>
+    </pattern>
+    <pattern id="cobble" width="14" height="10" patternUnits="userSpaceOnUse">
+      <rect width="14" height="10" fill="#8e8f88"/><rect x="1" y="1" width="12" height="8" rx="2" fill="#a3a49c"/>
+    </pattern>
+    <pattern id="setts" width="10" height="10" patternUnits="userSpaceOnUse">
+      <rect width="10" height="10" fill="#6e7071"/><rect x="0.8" y="0.8" width="8.4" height="8.4" rx="1" fill="#7f8182"/>
+    </pattern>
+  </defs>
+  <rect width="960" height="330" rx="18" fill="#fafbf2"/>
+  <text x="48" y="58" font-family="Georgia, 'Times New Roman', serif" font-size="28" fill="#2f3f2f">From footpath to avenue</text>
+  <text x="48" y="86" font-size="15" fill="#7f8a73">Nobody draws the roads. Feet wear them in; the council only paves what people already use.</text>
+
+  <!-- six tiles -->
+  <g transform="translate(48,112)">
+    <!-- grass -->
+    <rect x="0" y="0" width="134" height="110" rx="10" fill="url(#grass)"/>
+    <!-- trail -->
+    <rect x="146" y="0" width="134" height="110" rx="10" fill="url(#grass)"/>
+    <path d="M146,62 C190,52 230,70 280,58" stroke="#c9b580" stroke-width="9" fill="none" stroke-linecap="butt" opacity="0.75"/>
+    <!-- track -->
+    <rect x="292" y="0" width="134" height="110" rx="10" fill="url(#grass)"/>
+    <path d="M292,58 C340,50 380,64 426,56" stroke="#a8875a" stroke-width="22" fill="none" stroke-linecap="butt"/>
+    <path d="M292,52 C340,44 380,58 426,50 M292,64 C340,56 380,70 426,62" stroke="#8f6f45" stroke-width="2" fill="none" opacity="0.6"/>
+    <!-- road -->
+    <rect x="438" y="0" width="134" height="110" rx="10" fill="url(#grass)"/>
+    <rect x="438" y="38" width="134" height="36" fill="#b8a27e"/>
+    <g fill="#9c8866"><circle cx="455" cy="48" r="1.6"/><circle cx="480" cy="60" r="1.6"/><circle cx="505" cy="50" r="1.6"/><circle cx="530" cy="64" r="1.6"/><circle cx="555" cy="47" r="1.6"/></g>
+    <!-- paved -->
+    <rect x="584" y="0" width="134" height="110" rx="10" fill="url(#grass)"/>
+    <rect x="584" y="34" width="134" height="44" fill="url(#cobble)"/>
+    <!-- avenue -->
+    <rect x="730" y="0" width="134" height="110" rx="10" fill="url(#grass)"/>
+    <rect x="730" y="24" width="134" height="64" fill="url(#setts)"/>
+    <rect x="730" y="24" width="134" height="5" fill="#d8d6cc"/><rect x="730" y="83" width="134" height="5" fill="#d8d6cc"/>
+    <g fill="#4e7e52"><circle cx="752" cy="15" r="8"/><circle cx="797" cy="15" r="8"/><circle cx="842" cy="15" r="8"/><circle cx="752" cy="98" r="8"/><circle cx="797" cy="98" r="8"/><circle cx="842" cy="98" r="8"/></g>
+  </g>
+
+  <g font-size="15" fill="#2f3f2f" font-weight="600" text-anchor="middle">
+    <text x="115" y="248">Grass</text><text x="261" y="248">Trail</text><text x="407" y="248">Track</text>
+    <text x="553" y="248">Road</text><text x="699" y="248">Paved</text><text x="845" y="248">Avenue</text>
+  </g>
+  <g font-size="13" fill="#7f8a73" text-anchor="middle">
+    <text x="115" y="268">walk speed ×1.0</text><text x="261" y="268">×1.1</text><text x="407" y="268">×1.25</text>
+    <text x="553" y="268">×1.5</text><text x="699" y="268">×1.75</text><text x="845" y="268">×1.9</text>
+  </g>
+  <!-- brackets -->
+  <path d="M190,288 v10 h364 v-10" fill="none" stroke="#526d42" stroke-width="2"/>
+  <text x="372" y="316" text-anchor="middle" font-size="13.5" fill="#526d42">worn in by feet, faded when unused</text>
+  <path d="M626,288 v10 h280 v-10" fill="none" stroke="#c9a24a" stroke-width="2"/>
+  <text x="766" y="316" text-anchor="middle" font-size="13.5" fill="#a07d2c">built only when you approve the work</text>
+</svg>

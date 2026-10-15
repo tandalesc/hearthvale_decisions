@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" width="960" height="360" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7f8a73"/></marker>
+  </defs>
+  <rect width="960" height="360" rx="18" fill="#fafbf2"/>
+  <text x="48" y="58" font-family="Georgia, 'Times New Roman', serif" font-size="28" fill="#2f3f2f">Asking a town of thousands</text>
+  <text x="48" y="86" font-size="15" fill="#7f8a73">Every villager can't be asked everything, every moment. So the town is asked in overlapping groups, and blended back together.</text>
+
+  <!-- step 1 -->
+  <rect x="48" y="118" width="270" height="200" rx="14" fill="#ffffff" stroke="#dde3cf"/>
+  <text x="72" y="148" font-size="12" letter-spacing="2" fill="#c9a24a" font-weight="700">1 · SLICE</text>
+  <text x="72" y="176" font-size="14.5" fill="#2f3f2f">Ask each group once,</text>
+  <text x="72" y="196" font-size="14.5" fill="#2f3f2f">with the town's state shared.</text>
+  <g font-size="12.5" fill="#2f3f2f">
+    <rect x="72" y="214" width="96" height="26" rx="13" fill="#e7efe0"/><text x="120" y="232" text-anchor="middle">by the river</text>
+    <rect x="176" y="214" width="70" height="26" rx="13" fill="#f6ecd2"/><text x="211" y="232" text-anchor="middle">farmers</text>
+    <rect x="72" y="248" width="60" height="26" rx="13" fill="#f3e0da"/><text x="102" y="266" text-anchor="middle">poor</text>
+    <rect x="140" y="248" width="96" height="26" rx="13" fill="#dfeef0"/><text x="188" y="266" text-anchor="middle">young families</text>
+  </g>
+  <text x="72" y="300" font-size="12" fill="#7f8a73">tens of questions, not thousands</text>
+
+  <path d="M322,218 L366,218" stroke="#7f8a73" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- step 2 -->
+  <rect x="370" y="118" width="250" height="200" rx="14" fill="#ffffff" stroke="#dde3cf"/>
+  <text x="394" y="148" font-size="12" letter-spacing="2" fill="#c9a24a" font-weight="700">2 · BLEND</text>
+  <text x="394" y="176" font-size="14.5" fill="#2f3f2f">Each person averages</text>
+  <text x="394" y="196" font-size="14.5" fill="#2f3f2f">the groups they belong to.</text>
+  <!-- little bars -->
+  <g transform="translate(394,214)">
+    <g fill="#c9d8bd"><rect x="0" y="40" width="20" height="30"/><rect x="26" y="20" width="20" height="50"/><rect x="52" y="52" width="20" height="18"/><rect x="78" y="58" width="20" height="12"/></g>
+    <text x="114" y="60" font-size="18" fill="#7f8a73">→</text>
+    <g fill="#526d42"><rect x="136" y="34" width="20" height="36"/><rect x="162" y="30" width="20" height="40"/><rect x="188" y="50" width="20" height="20"/></g>
+  </g>
+  <text x="394" y="300" font-size="12" fill="#7f8a73">never more sure than its surest group</text>
+
+  <path d="M624,218 L668,218" stroke="#7f8a73" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- step 3 -->
+  <rect x="672" y="118" width="240" height="200" rx="14" fill="#ffffff" stroke="#dde3cf"/>
+  <text x="696" y="148" font-size="12" letter-spacing="2" fill="#c9a24a" font-weight="700">3 · LISTEN AT THE EDGES</text>
+  <text x="696" y="176" font-size="14.5" fill="#2f3f2f">Where groups disagree,</text>
+  <text x="696" y="196" font-size="14.5" fill="#2f3f2f">ask again, closer up.</text>
+  <circle cx="752" cy="252" r="34" fill="#e7efe0" opacity="0.9"/>
+  <circle cx="794" cy="252" r="34" fill="#f6ecd2" opacity="0.9"/>
+  <circle cx="773" cy="252" r="10" fill="#b2563f"/>
+  <text x="696" y="300" font-size="12" fill="#7f8a73">torn groups become factions</text>
+</svg>
