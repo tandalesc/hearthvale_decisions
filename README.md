@@ -1,5 +1,6 @@
 <p align="center">
-  <img src="docs/media/hero.jpg" alt="Hearthvale: a riverside town of timber and brick houses, windmills and a wooden bridge, seen from above on a green spring day" width="100%">
+  <img src="docs/media/hero.jpg" alt="Hearthvale in year 169: an autumn metropolis of brick and stucco towers with rooftop gardens, mill chimneys and windmills along a winding river" width="100%">
+  <br><sub>Year 169 of one player's valley: a mill town that became a metropolis.</sub>
 </p>
 
 <h1 align="center">Hearthvale</h1>
@@ -46,9 +47,21 @@ Nothing in the game follows a script. Unlocks are built from conditions that com
 
 A year passes in about a minute, so a whole chronicle takes an evening. Each new era widens the town's horizons. Stone and brick arrive, then terraces, then civic halls and iron bridges, and finally towers with gardens on their roofs. The old quarter keeps its thatch, so a 150-year-old city still shows the hamlet it started as.
 
+<table>
+<tr>
+<td width="50%"><img src="docs/media/year-30.jpg" alt="A young town at year 30: timber and brick houses around a wooden bridge and windmills" width="100%"></td>
+<td width="50%"><img src="docs/media/metropolis.jpg" alt="The same kind of valley at year 169: a dense metropolis of towers along both banks of the river, with autumn forests beyond" width="100%"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Year 30.</b> A market town of 783 people, one bridge, the first councils.</sub></td>
+<td align="center"><sub><b>Year 169.</b> 5,762 people across seven neighbourhoods, seven bridges, fourteen councils.</sub></td>
+</tr>
+</table>
+
 ## The council chamber
 
-<p align="center"><img src="docs/media/council.jpg" alt="The game's interface: a town by a river, with the Town Council's docket open on the right showing a School Board request with three options" width="100%"></p>
+<p align="center"><img src="docs/media/council.jpg" alt="The game's interface over a metropolis: the City Council docket shows Orchard Town Ward Council asking for a market charter, with merchants for it and three choices" width="100%">
+<br><sub>Year 169. A neighbourhood that grew into its own town now has its own ward council, and it wants a market day of its own.</sub></p>
 
 The interface starts nearly empty and grows with the town. At first it's one council and a few numbers. As institutions form, each one takes its own place in the side dock, with its own dashboard, docket and budget. Each card says who is asking, why now, and what each choice costs. Small chips show which groups will cheer and which will grumble. You can ask a body to handle its own affairs, give it standing orders, or dissolve it.
 
@@ -67,8 +80,6 @@ Tap anyone in the town and you can read a short note about them. A language mode
 
 > *"You approved the apprenticeship step-up and guild price rise, which helped the makers. The free trade rule you set four years ago still hurts them."*
 
-<p align="center"><img src="docs/media/city.jpg" alt="A grown city stretched along both banks of the river, with hills and forest around it" width="100%"></p>
-
 ## Anywhere
 
 <table>
@@ -82,7 +93,7 @@ On a phone, the council folds into a bottom sheet with every view one tap away. 
 When the decision model or the writer isn't available, the town keeps living on simple local rules and template text. It just loses some of its nuance.
 
 </td>
-<td width="38%"><img src="docs/media/phone.jpg" alt="Hearthvale on a phone: the town by the river, with time controls and a strip of council views at the bottom" width="100%"></td>
+<td width="38%"><img src="docs/media/phone.jpg" alt="Hearthvale on a phone: the year-169 metropolis by the river, with time controls and a strip of council views at the bottom" width="100%"></td>
 </tr>
 </table>
 
