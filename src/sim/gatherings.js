@@ -230,7 +230,7 @@ function focusOf(state, targetType, targetId) {
   // A monument is looked at; any other building, its door.
   let fx = x, fz = z;
   if (walls && b.type !== 'monument') {
-    const door = accessPoint(b);
+    const door = accessPoint(b, state);
     const l = Math.hypot(door.x - b.x, door.z - b.z) || 1;
     const reach = Math.min(Math.abs((door.x - b.x) / l) > 0.5 ? b.w / 2 : b.d / 2, l);
     fx = b.x + ((door.x - b.x) / l) * reach;
@@ -256,7 +256,7 @@ function openBearing(state, blocked, f) {
   const N = 16, open = new Float64Array(N);
   let frontA = null;
   if (f.b) {
-    const door = accessPoint(f.b);
+    const door = accessPoint(f.b, state);
     frontA = Math.atan2(door.z - f.b.z, door.x - f.b.x);
   }
   for (let i = 0; i < N; i++) {
@@ -292,7 +292,7 @@ function writeSpots(occ, list) {
 
 function buildFan(P) {
   return (state, occ, f) => {
-    const {blocked} = footprints(state);
+    const {walls: blocked} = footprints(state);
     const openA = openBearing(state, blocked, f);
     const inner = Math.max(P.inner, (f.radius ?? 0) * P.innerR), outer = inner + P.edge;
     const gap = f.b ? P.gap : P.gapPoint;
@@ -326,7 +326,7 @@ const GROUP_RHO = [0, 0, 0.5, 0.56, 0.62];       // slot radius by group size
 const ATTRACTIONS = new Set(['market', 'shop', 'inn', 'theatre', 'monument', 'bathhouse', 'chapel', 'exchange']);
 
 function buildCluster(state, occ, f) {
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   const inner = f.ev ? Math.min(16, Math.max(7, f.radius * 1.3)) : 6;
   const outer = inner + 3;
   // Things people drift between: the focus and the doors of shops and stalls nearby.
@@ -335,7 +335,7 @@ function buildCluster(state, occ, f) {
   for (const c of state.buildings) {
     if (c === f.b || !ATTRACTIONS.has(c.type) || (c.built ?? 1) < 1) continue;
     if (Math.abs(c.x - f.x) > reach || Math.abs(c.z - f.z) > reach) continue;
-    const door = accessPoint(c);
+    const door = accessPoint(c, state);
     attr.push(door.x, door.z);
   }
   const ext = (f.b ? Math.max(f.b.w ?? 4, f.b.d ?? 4) / 2 : 0) + outer;
@@ -410,11 +410,11 @@ export const pathDistance = (b, x, z) => {
 
 function buildLawn(state, occ, f) {
   const b = f.park ?? f.b;
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   occ.spots = new Float64Array(0);
   if (!b) return;
   const hw = (b.w ?? 4) / 2 - 0.6, hd = (b.d ?? 4) / 2 - 0.6;
-  const gate = accessPoint(b);
+  const gate = accessPoint(b, state);
   const trees = parkTrees(b), benches = benchesOf(b);
   const found = [];
   const nx = Math.ceil(hw / LAWN_GRID), nz = Math.ceil(hd / LAWN_GRID);
@@ -469,7 +469,7 @@ function buildLawn(state, occ, f) {
 //   (ux, uz), and stand offset back from the line; step: spacing along the line; face:
 //   distance to the faced point; from: rank by distance from this point (else in order).
 export function lineSpots(state, pts, {offset = 0, side = 1, step = 0.9, face = 6, from = null} = {}) {
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   const out = [];
   for (let k = 0; k + 3 < pts.length; k += 2) {
     const x0 = pts[k], z0 = pts[k + 1], x1 = pts[k + 2], z1 = pts[k + 3];
@@ -494,7 +494,7 @@ function buildBank({offset, step}) {
     // first, each spot facing the water. Not right beside a bridge: the walk away from
     // there would step onto the deck from its side (decks are joined at their ends:
     // people.js alongDecks).
-    const {blocked} = footprints(state);
+    const {walls: blocked} = footprints(state);
     const list = [];
     for (const q of traceShore(f.x, f.z, offset, step, BANK_REACH)) {
       // Dry, open, and with the water right there in front (not round a point's corner).
@@ -587,7 +587,7 @@ export function deckSpot(state, x, z) {
 // Spots in a small sunflower disc round a point (out to `reach`), on standable ground
 // outside `avoid`'s walls, each facing face(x, z) -> [fx, fz]; nearest the point first.
 function discSpots(state, occ, cx, cz, reach, face, avoid = null) {
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   const list = [];
   for (let k = 0; ; k++) {
     const r = 0.45 * Math.sqrt(k);
@@ -621,7 +621,7 @@ function buildSteps(state, occ, f) {
   const b = f.b;
   occ.spots = new Float64Array(0);
   if (!b) return;
-  const door = accessPoint(b);
+  const door = accessPoint(b, state);
   const l = Math.hypot(door.x - b.x, door.z - b.z) || 1;
   const nx = (door.x - b.x) / l, nz = (door.z - b.z) / l;
   const tx = -nz, tz = nx;
@@ -633,7 +633,7 @@ function buildSteps(state, occ, f) {
 function buildYard(state, occ, f) {
   const b = f.b;
   if (!b) { occ.spots = new Float64Array(0); return; }
-  const door = accessPoint(b);
+  const door = accessPoint(b, state);
   discSpots(state, occ, door.x, door.z, 4.5, () => [door.x, door.z], b);
 }
 
@@ -674,18 +674,22 @@ export function kinAdd(p) {
 }
 
 // The claimed spot of a household member (first) or workmate in the same layout at the
-// same place: {x, z, household}, or null.
+// same place: {x, z, household}, or null. One who stays put first: a stroller's spot is
+// only where the stroll is now.
 function kinAt(p, task, layout) {
   for (let pass = 0; pass < 2; pass++) {
     const key = pass ? p.workId : p.householdId;
     if (key == null) continue;
     const list = (pass ? kin.work : kin.household).get(key);
     if (!list) continue;
+    let moving = null;
     for (const q of list) {
       const t = q.task;
       if (q === p || !t || !t.spot || t.targetId !== task.targetId || t.targetType !== task.targetType || layoutOf(t.activity) !== layout) continue;
+      if (ACTIVITIES[t.activity]?.wander) { moving ??= t; continue; }
       return {x: t.spot[0], z: t.spot[1], household: !pass};
     }
+    if (moving) return {x: moving.spot[0], z: moving.spot[1], household: !pass};
   }
   return null;
 }
@@ -855,6 +859,7 @@ function clustered(occ, i, p, task) {
 // of the activities sharing the layout, by weight and preference.
 const APPEAL_LOOK = 6;
 const KIN_JOIN = 0.65;
+const KIN_NEAR = 0.8;            // per unit from the family, against appeal and order: something of their own, nearby
 
 function pickAppeal(state, p, task, occ, a) {
   const s = occ.spots, n = s.length / SPOT_STRIDE, h = hh(p);
@@ -871,7 +876,7 @@ function pickAppeal(state, p, task, occ, a) {
     const o = i * SPOT_STRIDE;
     if (!spotClear(s[o], s[o + 1], p.id, space, h, KIN_SPACE)) continue;
     let score = i * 0.15 - s[o + 6] + hashUnit((p.id * 173 + i * 29 + (p.rev | 0)) >>> 0) * 1.5 + 0.1 * densityAt(state, s[o], s[o + 1]);
-    if (k) score += 0.8 * Math.hypot(s[o] - k.x, s[o + 1] - k.z);
+    if (k) score += KIN_NEAR * Math.hypot(s[o] - k.x, s[o + 1] - k.z);
     seen++;
     if (score < pickS) { pickS = score; pick = i; }
   }
@@ -885,7 +890,7 @@ function pickAppeal(state, p, task, occ, a) {
 // park and off its paths), facing them.
 function pickBesideKin(state, p, task, occ, a, k = kinAt(p, task, occ.layout)) {
   if (!k) return null;
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   const b = occ.park, h = hh(p);
   const space = Math.min(personalSpace(a, p.id), a.space[0]);
   const a0 = hashUnit(p.id * 59 + 3) * Math.PI * 2;
@@ -931,7 +936,7 @@ function regroup(state, p, task, occ, a) {
 // bounds (b: a building's rectangle, less 0.4), cut short where a leg is not clear, and
 // back to (sx, sz) from the last point that can get there. Reusable for any loop.
 export function loopRoute(state, x0, z0, pts, sx, sz, b = null) {
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   const out = [];
   let lx = x0, lz = z0;
   for (let k = 0; k + 1 < pts.length; k += 2) {

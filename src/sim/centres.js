@@ -6,7 +6,7 @@
 // cheap land.
 import { emitChronicle, setTag } from './state.js';
 import { riverX, bankSide, slopeAt, bankDistance, FORDS, WATER_HALF, REGION } from '../terrain.js';
-import { CELLS, structuralGrid, cellOf, cellCenter } from './roads.js';
+import { CELLS, structuralGrid, cellOf, cellCenter, bumpWorld } from './roads.js';
 import { coarseTravelField, blockCosts } from '../navigation.js';
 import { nameDistrict } from './districts.js';
 
@@ -87,6 +87,7 @@ function settleHalls(state) {
     old.flags = { ...(old.flags ?? {}), formerHall: 1 };
     old.rev = (old.rev ?? 0) + 1;
     state.buildingsRev = (state.buildingsRev ?? 0) + 1;
+    bumpWorld(state);   // drawn as a library now (walkers' walls, roads.js)
     emitChronicle(state, {
       kind: 'line',
       text: `The new town hall in ${seat.name} is open. The old hall${from ? ` in ${from.name}` : ''} is a library now.`,

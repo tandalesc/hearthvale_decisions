@@ -713,7 +713,9 @@ test('sixty years on: banks kept, doors open, no building on a path or a cliff',
       assert.ok(riverClear(s, b, b.type), `${b.type} ${b.id} keeps the setback`);
     }
     if (['farm', 'park', 'monument'].includes(b.type)) continue;
-    if (!reaches(frontCell(b))) sealed.push(`${b.type}#${b.id}`);
+    // The way in: the doorstep in front of the door, beyond the building's own steps or porch.
+    const step = doorPoint(b, s);
+    if (!reaches(cellOf(step.x, step.z))) sealed.push(`${b.type}#${b.id}`);
     const { cx0, cz0, cx1, cz1 } = buildingCellsOf(b);
     const door = doorCell(b);
     for (let z = cz0; z <= cz1; z++)
@@ -843,12 +845,17 @@ test('walkers go round the crops on the headlands, and never wear a trail throug
   assert.ok(route.cells.every(i => fp.field[i] !== 1), 'through-traffic detours');
   const gate = findRoute(navGrid(s), cellOf(-120, 60), doorCell(farm));
   assert.equal(gate.cells.at(-1), doorCell(farm), 'the farmhand reaches the gate');
-  // Someone who does cut across leaves no trail in the crops.
-  const p = { x: -120, z: 60, task: { route: [-120, 60, -80, 60], seg: 0 } };
-  for (let k = 0; k < 40; k++) { p.x = -120; p.z = 60; p.task.seg = 0; while (stepAlongRoute(s, p, 2)); }
-  assert.equal(s.roads.wear[inside], 0);
-  assert.equal(s.roads.tier[inside], 0);
-  assert.ok(s.roads.wear[headland] > 0, 'the headland wears like any ground');
+  // Someone who does cut across leaves no trail in the crops. (Across the rows clear of
+  // the farmhouse and barn, which stand on the front half: nobody wears ground under a
+  // building.)
+  const rows = cellOf(-100, 57), side = cellOf(-105, 57);
+  assert.equal(fp.field[rows], 1);
+  assert.equal(fp.walls[side], 0, 'clear of the farmhouse');
+  const p = { x: -120, z: 57, task: { route: [-120, 57, -80, 57], seg: 0 } };
+  for (let k = 0; k < 40; k++) { p.x = -120; p.z = 57; p.task.seg = 0; while (stepAlongRoute(s, p, 2)); }
+  assert.equal(s.roads.wear[rows], 0);
+  assert.equal(s.roads.tier[rows], 0);
+  assert.ok(s.roads.wear[side] > 0, 'the headland wears like any ground');
 });
 
 test('farms keep to the edge of town, and give way when the town grows round them', () => {

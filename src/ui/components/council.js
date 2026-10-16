@@ -2,8 +2,8 @@
 // left side, the Town Council (every request in town) and each body with
 // its count; in the middle, the chosen page's cards (one open card, the rest
 // folded beneath it; one card at a time with a pager on phones), with area
-// filters above them; beside them, the rules in force in the open card's
-// area and the body's own page: its dashboard, purse and rules.
+// filters above them; beside them, the body's own page: its dashboard and
+// purse. Rules are not shown here: the Rule Book has them.
 // (How the factions feel lives in the People view.)
 // In budget season (months 9-11) a "Budget season" page joins the list after
 // the Town Council: the bodies' budget cards, and the season beside them.
@@ -17,11 +17,9 @@
 // the bodies as a strip of chips.
 import {esc, h, setText} from '../dom.js';
 import {icon} from '../icons.js';
-import {num} from '../format.js';
 import {animate} from '../motion.js';
 import {explainer, EXPLAINERS} from './explainer.js';
 import {createDocket} from './docket.js';
-import {pips} from './body-view.js';
 import {seasonSummary, seasonStrip} from './budget.js';
 import {createAdvisersView} from './advisers.js';
 
@@ -48,12 +46,7 @@ export function createCouncil(ctx) {
         <div class="section-head dk-cards-head"><h3></h3><span class="count"></span></div>
         <div class="dk-strip"></div>
       </div>
-      <aside class="dk-side" aria-label="Rules and the body's page">
-        <section class="dk-section dk-rules">
-          <div class="section-head"><h3></h3><span class="count"></span></div>
-          <div class="dk-rule-list"></div>
-          <button type="button" class="link-btn dk-to-book" hidden>${icon('rules')}Open the Rule Book</button>
-        </section>
+      <aside class="dk-side" aria-label="The body's page">
         <div class="dk-page"></div>
         <div class="dk-season"></div>
         <section class="dk-section dk-adv-side" hidden>
@@ -61,12 +54,12 @@ export function createCouncil(ctx) {
           <p>An adviser answers the requests of the bodies in its area by what it believes. Each answer waits a season (a month for a blunt one): let it stand, or change it. Changing it counts against them; overruled often, they may resign.</p>
           <p>Advise only: they say what they would do. Routine: plans, budgets and reports. All: rules, demands and debates in their area too. Events and new bodies always come to you.</p>
         </section>
-        <p class="dk-side-empty" hidden>Rules and the bodies' dashboards gather here as the town grows.</p>
+        <p class="dk-side-empty" hidden>The bodies' dashboards gather here as the town grows.</p>
       </aside>
     </div>`;
   const $ = (s) => el.querySelector(s);
-  // The cards' "The rules" link shows the rules of the card's area beside it.
-  const docket = createDocket({...ctx, openRuleBook: (cat) => showRules(cat)}, {empty: ['Nothing waits here.', 'New requests come each season.']});
+  // The cards' "The rules" link opens the Rule Book drawer at the card's area.
+  const docket = createDocket(ctx, {empty: ['Nothing waits here.', 'New requests come each season.']});
   $('.dk-cards').append(docket.el);
   const note = explainer(ctx, 'council', EXPLAINERS.council);
   if (note) $('.dk-note').append(note);
@@ -79,9 +72,8 @@ export function createCouncil(ctx) {
   $('.dk-advisers').append(bench.el);
 
   // page: the body shown (TOWN is every request); area: a category filter.
-  // rulesFor: an area asked for by a card's link; bookCat: the area shown.
-  let open = false, page = TOWN, area = 'all', rulesFor = null, bookCat = null, data = null;
-  let indexSig = '', areaSig = '', rulesSig = '', headSig = '';
+  let open = false, page = TOWN, area = 'all', data = null;
+  let indexSig = '', areaSig = '', headSig = '';
 
   // ---------- events ----------
   $('.dk-close').addEventListener('click', () => close());
@@ -93,13 +85,11 @@ export function createCouncil(ctx) {
     const b = e.target.closest('[data-area]');
     if (!b || b.dataset.area === area) return;
     area = b.dataset.area;
-    rulesFor = null;
     areaSig = '';
     docket.reset();
     render();
     ctx.sound?.('tick');
   });
-  $('.dk-to-book').addEventListener('click', () => ctx.openRuleBook?.(bookCat));
   el.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !open || ctx.root.dataset.layout === 'phone') return;
     e.preventDefault();
@@ -111,7 +101,6 @@ export function createCouncil(ctx) {
     if (id === page) return;
     page = id;
     area = 'all';
-    rulesFor = null;
     indexSig = areaSig = headSig = '';
     docket.reset();
     $('.dk-page').replaceChildren();
@@ -121,15 +110,6 @@ export function createCouncil(ctx) {
     $('.dk-main').scrollTop = 0;
     if (!quiet) ctx.sound?.('tick');
     ctx.onPage?.(id);
-  }
-
-  function showRules(cat) {
-    // No side column yet (the narrow card): the Rule Book drawer at that area.
-    if (!full) return ctx.openRuleBook?.(cat);
-    rulesFor = cat ?? null;
-    rulesSig = '';
-    renderRules();
-    $('.dk-rules').scrollIntoView?.({block: 'nearest'});
   }
 
   // ---------- rendering ----------
@@ -165,7 +145,6 @@ export function createCouncil(ctx) {
     setText($('.dk-cards-head h3'), page === BUDGETS ? 'Budgets to answer' : page === ADVISERS ? 'Waiting for your review' : area !== 'all' ? `About ${catName(area).toLowerCase()}` : 'Needs your ruling');
     setText($('.dk-cards-head .count'), cards.length ? String(cards.length) : '');
     docket.update(cards, {phone: data.phone});
-    renderRules();
     const view = b ? ctx.bodyView(page) : null;
     if (view && $('.dk-page').firstChild !== view.el) $('.dk-page').replaceChildren(view.el);
     $('.dk-page').hidden = !view;
@@ -180,24 +159,18 @@ export function createCouncil(ctx) {
     fit();
   }
 
-  // Which columns have anything to show: the bodies list once there is a
-  // second body, the side once a section in it is visible. Empty columns are
-  // hidden and the panel sizes to what is left (components.css), so an early
-  // town's Council is a modest card that grows with the town.
-  // The full layout (bodies list and side column) comes with progress, not
-  // with whatever is on screen, and stays once it has come: the Rule Book
-  // open with a rule in force, People open, or a second body. Before that the
-  // Council is a narrow card of requests.
-  let full = false;
+  // Columns only when they have something to show, so the panel sizes to
+  // what is there (components.css, layout.css): the bodies list once a body
+  // besides the Town Council sits; the side column when this page has a
+  // dashboard, a purse, the season or the advisers. A young town's Council
+  // is a modest card of requests.
   function fit() {
     const page = $('.dk-page');
     const pageHas = (!page.hidden && [...page.querySelectorAll('.body-view > section')].some((sec) => !sec.hidden && sec.childElementCount)) || !$('.dk-season').hidden || !$('.dk-adv-side').hidden;
-    const rulesInForce = (data?.cats ?? []).some((c) => c.policies?.length);
-    full ||= (Boolean(data?.unlockedRules) && rulesInForce) || Boolean(data?.unlocks?.people) || (data?.bodies ?? []).some((x) => x.id !== TOWN);
-    el.classList.toggle('has-index', full);
-    el.classList.toggle('has-side', full);
-    // Nothing for the side yet (People open before the Rule Book): a quiet line, not bare paper.
-    $('.dk-side-empty').hidden = !full || !$('.dk-rules').hidden || pageHas;
+    const bodies = (data?.bodies ?? []).some((x) => x.id !== TOWN) || Boolean(data?.season) || Boolean(data?.advisers);
+    el.classList.toggle('has-index', bodies);
+    el.classList.toggle('has-side', pageHas);
+    $('.dk-side-empty').hidden = true;
   }
 
   function renderHead() {
@@ -267,44 +240,6 @@ export function createCouncil(ctx) {
       .map(([id, label, n]) => `<button class="filter" data-area="${esc(id)}" aria-pressed="${id === area}">${esc(label)} <span class="dk-filter-count">${n}</span></button>`).join('');
   }
 
-  // Rules in force in the chosen area, or in the open card's area.
-  function renderRules() {
-    if (page === BUDGETS || page === ADVISERS) {
-      $('.dk-rules').hidden = true;
-      rulesSig = '';
-      return;
-    }
-    const cat = rulesFor ?? (area !== 'all' ? area : shown().find((c) => c.id === docket.active)?.category ?? shown()[0]?.category ?? null);
-    const rules = data.cats?.find((c) => c.id === cat)?.policies ?? [];
-    // With no card open, the side still says something: the rules in force
-    // overall, newest first, so the column never stands empty.
-    const all = cat ? null : (data.cats ?? []).flatMap((c) => c.policies ?? []);
-    const sig = `${cat}|${(cat ? rules : all).map((p) => p.id + p.level).join()}|${data.unlockedRules}`;
-    if (sig === rulesSig) return;
-    rulesSig = sig;
-    const section = $('.dk-rules');
-    section.hidden = !data.unlockedRules;
-    if (section.hidden) return;
-    if (!cat) {
-      const recent = [...all].sort((a, b) => (b.since ?? 0) - (a.since ?? 0)).slice(0, 4);
-      setText(section.querySelector('h3'), 'Rules in force');
-      setText(section.querySelector('.count'), all.length ? String(all.length) : '');
-      section.querySelector('.dk-rule-list').innerHTML = recent.length
-        ? recent.map((p) => `<div class="rule" data-rule="${esc(p.id)}"><div class="rule-top"><span class="rule-title">${esc(p.title)}</span>${pips(p)}</div><p>${esc(p.summary ?? '')}</p></div>`).join('')
-        : '<p class="dk-none">No rule stands yet. Rules come through the requests you approve.</p>';
-      section.querySelector('.dk-to-book').hidden = false;
-      bookCat = null;
-      return;
-    }
-    setText(section.querySelector('h3'), `Rules on ${catName(cat).toLowerCase()}`);
-    setText(section.querySelector('.count'), rules.length ? String(rules.length) : '');
-    section.querySelector('.dk-rule-list').innerHTML = rules.length
-      ? rules.map((p) => `<div class="rule" data-rule="${esc(p.id)}"><div class="rule-top"><span class="rule-title">${esc(p.title)}</span>${pips(p)}</div><p>${esc(p.summary ?? '')}</p>${Number.isFinite(p.upkeep) && p.upkeep > 0 ? `<div class="meta"><span>Upkeep ${num(p.upkeep)} coin a year</span></div>` : ''}</div>`).join('')
-      : '<p class="dk-none">No rule stands here yet.</p>';
-    section.querySelector('.dk-to-book').hidden = false;
-    bookCat = cat;
-  }
-
   // ---------- open and close ----------
   // opts: {page, cardId}; a cardId alone opens the page of the body that asks.
   function show({page: p, cardId} = {}) {
@@ -312,8 +247,7 @@ export function createCouncil(ctx) {
     const want = p ?? (card?.kind === 'budget' && page !== card.from ? BUDGETS : card && page !== TOWN && card.from !== page && !card.sides?.includes(page) ? card.from : null);
     if (want && want !== page) setPage(want, {quiet: true});
     if (card && area !== 'all' && card.category !== area) { area = 'all'; areaSig = ''; docket.reset(); }
-    rulesFor = null;
-    indexSig = rulesSig = headSig = '';
+    indexSig = headSig = '';
     if (!open) {
       open = true;
       el.hidden = false;
@@ -321,10 +255,7 @@ export function createCouncil(ctx) {
       if (ctx.root.dataset.layout !== 'phone') animate(el, [{opacity: 0, transform: 'translateY(8px) scale(.99)'}, {opacity: 1, transform: 'none'}], {duration: 200});
     }
     render();
-    if (cardId) {
-      docket.focus(cardId);
-      renderRules();
-    }
+    if (cardId) docket.focus(cardId);
   }
 
   function close() {

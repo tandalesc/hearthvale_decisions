@@ -840,8 +840,6 @@ export function createApp(host) {
       });
       fresh.delete(`body:${council.page}`);
     }
-    const ruleIndex = {};
-    for (const cat of rules ?? []) for (const p of cat.policies ?? []) ruleIndex[p.id] = p;
     // Closed, the Chronicle starts again from its latest page.
     if (!visible.includes('chronicle')) chronicleLimit = CHRONICLE_PAGE;
     for (const id of visible) {
@@ -863,7 +861,7 @@ export function createApp(host) {
       else {
         const body = data.bodies.find((b) => b.id === id);
         const purse = id === 'moot' && data.unlocks.budget ? safe(() => V.selectBudget?.(state), null) : null;
-        if (body) bodyView(id).update(body, {cards: data.cards, unlocks: data.unlocks, ruleIndex, purse});
+        if (body) bodyView(id).update(body, {cards: data.cards, unlocks: data.unlocks, purse});
       }
     }
     if (councilShown) council.fit();

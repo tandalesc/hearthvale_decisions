@@ -181,6 +181,8 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
   // cells. A chamfer distance to the nearest outside texel, less a little
   // slack so edges keep the capsules' smooth shape, fills those dips.
   const SLACK = 0.35;
+  const HOLE_RING = 5;      // of 8 neighbours on the path: the cell between is drawn as path
+  const HOLE_HALF = 0.75;   // its disc, in cells: reaches the corners it shares
   function fillInterior() {
     const D = SQRT2;
     for (let i = 0; i < SW * SW; i++) dist[i] = sv[i] > 0 ? 1e6 : 0;
@@ -244,6 +246,24 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
           capsule(nx[i], nz[i], nx[j], nz[j], hw, Math.min(ti, tj));
         }
         capsule(nx[i], nz[i], nx[i], nz[i], hi, ti);
+      }
+    }
+    // A busy yard: strips between nodes (and a 2x2 lump's single node) leave
+    // grass between them, a grid of green squares. Any cell, path or grass,
+    // with most of its neighbours on the path is drawn solid, at its own tier
+    // or the lowest around it, so the yard reads as one worn ground. Edges
+    // keep the strips' smooth shape. Drawing only: nodes and routes untouched.
+    for (let z = Math.max(1, az0); z <= Math.min(H - 2, az1); z++) {
+      for (let x = Math.max(1, ax0); x <= Math.min(W - 2, ax1); x++) {
+        const i = z * W + x;
+        let ring = 0, low = tier[i] || 9;
+        for (let d = 0; d < 8; d++) {
+          const tj = tier[i + LINK_DZ[d] * W + LINK_DX[d]];
+          if (!tj) continue;
+          ring++;
+          if (tj < low) low = tj;
+        }
+        if (ring >= HOLE_RING) capsule(x + 0.5, z + 0.5, x + 0.5, z + 0.5, HOLE_HALF * cell, tier[i] || low);
       }
     }
     fillInterior();

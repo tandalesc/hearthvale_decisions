@@ -16,12 +16,13 @@ import {
   footprintBank, setbackAt, isEmbanked, WATERFRONT, lotGrid, hamletLayout,
 } from './sites.js';
 import {
-  bumpWorld, cellCenter, frontCell, footprints, terrainGrid, navGrid, cellIndex, buildingCells, setTier, markDirty, bumpNav, doorCell, setTowpath,
+  bumpWorld, cellCenter, frontCell, footprints, terrainGrid, navGrid, lotNavGrid, pieceCells, doorPoint, cellIndex, buildingCells, setTier, markDirty, bumpNav, doorCell, setTowpath,
   ORIGIN_X, ORIGIN_Z, CELL, GRID_W, CELLS,
 } from './roads.js';
 import { bankDistance } from '../terrain.js';
 import { delta } from './pressures.js';
 import { components } from '../navigation.js';
+import { buildingOutline } from './outline.js';
 
 // ---------------------------------------------------------------- catalogue
 
@@ -175,8 +176,8 @@ export function projectSite(state, p) {
   if (handler?.site) return handler.site(state, p);
   const b = p.buildingId != null ? byId(state, 'buildings', p.buildingId) : null;
   if (!b) return { x: p.x, z: p.z };
-  const front = frontCell(b);
-  return front >= 0 ? cellCenter(front) : { x: p.x, z: p.z };
+  // Builders work from the doorstep (walkers' way in: past the steps and any wing).
+  return frontCell(b) >= 0 ? doorPoint(b, state) : { x: p.x, z: p.z };
 }
 
 // Projects that want more builders: [{projectId, x, z, slots}].
@@ -713,6 +714,7 @@ registerProjectKind('upgrade', {
     setFoundation(state, b);
     addBuildingStory(state, b, 'upgraded', { text: p.data.merged ? `${b.variant} (two homes joined)` : b.variant });
     touchBuilding(state, b);
+    bumpWorld(state);   // a new tier, era and storeys draw a new outline (walkers' walls)
   },
 });
 
@@ -733,17 +735,49 @@ registerProjectKind('extend', {
   complete(state, p) {
     const b = byId(state, 'buildings', p.buildingId);
     if (!b) return;
+    const wing = p.data.storey ? null : wingFor(state, b);
     if (p.data.storey) b.storeys = (b.storeys ?? 1) + 1;
-    else {
-      b.extensions ??= [];
-      const side = (b.rot + 1 + b.extensions.length * 2) % 4;
-      b.extensions.push({ side, w: Math.min(b.w, 3), d: Math.min(b.d, 2.4) });
-    }
+    else if (wing) (b.extensions ??= []).push(wing);
     addBuildingStory(state, b, 'extended', { text: p.data.storey ? 'another storey' : 'a side wing' });
     delete b.flags.scaffold;
     touchBuilding(state, b);
+    bumpWorld(state);   // a side wing (or storey) changes the drawn outline
   },
 });
+
+// The next side wing (at most two; null after that): on the building's right or its
+// left (its own frame, render/kit/compose.js extensions: 0 is the front, so never
+// across the door), the first side where what it adds to the drawn outline
+// (sim/outline.js) keeps off other buildings' footprints, every doorstep and street
+// cell in front of a door, and the water, at the fullest depth that fits; where
+// nothing fits, the narrowest wing all the same (walkers keep off it, roads.js
+// fp.walls, and every doorstep stays open).
+export function wingFor(state, b) {
+  const have = b.extensions ?? [];
+  if (have.length >= 2) return null;
+  const taken = new Set(have.map((e) => e.side ?? 1));
+  const fp = footprints(state), fronts = frontCells(state);
+  const ways = new Set(fp.wayIn.values());
+  const { water } = terrainGrid();
+  const before = buildingOutline(b);
+  const same = (q, r) => q.x === r.x && q.z === r.z && q.hx === r.hx && q.hz === r.hz;
+  // Full depth out from the wall first, then shallower (compose: w is how far a side
+  // wing stands out); the size is only drawn, so a cramped wing is a narrow one.
+  const d = Math.min(b.d, 2.4);
+  const reach = [Math.min(b.w, 3), Math.min(b.w, 2.2), Math.min(b.w, 1.6)];
+  let first = null;
+  for (const w of reach)
+    for (const side of [1, 3]) {
+      if (taken.has(side)) continue;
+      const wing = { side, w, d };
+      first = wing;
+      const after = buildingOutline({ ...b, extensions: [...have, wing] });
+      const clear = after.every((r) => before.some((q) => same(q, r)) || pieceCells(r).every((c) =>
+        !(fp.blocked[c] && fp.blocked[c] !== b.id + 1) && !fronts.has(c) && !ways.has(c) && !water[c]));
+      if (clear) return wing;
+    }
+  return first ?? { side: 1, w: reach[2], d };
+}
 
 // An enterprise chose to expand: up a tier if it can, else a storey or an
 // annex. Returns {ok, project?, reason?}.
@@ -983,6 +1017,7 @@ export function settleFoundationsSpan(state, from, count) {
     const b = list[k];
     const wasRaised = b.flags?.raised;
     if (!setFoundation(state, b)) continue;
+    bumpWorld(state);   // a new plinth, skirt or piles: walkers' walls (roads.js) follow
     if (b.foundation !== 'plinth' && !WATERFRONT.has(b.type) && !wasRaised) {
       b.flags.raised = 1;
       addBuildingStory(state, b, 'raised', { text: 'set on posts above the river' });
@@ -1007,7 +1042,7 @@ export function reportRaised(state, raised) {
 // or into a closed-in pocket turn to face a side that reaches the town's main
 // walkable region (same footprint). Returns how many turned.
 export function freeSealedDoors(state) {
-  const grid = navGrid(state);
+  const grid = lotNavGrid(state);
   const comp = components(grid);
   const sizes = new Map();
   for (const c of comp) if (c) sizes.set(c, (sizes.get(c) ?? 0) + 1);
@@ -1196,7 +1231,7 @@ function sellAll(state, b, owner, value) {
 // Monthly: occupied / open / lit / smoke from households and enterprises.
 export function monthlyBuildings(state) {
   // Anyone added without one (older saves, other modules) gets a foundation.
-  for (const b of state.buildings ?? []) if (b.foundation == null && setFoundation(state, b)) touchBuilding(state, b);
+  for (const b of state.buildings ?? []) if (b.foundation == null && setFoundation(state, b)) { touchBuilding(state, b); bumpWorld(state); }
   const homes = new Set((state.households ?? []).map(h => h.homeId));
   const firms = new Map();
   for (const e of state.enterprises ?? []) if (e.buildingId != null) firms.set(e.buildingId, e);

@@ -1295,11 +1295,7 @@ kbd { font: 500 11px var(--font-mono); padding: 2px 6px; border-radius: 5px; bor
 
 .dk-side { padding: 4px 18px 24px; border-left: 1px solid var(--line); background: var(--paper-2); }
 .dk-section { margin-top: 18px; }
-.dk-rule-list .rule { padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-card); }
-.dk-rule-list .rule:last-child { border-bottom: 1px solid var(--line); }
-.dk-none { margin: 0 0 8px; font-size: var(--fs-13); color: var(--muted); }
 .dk-side-empty { margin: 22px 4px; font-size: var(--fs-13); color: var(--muted); }
-.dk-to-book { margin-top: 2px; }
 
 /* Middling widths: the index becomes a chip row over two columns. */
 @container dk (max-width: 1099px) {

@@ -434,6 +434,9 @@ export function multiSourceField(grid, sources) {
 export function blockCosts(grid, blocked = 20) {
   if (grid.blockCost?.blocked === blocked) return grid.blockCost.cost;
   const { W, H, cost } = grid;
+  // A cell at the grid's passCap (a door inside walls) is open ground here: its price
+  // only keeps the fine search from cutting through a building by it.
+  const cap = grid.passCap ?? Infinity, open = grid.passOpen ?? 1;
   const CW = Math.ceil(W / BLOCK), CH = Math.ceil(H / BLOCK);
   const bcost = new Float32Array(CW * CH);
   for (let bz = 0; bz < CH; bz++) {
@@ -444,7 +447,7 @@ export function blockCosts(grid, blocked = 20) {
       for (let z = bz * BLOCK; z < z1; z++)
         for (let x = bx * BLOCK; x < x1; x++) {
           const c = cost[z * W + x];
-          sum += c < Infinity ? c : blocked;
+          sum += c < cap ? c : c < Infinity ? open : blocked;
           n++;
         }
       bcost[bz * CW + bx] = sum / n;
@@ -865,7 +868,8 @@ function cellOk(grid, cells, k0, k1, limit, x, z) {
   if (i === cells[0] || i === cells[cells.length - 1]) return !deepAt(grid, i);
   const c = cost[i];
   if (!(c < Infinity)) return false;
-  if (!(water && water[i]) && c <= limit) return true;
+  // (A cell at the grid's passCap, a door inside walls, only where the path goes.)
+  if (!(water && water[i]) && c <= limit && !(c >= grid.passCap)) return true;
   for (let k = k0; k <= k1; k++) if (cells[k] === i) return true;
   return false;
 }

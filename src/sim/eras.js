@@ -5,6 +5,7 @@ import {holds, makeCtx, evalCond, explainCond} from './conditions.js';
 import {emitChronicle, setTag, touchBuilding} from './state.js';
 import {rng} from './rng.js';
 import {addBuildingStory} from './buildings.js';
+import {bumpWorld} from './roads.js';
 
 export const STYLE_PACKS = ['hearth', 'stone', 'guild', 'terrace', 'civic', 'glass'];
 
@@ -128,6 +129,7 @@ export function applyRestyles(state) {
     b.scaffoldUntil = year + 1;
     addBuildingStory(state, b, 'restyled');
     touchBuilding(state, b);
+    bumpWorld(state);   // the new era's walls, plinth and steps (walkers' walls, roads.js)
   }
 }
 

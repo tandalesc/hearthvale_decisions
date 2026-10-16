@@ -162,7 +162,7 @@ function placeFor(state, o, p, idx, world, avoid = null) {
   for (const c of candScratch) {
     const occ = occasionFor(state, layout, c.type, c.id);
     if (!occ || !occasionHasRoom(occ)) continue;
-    const at = c.building ? accessPoint(c.building) : {x: c.x, z: c.z};
+    const at = c.building ? accessPoint(c.building, state) : {x: c.x, z: c.z};
     return {target: {type: c.type, id: c.id, x: at.x, z: at.z, building: c.building ?? undefined}, d: c.d};
   }
   return null;

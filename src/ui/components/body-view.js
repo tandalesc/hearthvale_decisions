@@ -1,5 +1,6 @@
 // One body's page in the Council (design-visual §8.2), beside its cards: a
-// dashboard of up to six sparklines, its rules, and the way to dissolve it.
+// dashboard of up to six sparklines, its purse, and the way to dissolve it.
+// Its rules are in the Rule Book, not here.
 // The Council's head names the body; this view's own head shows only where
 // the page stands alone.
 import {esc, h, setText} from '../dom.js';
@@ -31,14 +32,13 @@ export function createBodyView(ctx, bodyId) {
   const head = h('header.view-head');
   const notes = h('div.notes');
   const dash = h('section.section.dash');
-  const rules = h('section.section.body-rules');
   const budget = budgetSection();
   // A body on a yearly budget: its grant, spending and plans.
   const own = bodyBudgetSection();
   const future = h('section.section.future');
-  el.append(head, notes, dash, own.el, budget.el, rules, future);
+  el.append(head, notes, dash, own.el, budget.el, future);
 
-  let headSig = '', dashSig = '', rulesSig = '', notesSig = '', futureSig = '';
+  let headSig = '', dashSig = '', notesSig = '', futureSig = '';
 
   function renderFuture(body) {
     const show = bodyId !== 'moot';
@@ -85,30 +85,15 @@ export function createBodyView(ctx, bodyId) {
     dash.innerHTML = `<div class="section-head"><h3>How it is going</h3><span class="aside">last five years</span></div><div class="metric-rows">${rows}</div>${meters}`;
   }
 
-  function renderRules(body, unlocks, ruleIndex) {
-    const show = unlocks.ruleBook && bodyId !== 'moot';
-    rules.hidden = !show;
-    if (!show) return;
-    const items = (body.rules ?? []).map((r) => ({...ruleIndex[r.id], ...r, maxLevel: r.maxLevel ?? ruleIndex[r.id]?.maxLevel})).filter((r) => r.title);
-    const sig = items.map((r) => r.id + r.level).join(',');
-    if (sig === rulesSig) return;
-    rulesSig = sig;
-    rules.innerHTML = `<div class="section-head"><h3>Its rules</h3><span class="count">${items.length}</span><button type="button" class="link-btn book-open">${icon('rules')}Rule Book</button></div>` + (items.length
-      ? items.map((p) => `<div class="rule"><div class="rule-top"><span class="rule-title">${esc(p.title)}</span>${pips(p)}</div><p>${esc(p.summary ?? '')}</p></div>`).join('')
-      : '<div class="empty">No rules of its own yet.</div>');
-    rules.querySelector('.book-open').addEventListener('click', () => ctx.openRuleBook?.());
-  }
-
   return {
     el,
-    update(body, {unlocks, ruleIndex, purse}) {
+    update(body, {unlocks, purse}) {
       renderFuture(body);
       budget.update(purse, bodyId === 'moot' && unlocks.budget);
       own.update(bodyId !== 'moot' ? body.budget ?? null : null);
       renderHead(body);
       renderNotes(body, unlocks);
       renderDash(body, unlocks);
-      renderRules(body, unlocks, ruleIndex);
     },
   };
 }

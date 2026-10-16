@@ -4,6 +4,7 @@
 import { heightAt, waterAt, fordAt, riverX, terrainKey, FORDS, floodDepthAt, terrainVersion, bankSide } from '../terrain.js';
 import { findRoute, cellsToWaypoints } from '../navigation.js';
 import { buildNodes, patchNodes } from '../path-nodes.js';
+import { buildingOutline, inRect, rectBounds } from './outline.js';
 
 export const CELL = 2;
 // The region: 384 x 384 cells of 2 units, -384..384 on both axes (room for
@@ -342,8 +343,9 @@ function fordsNearBridges(state) {
 
 function fordCost(state, i) { return fordsNearBridges(state)[i] ? FORD_NEAR_BRIDGE_COST : FORD_COST; }
 
-// A* cost of entering a cell. Infinity means impassable.
-export function roadCost(state, i) {
+// A* cost of entering a cell. Infinity means impassable. The lot layer's (fp.blocked:
+// the town's aggregate traffic); walker: the walkers' (fp.walls, doors dear).
+export function roadCost(state, i, walker = false) {
   if (i < 0 || i >= CELLS) return Infinity;
   const r = state.roads;
   const { water, slope } = terrainGrid();
@@ -352,7 +354,8 @@ export function roadCost(state, i) {
     return water[i] === 2 ? fordCost(state, i) : Infinity;
   }
   const fp = footprints(state);
-  if (fp.blocked[i] || tooSteep(terrainGrid(), i)) return Infinity;
+  if ((walker ? fp.walls[i] : fp.blocked[i]) || tooSteep(terrainGrid(), i)) return Infinity;
+  if (walker && fp.door[i]) return DOOR_COST;
   return landCost(r.tier[i], r.wear[i], adjacencyOf(r)[i], fp.field[i], slope[i]);
 }
 
@@ -390,10 +393,79 @@ export function footprints(state) {
   let fp = footprintCache.get(state);
   if (fp && fp.wv === wv && fp.len === len) return fp;
   const key = `${wv}:${len}`;
-  fp = { key, wv, len, blocked: new Int32Array(CELLS), field: new Uint8Array(CELLS) };
+  fp = { key, wv, len, blocked: new Int32Array(CELLS), field: new Uint8Array(CELLS), walls: null, door: new Uint8Array(CELLS), nearAt: new Int32Array(CELLS), near: [], wayIn: new Map(), doorsteps: new Map() };
   for (const b of state.buildings ?? []) stampBuilding(fp, b);
+  fp.walls = fp.blocked.slice();
+  fp.wallCells = [];
+  fp.doorCells = [];
+  // Every way in stays open: a wing or lean-to drawn over a neighbour's doorstep
+  // does not seal that door (walkers' finer checks still go round what is drawn).
+  const list = state.buildings ?? [];
+  const outlines = list.map((b) => (b.type === 'bridge' || b.type === 'park' ? null : buildingOutline(b)));
+  const keepOpen = new Set();
+  list.forEach((b, k) => {
+    const c = wayIn(fp, b, outlines[k]);
+    if (c >= 0) { keepOpen.add(c); fp.wayIn.set(b.id, c); }
+  });
+  list.forEach((b, k) => stampWalls(fp, b, keepOpen, outlines[k]));
+  for (const c of keepOpen) unsealWay(fp, c);
   footprintCache.set(state, fp);
   return fp;
+}
+
+// A way in that drawn pieces have closed into a small pocket (an old wing built across
+// a neighbour's door) gets a corridor out: the fewest cells of those pieces (never of
+// a lot) between the pocket and open ground beyond it are opened again, so nobody is
+// shut in; walkers' finer checks still keep them off the rest.
+const POCKET = 48, CORRIDOR = 400;
+const pocketMark = new Int32Array(CELLS), pocketQueue = new Int32Array(POCKET + 8);
+let pocketGen = 0;
+function unsealWay(fp, start) {
+  const { water } = terrainGrid();
+  const walls = fp.walls;
+  // The open ground the way in opens onto, while it is a small pocket.
+  const gen = ++pocketGen;
+  let head = 0, tail = 0;
+  pocketQueue[tail++] = start;
+  pocketMark[start] = gen;
+  while (head < tail) {
+    if (tail > POCKET) return;
+    const c = pocketQueue[head++], x = c % GRID_W;
+    for (let k = 0; k < 4; k++) {
+      const n = k === 0 ? (x > 0 ? c - 1 : -1) : k === 1 ? (x < GRID_W - 1 ? c + 1 : -1) : k === 2 ? c - GRID_W : c + GRID_W;
+      if (n < 0 || n >= CELLS || pocketMark[n] === gen || walls[n] || water[n]) continue;
+      pocketMark[n] = gen;
+      pocketQueue[tail++] = n;
+    }
+  }
+  // Sealed: out through the drawn pieces (never a lot) to the nearest open ground.
+  const step = (c, f) => {
+    const x = c % GRID_W;
+    if (x > 0) f(c - 1);
+    if (x < GRID_W - 1) f(c + 1);
+    if (c >= GRID_W) f(c - GRID_W);
+    if (c < CELLS - GRID_W) f(c + GRID_W);
+  };
+  const from = new Map();
+  const front = Array.from(pocketQueue.subarray(0, tail));
+  for (const c of front) from.set(c, -1);
+  for (let k = 0; k < front.length && front.length < CORRIDOR; k++) {
+    let out = -1;
+    step(front[k], (n) => {
+      if (out >= 0 || from.has(n) || water[n]) return;
+      if (!walls[n]) { out = n; from.set(n, front[k]); return; }
+      if (fp.blocked[n]) return;
+      from.set(n, front[k]);
+      front.push(n);
+    });
+    if (out < 0) continue;
+    for (let c = from.get(out); c >= 0 && pocketMark[c] !== gen; c = from.get(c)) {
+      walls[c] = 0;
+      const i = fp.wallCells.indexOf(c);
+      if (i >= 0) fp.wallCells.splice(i, 1);
+    }
+    return;
+  }
 }
 
 export function buildingCells(b) {
@@ -427,11 +499,48 @@ export function frontCell(b) {
 }
 
 // Where people go to enter: the doorstep just outside the door (never inside
-// the walls). Farms: their gate cell on the headland.
-export function doorPoint(b) {
-  if (b.type === 'farm' || b.type === 'park') return cellCenter(doorCell(b));
-  const front = frontCell(b);
-  return cellCenter(front >= 0 ? front : doorCell(b));
+// the walls). Farms: their gate cell on the headland. Without the state, the street
+// cell in front of the door, as the lots and the town's aggregate traffic know it;
+// with it, where a walker stops: the way in past the building's own steps, porch or
+// wing (footprints' wayIn, doorstepCell).
+export function doorPoint(b, state = null) {
+  if (b.type === 'farm' || b.type === 'park') {
+    if (!state || b.type === 'park') return cellCenter(doorCell(b));
+  } else if (!state) {
+    const front = frontCell(b);
+    return cellCenter(front >= 0 ? front : doorCell(b));
+  }
+  const fp = footprints(state);
+  let at = fp.doorsteps.get(b.id);
+  if (!at) {
+    const step = fp.wayIn.get(b.id) ?? doorstepCell(b);
+    at = clearPoint(state, fp, step >= 0 ? step : doorCell(b));
+    fp.doorsteps.set(b.id, at);
+  }
+  return { x: at.x, z: at.z };
+}
+
+// Where a walker put out of a wall (or a goal moved off one) stands in cell c.
+export function standPoint(state, c) { return clearPoint(state, footprints(state), c); }
+
+// The middle of cell c, or, where a drawn piece reaches over it (a neighbour's wing
+// over a doorstep kept open), the nearest point within 2.5 units, on open ground and
+// a walker's margin clear of every piece.
+function clearPoint(state, fp, c) {
+  const { x, z } = cellCenter(c);
+  if (outlineClear(state, x, z)) return { x, z };
+  let best = null, bd = Infinity;
+  for (let u = -10; u <= 10; u++)
+    for (let v = -10; v <= 10; v++) {
+      const d = u * u + v * v;
+      if (d >= bd) continue;
+      const px = x + u * 0.25, pz = z + v * 0.25;
+      const q = cellIndex(Math.floor((px - ORIGIN_X) / CELL), Math.floor((pz - ORIGIN_Z) / CELL));
+      if (q < 0 || fp.walls[q] || fp.door[q] || terrainGrid().water[q] || !outlineClear(state, px, pz)) continue;
+      best = { x: px, z: pz };
+      bd = d;
+    }
+  return best ?? { x, z };
 }
 
 function stampBuilding(fp, b) {
@@ -449,6 +558,244 @@ function stampBuilding(fp, b) {
       if (j >= 0) fp.blocked[j] = b.id + 1;
     }
   for (const j of [doorCell(b), frontCell(b)]) if (j >= 0 && fp.blocked[j] === b.id + 1) fp.blocked[j] = 0;
+}
+
+// ---------------------------------------------------------------- walls (walkers)
+
+// fp.blocked is the lot layer: each building's w x d (plus a walker's margin), what
+// sites, lots and doors are judged by. Walkers keep off more than that: everything the
+// building draws at walking height (sim/outline.js: plinths and skirts standing proud
+// of the walls, steps, side wings, lean-tos, bays, porticos, piles, a farm's house and
+// barns). fp.walls is fp.blocked plus every cell whose middle (WALL_CORE either way)
+// comes within a walker's margin of such a piece; fp.near lists the pieces by every
+// cell near one, for the finer test of points a walker stops at or is offset to
+// (outlineClear). fp.door marks the door cells, which lie inside the walls: open so
+// the door stays reachable, but never a place to stand or be put.
+const WALL_CORE = 0.5;
+// A door cell is open (a route may end there) but dear: never a way through the walls.
+// The grids carry it as passCap: a straightened leg never crosses a cell this dear
+// (navigation.js cellOk) unless the cell path itself goes there.
+const DOOR_COST = 400;
+// Is the middle of cell (i, j) (its centre, WALL_CORE either way) within m of r?
+function coreHit(r, i, j, m) {
+  const cx = ORIGIN_X + (i + 0.5) * CELL, cz = ORIGIN_Z + (j + 0.5) * CELL;
+  // Axis-aligned pieces (most): the square grown by the piece is exact.
+  if (Math.abs(r.c) < 1e-6 || Math.abs(r.s) < 1e-6) return inRect(r, cx, cz, m + WALL_CORE);
+  for (const u of [-WALL_CORE, 0, WALL_CORE])
+    for (const v of [-WALL_CORE, 0, WALL_CORE]) if (inRect(r, cx + u, cz + v, m)) return true;
+  return Math.abs(r.x - cx) <= WALL_CORE && Math.abs(r.z - cz) <= WALL_CORE;
+}
+
+// The cell every building's way in must keep open: its doorstep (doorstepCell), or,
+// where its own wing or porch covers the street cell and the cell beyond is someone
+// else's lot (an old wing built across the door), the street cell itself.
+function wayIn(fp, b, rects) {
+  if (b.type === 'bridge' || b.type === 'park') return -1;
+  const step = doorstepCell(b, rects);
+  if (b.type === 'farm') return step;
+  const front = frontCell(b);
+  return step !== front && step >= 0 && fp.blocked[step] ? front : step;
+}
+
+function stampWalls(fp, b, keepOpen, rects = buildingOutline(b)) {
+  if (b.type === 'bridge' || b.type === 'park') return;
+  if (!rects.length) return;
+  // Near lists hold every piece within a walker's margin of some point of the cell; the walls
+  // test reaches WALL_CORE further.
+  const m = PERSON_MARGIN, reach = m + WALL_CORE + 0.01;
+  const field = b.type === 'farm';
+  const door = doorCell(b);
+  const before = field || door < 0 ? 0 : fp.walls[door];
+  for (const r of rects) {
+    const [x0, z0, x1, z1] = rectBounds(r, reach);
+    const i0 = Math.floor((x0 - ORIGIN_X) / CELL), i1 = Math.floor((x1 - ORIGIN_X) / CELL);
+    const j0 = Math.floor((z0 - ORIGIN_Z) / CELL), j1 = Math.floor((z1 - ORIGIN_Z) / CELL);
+    for (let j = j0; j <= j1; j++)
+      for (let i = i0; i <= i1; i++) {
+        const c = cellIndex(i, j);
+        if (c < 0) continue;
+        let k = fp.nearAt[c];
+        if (!k) { fp.near.push([]); k = fp.nearAt[c] = fp.near.length; }
+        fp.near[k - 1].push(r);
+        if (!fp.walls[c] && !keepOpen.has(c) && coreHit(r, i, j, m)) { fp.walls[c] = b.id + 1; fp.wallCells.push(c); }
+      }
+  }
+  if (!field && door >= 0) {
+    // The door cell stays as the lot layer has it (open); people stop on the doorstep.
+    if (fp.walls[door] !== before && !before) fp.wallCells.splice(fp.wallCells.indexOf(door), 1);
+    fp.walls[door] = before;
+    if (!fp.blocked[door] && !fp.door[door]) { fp.door[door] = 1; fp.doorCells.push(door); }
+  }
+}
+
+// The cells a drawn piece takes from walkers (its middle within a walker's margin of
+// the piece: the walls test), as a list.
+export function pieceCells(r) {
+  const [x0, z0, x1, z1] = rectBounds(r, PERSON_MARGIN + WALL_CORE);
+  const out = [];
+  for (let j = Math.floor((z0 - ORIGIN_Z) / CELL); j <= Math.floor((z1 - ORIGIN_Z) / CELL); j++)
+    for (let i = Math.floor((x0 - ORIGIN_X) / CELL); i <= Math.floor((x1 - ORIGIN_X) / CELL); i++) {
+      const c = cellIndex(i, j);
+      if (c >= 0 && coreHit(r, i, j, PERSON_MARGIN)) out.push(c);
+    }
+  return out;
+}
+
+// Clear of every drawn piece near (x, z) by a walker's margin? (The cell itself is
+// fp.walls' business; the part of a door cell outside the walls is fine to stand on.)
+export function outlineClear(state, x, z) {
+  const fp = footprints(state);
+  const c = cellIndex(Math.floor((x - ORIGIN_X) / CELL), Math.floor((z - ORIGIN_Z) / CELL));
+  if (c < 0) return false;
+  const k = fp.nearAt[c];
+  if (!k) return true;
+  for (const r of fp.near[k - 1]) if (inRect(r, x, z, PERSON_MARGIN)) return false;
+  return true;
+}
+
+// No water anywhere along the leg (every half unit, and its ends)?
+function legDry(ax, az, bx, bz) {
+  const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.5));
+  for (let k = 0; k <= n; k++) if (waterAt(ax + ((bx - ax) * k) / n, az + ((bz - az) * k) / n)) return false;
+  return true;
+}
+
+// A leg's interior samples (every SKIRT_STEP) clear of the drawn pieces near it?
+const SKIRT_STEP = 0.25;
+function legClearOfOutlines(fp, ax, az, bx, bz) {
+  const n = Math.ceil(Math.hypot(bx - ax, bz - az) / SKIRT_STEP);
+  for (let k = 1; k < n; k++) {
+    const x = ax + ((bx - ax) * k) / n, z = az + ((bz - az) * k) / n;
+    const c = cellIndex(Math.floor((x - ORIGIN_X) / CELL), Math.floor((z - ORIGIN_Z) / CELL));
+    const q = c >= 0 ? fp.nearAt[c] : 0;
+    if (q) for (const r of fp.near[q - 1]) if (inRect(r, x, z, PERSON_MARGIN)) return false;
+  }
+  return true;
+}
+
+// The leg's deepest sample inside a piece (grown by a walker's margin): {r, lx, lz}
+// in the piece's own frame, or null.
+function deepestHit(fp, ax, az, bx, bz) {
+  const n = Math.ceil(Math.hypot(bx - ax, bz - az) / SKIRT_STEP);
+  let best = null, depth = 0;
+  for (let k = 1; k < n; k++) {
+    const x = ax + ((bx - ax) * k) / n, z = az + ((bz - az) * k) / n;
+    const c = cellIndex(Math.floor((x - ORIGIN_X) / CELL), Math.floor((z - ORIGIN_Z) / CELL));
+    const q = c >= 0 ? fp.nearAt[c] : 0;
+    if (!q) continue;
+    for (const r of fp.near[q - 1]) {
+      const dx = x - r.x, dz = z - r.z;
+      const lx = dx * r.c - dz * r.s, lz = dx * r.s + dz * r.c;
+      const d = Math.min(r.hx + PERSON_MARGIN - Math.abs(lx), r.hz + PERSON_MARGIN - Math.abs(lz));
+      if (d > depth) { depth = d; best = {r, lx, lz}; }
+    }
+  }
+  return best;
+}
+
+// Grid routes and their string-pulled legs keep to open cells, but a long leg can still
+// cut the corner of a plinth, step or wing reaching into a cell it passes (a cell is
+// open while its middle is clear). Each such leg goes round instead: by the corner of
+// the piece it cuts (or straight out from its nearest side), a walker's margin and a
+// little beyond, where that point and both new legs are clear (a few tries a leg).
+// Flat [x, z, ...] in; the same array when nothing is cut, else a new one.
+const SKIRT_PAD = 0.1;
+const SKIRT_DEPTH = 3;
+// keep(x, z): points never moved or added (people.js: a bridge deck and its approaches).
+// Legs over water (fords, decks) are left as they are, and no new leg gets wet.
+export function skirtOutlines(state, route0, keep = null) {
+  let route = route0;
+  if (!route || route.length < 4) return route;
+  const fp = footprints(state);
+  if (!fp.near.length) return route;
+  // Interior waypoints within a walker's margin of a piece (string-pulled and path-node
+  // points lie anywhere in their open cells) step out from its nearest side first.
+  for (let k = 2; k + 3 < route.length; k += 2) {
+    const x = route[k], z = route[k + 1];
+    const c = cellIndex(Math.floor((x - ORIGIN_X) / CELL), Math.floor((z - ORIGIN_Z) / CELL));
+    const q = c >= 0 ? fp.nearAt[c] : 0;
+    if (!q || keep?.(x, z)) continue;
+    const px0 = route[k - 2], pz0 = route[k - 1], nx = route[k + 2], nz = route[k + 3];
+    if (!legDry(px0, pz0, x, z) || !legDry(x, z, nx, nz)) continue;
+    for (const r of fp.near[q - 1]) {
+      const dx = x - r.x, dz = z - r.z;
+      const lx = dx * r.c - dz * r.s, lz = dx * r.s + dz * r.c;
+      const px = r.hx + PERSON_MARGIN - Math.abs(lx), pz = r.hz + PERSON_MARGIN - Math.abs(lz);
+      if (px <= 0 || pz <= 0) continue;
+      const ux = px < pz ? (lx < 0 ? -1 : 1) * (r.hx + PERSON_MARGIN + SKIRT_PAD) : lx;
+      const uz = px < pz ? lz : (lz < 0 ? -1 : 1) * (r.hz + PERSON_MARGIN + SKIRT_PAD);
+      const qx = r.x + ux * r.c + uz * r.s, qz = r.z - ux * r.s + uz * r.c;
+      const qc = cellIndex(Math.floor((qx - ORIGIN_X) / CELL), Math.floor((qz - ORIGIN_Z) / CELL));
+      if (qc < 0 || fp.walls[qc] || keep?.(qx, qz) || !outlineClear(state, qx, qz) || !legDry(px0, pz0, qx, qz) || !legDry(qx, qz, nx, nz)) continue;
+      if (route === route0) route = route.slice();
+      route[k] = qx;
+      route[k + 1] = qz;
+      break;
+    }
+  }
+  let out = null;
+  for (let k = 0; k + 3 < route.length; k += 2) {
+    const ax = route[k], az = route[k + 1], bx = route[k + 2], bz = route[k + 3];
+    if (legClearOfOutlines(fp, ax, az, bx, bz) || !legDry(ax, az, bx, bz)) { if (out) out.push(bx, bz); continue; }
+    if (!out) out = route.slice(0, k + 2);
+    const mark = out.length;
+    if (!skirtLeg(state, fp, ax, az, bx, bz, 0, out, keep)) out.length = mark;   // no way round: as it was
+    out.push(bx, bz);
+  }
+  return out ?? route;
+}
+
+// Points (pushed onto out) that take the leg a -> b round the pieces it cuts: by the
+// corner of the one it cuts deepest, or straight out from its nearer side, each new
+// leg done the same way in turn (SKIRT_DEPTH deep). False, with out as it was, if
+// there is no clear way.
+function skirtLeg(state, fp, ax, az, bx, bz, depth, out, keep) {
+  if (legClearOfOutlines(fp, ax, az, bx, bz)) return true;
+  if (depth >= SKIRT_DEPTH) return false;
+  const hit = deepestHit(fp, ax, az, bx, bz);
+  if (!hit) return true;
+  const {r, lx, lz} = hit;
+  const ex = r.hx + PERSON_MARGIN + SKIRT_PAD, ez = r.hz + PERSON_MARGIN + SKIRT_PAD;
+  const sx = lx < 0 ? -1 : 1, sz = lz < 0 ? -1 : 1;
+  const near = r.hx - Math.abs(lx) < r.hz - Math.abs(lz);
+  const tries = [[sx * ex, sz * ez], near ? [sx * ex, lz] : [lx, sz * ez]];
+  const mark = out.length;
+  for (const [ux, uz] of tries) {
+    const qx = r.x + ux * r.c + uz * r.s, qz = r.z - ux * r.s + uz * r.c;
+    const c = cellIndex(Math.floor((qx - ORIGIN_X) / CELL), Math.floor((qz - ORIGIN_Z) / CELL));
+    if (c < 0 || fp.walls[c] || keep?.(qx, qz) || !outlineClear(state, qx, qz)) continue;
+    if (!segmentClear(fp.walls, ax, az, qx, qz, true) || !segmentClear(fp.walls, qx, qz, bx, bz, false)) continue;
+    if (!legDry(ax, az, qx, qz) || !legDry(qx, qz, bx, bz)) continue;
+    if (skirtLeg(state, fp, ax, az, qx, qz, depth + 1, out, keep)) {
+      out.push(qx, qz);
+      if (skirtLeg(state, fp, qx, qz, bx, bz, depth + 1, out, keep)) return true;
+    }
+    out.length = mark;
+  }
+  return false;
+}
+
+// Where people stop to go in: the street cell in front of the door (a farm: its gate
+// on the headland), or, where the building's own steps, porch or plinth (a farmhouse
+// by the gate) reach over it, the first cell beyond them (up to two more, on dry
+// walkable ground). A pure function of the record and the terrain, so a restored town
+// agrees.
+export function doorstepCell(b, rects = null) {
+  const front = b.type === 'farm' ? doorCell(b) : frontCell(b);
+  if (front < 0 || b.type === 'park' || b.type === 'bridge') return front;
+  rects ??= buildingOutline(b);
+  if (!rects.length) return front;
+  const [fx, fz] = cellXZ(front);
+  const [dx, dz] = ROT_DIR[b.rot ?? 0];
+  const t = terrainGrid();
+  for (let k = 0; k < 3; k++) {
+    const i = fx + dx * k, j = fz + dz * k;
+    const c = cellIndex(i, j);
+    // Not into the river (a mill's race) or over a drop: then the street cell it is.
+    if (c < 0 || (k > 0 && (t.water[c] || tooSteep(t, c)))) break;
+    if (!rects.some((r) => coreHit(r, i, j, PERSON_MARGIN))) return c;
+  }
+  return front;
 }
 
 // Farms: crops inside, a one-cell headland ring people may walk and wear.
@@ -472,7 +819,7 @@ function stampField(fp, b) {
 // counts), except the cell the walk starts in.
 export function routeStillValid(state, route, fromIndex = 0) {
   if (!route || route.length < 4) return true;
-  const { blocked } = footprints(state);
+  const { walls: blocked } = footprints(state);
   for (let k = Math.max(0, fromIndex); k + 3 < route.length; k += 2) {
     if (!segmentClear(blocked, route[k], route[k + 1], route[k + 2], route[k + 3], k === fromIndex)) return false;
   }
@@ -483,7 +830,7 @@ export function routeStillValid(state, route, fromIndex = 0) {
 // that list: the walk from (x, z) to the waypoint skips its starting cell.
 export function routeClearFrom(state, x, z, route, seg) {
   if (!route || seg + 1 >= route.length) return true;
-  const { blocked } = footprints(state);
+  const { walls: blocked } = footprints(state);
   if (!segmentClear(blocked, x, z, route[seg], route[seg + 1], true)) return false;
   for (let k = seg; k + 3 < route.length; k += 2) {
     if (!segmentClear(blocked, route[k], route[k + 1], route[k + 2], route[k + 3], false)) return false;
@@ -536,6 +883,27 @@ export function navKey(state) {
 const FOOTPRINT_TICKS = 10;
 
 // fresh: skip the coalescing (a caller found a route through a new building).
+// The walkable grid as the lot layer has it (fp.blocked, not the walkers' walls):
+// whether a door opens onto the town is a matter of lots and footprints, as sites and
+// lots judge it (buildings.js freeSealedDoors), not of the plinth and steps drawn on
+// them. Only which cells are passable is meaningful here.
+const lotNavCache = new WeakMap();
+const NO_DOORS = new Uint8Array(CELLS);
+export function lotNavGrid(state) {
+  ensureRoads(state);
+  const key = navKey(state);
+  const hit = lotNavCache.get(state);
+  if (hit && hit.key === key) return hit;
+  const fp = footprints(state);
+  const lot = { walls: fp.blocked, door: NO_DOORS, field: fp.field };
+  const adj = adjacencyOf(state.roads), fords = fordsNearBridges(state);
+  const cost = new Float32Array(CELLS);
+  for (let i = 0; i < CELLS; i++) cost[i] = cellCost(state, i, lot, adj, fords);
+  const grid = { key, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost };
+  lotNavCache.set(state, grid);
+  return grid;
+}
+
 export function navGrid(state, { fresh = false } = {}) {
   ensureRoads(state);
   const key = navKey(state);
@@ -558,7 +926,8 @@ function cellCost(state, i, fp, adj, fords = fordsNearBridges(state)) {
   const t = terrainGrid();
   const w = t.water[i];
   if (w) return isBridge(r, i) ? TIER_COST[r.tier[i]] : w === 2 ? (fords[i] ? FORD_NEAR_BRIDGE_COST : FORD_COST) : Infinity;
-  if (fp.blocked[i] || tooSteep(t, i)) return Infinity;
+  if (fp.walls[i] || tooSteep(t, i)) return Infinity;
+  if (fp.door[i]) return DOOR_COST;
   return landCost(r.tier[i], r.wear[i], adj[i], fp.field[i], t.slope[i]);
 }
 
@@ -611,7 +980,7 @@ function buildNavGrid(state, key, bucket, tick, prev) {
     cost[i] = cellCost(state, i, fp, adj, fords);
   }
   const nodes = nodesFor(r, prev, navNodeDirty);
-  return owned({ key, bucket, tick, footprintsOnly: false, fp, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height, ...nodes }, r);
+  return owned({ key, bucket, tick, footprintsOnly: false, fp, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, passCap: DOOR_COST, passOpen: TIER_COST[0], water: wcode, height: terrainGrid().height, ...nodes }, r);
 }
 
 // A new grid object (consumers compare identity and keys) sharing the water
@@ -623,7 +992,7 @@ function patchFootprints(state, prev, key, tick) {
   const cost = prev.cost.slice();
   const old = prev.fp;
   for (let i = 0; i < CELLS; i++) {
-    if (old.blocked[i] !== fp.blocked[i] || old.field[i] !== fp.field[i]) cost[i] = cellCost(state, i, fp, adj, fords);
+    if (old.walls[i] !== fp.walls[i] || old.door[i] !== fp.door[i] || old.field[i] !== fp.field[i]) cost[i] = cellCost(state, i, fp, adj, fords);
   }
   // The nodes are shared while no path cell has changed since they were
   // built; otherwise a copy has the nodes around those cells redone.
@@ -662,6 +1031,25 @@ export function structuralGrid(state) {
   grid = owned({ key: `${base}:${r.version}`, bucket: base, base, roads: r, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height, ...nodes }, r);
   structuralCache.set(state, grid);
   structuralDirty.set(r, new Set());
+  return grid;
+}
+
+// The structural grid as walkers see it (people.js syncRoute): the same costs, with
+// the cells drawn pieces take (fp.walls beyond the lot layer) closed and the door
+// cells dear. The structural grid itself stays the lot layer's: the town's aggregate
+// traffic, centres and works plan over lots and footprints, as before. Pure for the
+// same saved state, like the grid it is made from.
+const walkerGridCache = new WeakMap();
+export function walkerGrid(state) {
+  const base = structuralGrid(state);
+  const fp = footprints(state);
+  const hit = walkerGridCache.get(state);
+  if (hit && hit.base === base && hit.fp === fp) return hit.grid;
+  const cost = base.cost.slice();
+  for (const i of fp.wallCells) cost[i] = Infinity;
+  for (const i of fp.doorCells) if (cost[i] < Infinity) cost[i] = DOOR_COST;
+  const grid = { ...base, key: `${base.key}:w${fp.key}`, cost, passCap: DOOR_COST, passOpen: TIER_COST[0], comp: undefined, coarse: undefined, blockCost: undefined };
+  walkerGridCache.set(state, { base, fp, grid });
   return grid;
 }
 
@@ -1056,17 +1444,19 @@ function cellDist(a, b) {
 }
 
 // Nearest passable cell to i within a small radius (doors sit inside
-// footprints, and centroids can land on a roof or in the river).
-export function nearestOpen(state, i, radius = 6) {
+// footprints, and centroids can land on a roof or in the river). walker: passable to
+// walkers (fp.walls), and never a door cell inside the walls.
+export function nearestOpen(state, i, radius = 6, walker = false) {
   if (i < 0) return -1;
-  if (Number.isFinite(roadCost(state, i)) && !terrainGrid().water[i]) return i;
+  const door = walker ? footprints(state).door : NO_DOORS;
+  if (Number.isFinite(roadCost(state, i, walker)) && !terrainGrid().water[i] && !door[i]) return i;
   const [cx, cz] = cellXZ(i);
   for (let rad = 1; rad <= radius; rad++) {
     for (let dz = -rad; dz <= rad; dz++)
       for (let dx = -rad; dx <= rad; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dz)) !== rad) continue;
         const j = cellIndex(cx + dx, cz + dz);
-        if (j >= 0 && !terrainGrid().water[j] && Number.isFinite(roadCost(state, j))) return j;
+        if (j >= 0 && !terrainGrid().water[j] && !door[j] && Number.isFinite(roadCost(state, j, walker))) return j;
       }
   }
   return -1;

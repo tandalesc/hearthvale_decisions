@@ -13,7 +13,7 @@ import {alongBridge} from '../src/sim/bridges.js';
 import {halfWidth, wearBucket} from '../src/render/paths.js';
 
 const cellCenterOf = (s, c) => ({x: s.roads.ox + ((c % s.roads.W) + 0.5) * s.roads.cell, z: s.roads.oz + (Math.floor(c / s.roads.W) + 0.5) * s.roads.cell});
-import {footprints, structuralGrid, cellOf, routeStillValid} from '../src/sim/roads.js';
+import {footprints, walkerGrid, cellOf, routeStillValid} from '../src/sim/roads.js';
 import {findRoute, cellsToWaypoints} from '../src/navigation.js';
 import {waterAt} from '../src/terrain.js';
 import {marketOf} from './town-helpers.js';
@@ -128,9 +128,12 @@ test('a crowd stands round the attraction itself, facing it, not in a disc round
     const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
     assert.ok(fx * (m.x - p.x) + fz * (m.z - p.z) > 0, `walker ${p.id} faces away from the monument`);
   }
-  // Pulled toward the monument: the crowd's middle is nearer the monument than the doorstep is.
-  const fromDoor = Math.hypot(door.x - m.x, door.z - m.z);
-  assert.ok(Math.hypot(mx - m.x, mz - m.z) < fromDoor * 0.9, `crowd middle ${Math.hypot(mx - m.x, mz - m.z).toFixed(2)} from the monument, doorstep ${fromDoor.toFixed(2)}`);
+  // Pulled toward the monument, not gathered on the doorstep: the crowd's middle is
+  // nearer the monument than the doorstep. (It may lie well to one side, where the
+  // ceremony's fan opens onto the square: a fan round the monument's open side, not a
+  // disc round its door.)
+  const toMonument = Math.hypot(mx - m.x, mz - m.z), toDoor = Math.hypot(mx - door.x, mz - door.z);
+  assert.ok(toMonument < toDoor, `crowd middle ${toMonument.toFixed(2)} from the monument, ${toDoor.toFixed(2)} from the doorstep`);
 });
 
 test('with one stall only, the overflow stays briefly at the edge or goes home', () => {
@@ -154,7 +157,9 @@ test('with one stall only, the overflow stays briefly at the edge or goes home',
 
 // Planned routes across the town, both banks, so some cross bridges.
 function sampleRoutes(s) {
-  const grid = structuralGrid(s);
+  // The grid walkers plan on (people.js syncRoute): the structural one with the drawn
+  // plinths, steps and wings closed.
+  const grid = walkerGrid(s);
   const homes = s.buildings.filter((b) => b.type === 'home' && b.built >= 1);
   const out = [];
   for (let i = 0; i < homes.length && out.length < 40; i += 3) {

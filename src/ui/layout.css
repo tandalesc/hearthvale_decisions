@@ -151,7 +151,8 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   box-shadow: var(--shadow-lift), var(--sheet-edge);
 }
 .dk:not(.has-index):not(.has-side) { --dk-w: 560px; }
-.dk.has-index:not(.has-side), .dk:not(.has-index).has-side { --dk-w: 1040px; }
+.dk.has-index:not(.has-side) { --dk-w: 820px; }
+.dk:not(.has-index).has-side { --dk-w: 1000px; }
 /* The dock: the Council's crest at the right edge, always there. */
 .dock {
   position: fixed;

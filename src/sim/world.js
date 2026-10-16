@@ -1,7 +1,7 @@
 // sim-world's plug-in for the tick (see hooks.js): roads, lots, buildings,
 // districts and planned works. src/sim/index.js registers it.
 import { TICK_SECONDS } from './clock.js';
-import { ensureRoads, tickRoads, monthlyRoads, addWear, placeLamps, navGrid, WALKER_SCALE, WEAR_STEP } from './roads.js';
+import { ensureRoads, tickRoads, monthlyRoads, addWear, placeLamps, navGrid, lotNavGrid, WALKER_SCALE, WEAR_STEP } from './roads.js';
 import { components } from '../navigation.js';
 import {
   adoptLots, tickProjects, monthlyBuildings, retryBuildQueue, homesWanted, startHomes, mergeWilling, requestBuilding,
@@ -29,7 +29,7 @@ const YEAR_STEPS = {
   farms: s => farmsGiveWay(s),
   roadsUnder: s => clearRoadsUnderBuildings(s),
   // The walkable regions first (a cache), so the door pass has only its own work.
-  regions: s => { components(navGrid(s)); },
+  regions: s => { components(lotNavGrid(s)); },
   doors: s => freeSealedDoors(s),
   // A few hundred buildings a tick; a cold pass (after a restore) surveys every bank.
   foundations: (s, [from = 0, raised = 0]) => {

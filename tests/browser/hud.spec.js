@@ -44,7 +44,8 @@ test('the Council opens as a HUD panel from its crest: not a dialog, the time st
   const want = await hv(page, () => window.hearthvale.state().docket.length);
   await expect(page.locator('.dk .card:not([data-leaving])')).toHaveCount(want);
   await expect(page.locator('.dk .card:not(.is-next)')).toHaveCount(1);
-  await expect(page.locator('.dk-rules h3')).toContainText('Rules on');
+  // Rules are the Rule Book's: none in the Council, on any page.
+  await expect(page.locator('.dk .rule, .dk .dk-rules, .dk .body-rules')).toHaveCount(0);
   // How the factions feel lives in the People view, not here.
   await expect(page.locator('.dk .dk-faction, .dk .dk-feel')).toHaveCount(0);
   // Opening it never moved the camera.
@@ -99,8 +100,8 @@ test('C toggles the Council; the bodies down its side switch pages; area chips f
   await card.locator('.option:not([disabled]), .minor').first().click();
   await expect.poll(() => hv(page, (c) => window.hearthvale.state().docket.some((x) => x.id === c), cid)).toBe(false);
   await expect(page.locator('.dk .card:not([data-leaving])')).toHaveCount(total - 1);
-  // "Open the Rule Book" opens the drawer at that area beside the Council.
-  await page.locator('.dk-to-book').click();
+  // A card's "The rules" link opens the Rule Book drawer beside the Council.
+  await page.locator('.dk .card:not(.is-next):not([data-leaving]) .rules-btn').first().click();
   await expect(page.locator('.drawer')).toHaveClass(/is-open/);
   await expect(page.locator('.drawer .rulebook')).toBeVisible();
   const d = await box(page, '.drawer');
@@ -162,7 +163,7 @@ test('phone: the Council is one tab in the sheet, its bodies a strip of chips, t
   await expect(page.locator(`.sheet .dk-page .body-view[data-body="${id}"]`)).toBeAttached();
 });
 
-test('the Rule Book is the drawer listing; R toggles it and a body\'s link opens it', async ({page}) => {
+test('the Rule Book is the drawer listing; R toggles it; body pages list no rules', async ({page}) => {
   const errors = await open(page, {fixture: 'city', stub: true});
   const tile = page.locator('.rail [data-view="rules"]');
   await tile.click();
@@ -177,8 +178,8 @@ test('the Rule Book is the drawer listing; R toggles it and a body\'s link opens
   await page.keyboard.press('r');
   await expect(page.locator('.drawer')).not.toHaveClass(/is-open/);
   await hv(page, () => window.hearthvale.app.openView('agri-council'));
-  await page.locator('.dk-page .book-open').click();
-  await expect(page.locator('.drawer .rulebook')).toBeVisible();
+  await expect(page.locator('.dk-page .body-view')).toBeVisible();
+  await expect(page.locator('.dk-page .rule, .dk-page .book-open')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 

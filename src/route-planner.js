@@ -40,7 +40,7 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
     else cache.clear();
     grid = g;
     // The worker's crossing analysis needs this town's river (terrain seed).
-    if (engine) engine.postMessage({ type: 'grid', grid: { ...g, footprintsOnly, terrainSeed: terrainSeed(), terrainVersion: terrainVersion(), terrainArchetype: terrainWaters()?.forced ?? null } });
+    if (engine) engine.postMessage({ type: 'grid', grid: { ...g, fp: undefined, footprintsOnly, terrainSeed: terrainSeed(), terrainVersion: terrainVersion(), terrainArchetype: terrainWaters()?.forced ?? null } });
     else fallback.setGrid({ ...g, footprintsOnly });
     return g;
   }
@@ -79,12 +79,12 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
   function enqueue(state, x0, z0, goal, job) {
     const g = ticked && grid && state === lastState ? grid : sync(state);
     stats.requests++;
-    const from = nearestOpen(state, cellOf(x0, z0));
+    const from = nearestOpen(state, cellOf(x0, z0), 6, true);
     // Goals in the water or inside a wall move to the nearest open ground.
     let to = cellOf(goal.x, goal.z);
     let target = { x: goal.x, z: goal.z };
     if (to >= 0 && (!Number.isFinite(g.cost[to]) || g.water[to] === 1)) {
-      const open = nearestOpen(state, to);
+      const open = nearestOpen(state, to, 6, true);
       if (open >= 0) { to = open; target = cellCenter(open); }
     }
     if (job.replanned) job.id = ++nextId;

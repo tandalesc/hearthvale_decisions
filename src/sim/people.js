@@ -16,7 +16,7 @@ import {rng, hash32, hashUnit} from './rng.js';
 import {decide, findHook} from './hooks.js';
 import {byId, cellIndex, lookFor, nextId, BRIDGE} from './state.js';
 import {monthIndex} from './clock.js';
-import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, structuralGrid, cellOf, recordCrossingBand, FLAG} from './roads.js';
+import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, walkerGrid, standPoint, FLAG} from './roads.js';
 import {halfWidth, wearBucket} from '../render/paths.js';   // the drawn path widths (pure, no renderer state)
 import {findRoute, cellsToWaypoints} from '../navigation.js';
 import {projectSite} from './buildings.js';
@@ -54,7 +54,7 @@ const ROUTE_RETRY = 2;                                   // seconds before re-as
 export function makePerson(state, household, home) {
   const id = nextId(state);
   // Walkers appear on the street in front of their door, never inside a footprint.
-  const door = home ? accessPoint(home) : {x: 0, z: 0};
+  const door = home ? accessPoint(home, state) : {x: 0, z: 0};
   const jitter = (hashUnit(id) - 0.5) * 0.6;
   return {
     id,
@@ -465,7 +465,7 @@ export function standable(state, blocked, x, z) {
   return clearOfWalls(state, blocked, x, z) && !waterAt(x, z) && !deckAt(state, x, z);
 }
 
-// Open, and not within WALL_GAP of a footprint cell. A point a hair from a blocked
+// Open, and not within WALL_GAP of a walls cell (roads.js fp.walls). A point a hair from a blocked
 // cell's edge reads inside it once the renderer has rounded it to float32 (the drawn
 // walker at its spot or corner), so stops and corners keep this little gap.
 const WALL_GAP = 0.05;
@@ -475,7 +475,8 @@ function clearOfWalls(state, blocked, x, z) {
     const c = cellIndex(roads, x + (k & 1 ? WALL_GAP : -WALL_GAP), z + (k & 2 ? WALL_GAP : -WALL_GAP));
     if (c < 0 || blocked[c]) return false;
   }
-  return true;
+  // ...and clear of the drawn plinth, steps and wings by a walker's margin.
+  return outlineClear(state, x, z);
 }
 
 // A short step with no wall, water or deck on the way.
@@ -507,7 +508,7 @@ export function crowdPlan(state, targetType, targetId, tail, x, z, activity = nu
     const b = byId(state, 'buildings', targetId);
     if (b && b.type !== 'park' && b.type !== 'farm') return {ring: ringSpots(state, b), fx: b.x, fz: b.z, skip: b};
     if (b) {
-      const door = accessPoint(b);
+      const door = accessPoint(b, state);
       const cx = (b.x + door.x) / 2, cz = (b.z + door.z) / 2;
       const inner = Math.hypot(door.x - cx, door.z - cz) + SPOT_INNER;
       return {cx, cz, inner, outer: inner + SPOT_OUTER - SPOT_INNER, fx: b.x, fz: b.z, skip: null};
@@ -543,9 +544,9 @@ function ringSpots(state, b) {
   const key = `${footprintKey(state)}:${state.buildingsRev ?? 0}:${b.x},${b.z},${b.w},${b.d},${b.rot}`;
   const hit = ringCache.get(b.id);
   if (hit && hit.state === state && hit.key === key) return hit;
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   const hw = (b.w ?? 4) / 2, hd = (b.d ?? 4) / 2;
-  const door = accessPoint(b);
+  const door = accessPoint(b, state);
   const fl = Math.hypot(door.x - b.x, door.z - b.z) || 1;
   const fx = (door.x - b.x) / fl, fz = (door.z - b.z) / fl;
   const found = [];
@@ -577,7 +578,7 @@ function ringSpots(state, b) {
 // along the front to beside the spot (via), then straight in, so a crowd can wrap round
 // the sides as well as fill the front.
 export function findSpot(state, id, rev, plan, ox, oz) {
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   if (plan.ring) return ringSpot(state, blocked, id, plan.ring, ox, oz);
   const turn = hashUnit(id * 53 + rev * 7 + 1) * Math.PI * 2;
   const {cx, cz, skip} = plan;
@@ -663,7 +664,7 @@ function relaxGoal(state, ctx, p, task, spot, now, plan = null) {
   p.rev++;
   const home = p.homeId != null ? byId(state, 'buildings', p.homeId) : null;
   if (home && !(task.kind === 'rest' && task.targetId === home.id)) {
-    startTask(state, ctx, p, 'rest', buildingTarget(home), now, {relax});
+    startTask(state, ctx, p, 'rest', buildingTarget(state, home), now, {relax});
     return false;
   }
   finish(p, now);
@@ -679,10 +680,25 @@ function stepTo(state, p, task, spot, plan, now) {
   if (plan.occ) gatheringSpot(p, task, spot);
   standAdd(spot.x, spot.z, p.id, p.householdId);
   if (Math.hypot(spot.x - p.x, spot.z - p.z) < 0.02) return true;
-  if (spot.via) task.route.push(spot.via[0], spot.via[1]);
-  task.route.push(spot.x, spot.z);
+  pushSkirted(state, p, task.route, spot.via ? [spot.via[0], spot.via[1], spot.x, spot.z] : [spot.x, spot.z]);
   setVelocity(state, p, task, now);
   return false;
+}
+
+// Points skirtOutlines leaves be: on or by a bridge deck (alongDecks has set its lanes).
+function deckKeep(state) {
+  const decks = deckList(state);
+  if (!decks.length) return null;
+  return (x, z) => !!deckZone(state, x, z) || decks.some(({bridge}) => Math.hypot(bridge.a.x - x, bridge.a.z - z) < DECK_KEEP || Math.hypot(bridge.b.x - x, bridge.b.z - z) < DECK_KEEP);
+}
+
+// Points added to a walker's route from where it is (its route's last point, or where
+// it stands), round the corner of any drawn plinth, step or wing they cut (roads.js
+// skirtOutlines).
+function pushSkirted(state, p, route, pts) {
+  const n = route.length;
+  const leg = skirtOutlines(state, [n >= 2 ? route[n - 2] : p.x, n >= 2 ? route[n - 1] : p.z, ...pts], deckKeep(state));
+  for (let k = 2; k < leg.length; k++) route.push(leg[k]);
 }
 
 // An activity's spot (gatherings.js occasionSpot) taken: what the walker does there
@@ -713,7 +729,7 @@ function claimSpot(p, task, spot) {
 // walk goes to the goal itself again, and a spot is found on arrival.
 function checkClaim(state, task) {
   const [x, z] = task.spot;
-  if (layoutOf(task.activity) === 'rail' ? deckSpot(state, x, z) : standable(state, footprints(state).blocked, x, z)) return;
+  if (layoutOf(task.activity) === 'rail' ? deckSpot(state, x, z) : standable(state, footprints(state).walls, x, z)) return;
   task.claim = 0;
   task.spot = null;
   [task.tx, task.tz, task.tail] = task.goal ?? [task.tx, task.tz, null];
@@ -758,7 +774,7 @@ function leaveDeck(state, p, task, now) {
   const off = ((p.x - b.a.x) * az - (p.z - b.a.z) * ax) * 0.5;
   const ex = e.x + az * off, ez = e.z - ax * off;
   const qx = ex + ux * DECK_APPROACH, qz = ez + uz * DECK_APPROACH;
-  if (waterAt(qx, qz) || deckAt(state, qx, qz) || !clearOfWalls(state, footprints(state).blocked, qx, qz)) return false;
+  if (waterAt(qx, qz) || deckAt(state, qx, qz) || !clearOfWalls(state, footprints(state).walls, qx, qz)) return false;
   if (!legOpen(state, ex, ez, qx, qz)) return false;
   task.leaving = 1;
   task.route.push(ex, ez, qx, qz);
@@ -773,7 +789,7 @@ function wander(state, p, task, now) {
   const pts = wanderRoute(state, p, task, occ);
   if (!pts) return false;
   standAdd(task.spot[0], task.spot[1], p.id, p.householdId);   // a new spot, held from now
-  for (let k = 0; k < pts.length; k++) task.route.push(pts[k]);
+  pushSkirted(state, p, task.route, pts);
   setVelocity(state, p, task, now);
   return true;
 }
@@ -819,11 +835,11 @@ function alternativeTarget(state, p, task) {
   }
   for (const {c} of altScratch) {
     if (task.kind === 'leisure') {
-      const target = seatTarget(state, p, buildingTarget(c));
+      const target = seatTarget(state, p, buildingTarget(state, c));
       if (target.seat || hasRoom(state, p, target, task.kind)) return target;
       continue;
     }
-    const target = buildingTarget(c);
+    const target = buildingTarget(state, c);
     if (c.type === 'farm') farmRows(state, p, c, target);
     if (hasRoom(state, p, target, task.kind)) return target;
   }
@@ -913,11 +929,11 @@ function chooseTask(state, ctx, p, world, now) {
   if (projectId != null) return startTask(state, ctx, p, 'build', projectTarget(state, scratch.projectsById.get(projectId), p), now);
 
   const danger = nearEvent(state, p, ['fire', 'flood']);
-  if (danger && home) return startTask(state, ctx, p, 'flee', buildingTarget(home), now);
+  if (danger && home) return startTask(state, ctx, p, 'flee', buildingTarget(state, home), now);
 
   const targets = {
     work: workTarget(state, p, h, world),
-    rest: home ? buildingTarget(home) : null,
+    rest: home ? buildingTarget(state, home) : null,
     shop: nearestOf(state, world, SHOP_TYPES, p, 3, h),
     leisure: seatTarget(state, p, nearestOf(state, world, LEISURE_TYPES, p, 4, h)) ?? strollTarget(state, p),
     worship: nearestOf(state, world, ['chapel'], p, 2, h),
@@ -955,8 +971,8 @@ function chooseTask(state, ctx, p, world, now) {
 // Walkers head for the street cell in front of the door (shared by everyone going in,
 // so the route cache and flow fields can serve them all) and "go in" there: indoor
 // walkers are hidden, they never walk into the footprint.
-function buildingTarget(b) {
-  const door = accessPoint(b);
+function buildingTarget(state, b) {
+  const door = accessPoint(b, state);
   return {type: 'building', id: b.id, x: door.x, z: door.z, building: b};
 }
 
@@ -969,7 +985,7 @@ function seatTarget(state, p, target) {
   if (!b) return target;
   const seats = seatsOf(b);
   if (!seats.length) return target;
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   const start = hash32(p.id * 31 + p.rev) % seats.length;
   for (let k = 0; k < seats.length; k++) {
     const seat = seats[(start + k) % seats.length];
@@ -984,9 +1000,17 @@ function seatTarget(state, p, target) {
   return target;
 }
 
-export function accessPoint(b) {
-  const front = frontCell(b);
-  return front >= 0 ? cellCenter(front) : doorPoint(b);
+// The doorstep (roads.js doorstepCell): in front of the door, beyond the building's
+// own steps or porch. A farm: the lane outside its gate (farm work steps on into the
+// rows from there, farmRows).
+// (With the state, the town's own way in: roads.js footprints' wayIn, the street cell
+// itself where the cell beyond an old wing is someone else's lot.)
+export function accessPoint(b, state = null) {
+  if (b.type === 'farm') {
+    const front = frontCell(b);
+    if (front >= 0) return cellCenter(front);
+  }
+  return doorPoint(b, state);
 }
 
 // When buildings appear or change, walkers standing inside a new footprint step out to
@@ -999,14 +1023,14 @@ function checkFootprints(state, now) {
   if (state.walkerFootprintKey === key) return;
   const first = state.walkerFootprintKey == null;
   state.walkerFootprintKey = key;
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   const roads = state.roads;
   for (const p of state.people) {
     const c = cellIndex(roads, p.x, p.z);
     if (c >= 0 && blocked[c]) {
-      const open = nearestOpen(state, c, 8);
+      const open = nearestOpen(state, c, 8, true);
       if (open >= 0) {
-        const at = cellCenter(open);
+        const at = standPoint(state, open);
         p.x = at.x;
         p.z = at.z;
         p.cell = open;
@@ -1015,19 +1039,54 @@ function checkFootprints(state, now) {
       if (p.task) replan(p, now);
       continue;
     }
-    if (!first && p.task && !p.task.waiting && !routeClearFrom(state, p.x, p.z, p.task.route, p.task.seg)) replan(p, now);
+    // On open ground, but a building just drawn here reaches over the spot (its plinth
+    // or steps): a step aside, clear of it, and on from there.
+    if (!first && !p.indoor && !p.task?.seat && !outlineClear(state, p.x, p.z)) {
+      const at = standPoint(state, c);
+      p.x = at.x;
+      p.z = at.z;
+      p.rev++;
+      if (p.task) replan(p, now);
+      continue;
+    }
+    if (first || !p.task || p.task.waiting || p.task.seg >= p.task.route.length) continue;
+    if (!routeClearFrom(state, p.x, p.z, p.task.route, p.task.seg)) replan(p, now);
+    else reskirt(state, p, now);
   }
 }
 
+// A walk under way when something new is drawn by it (a plinth, steps or a wing on a
+// building just placed or changed): the rest of the route goes round it, as a fresh
+// route would (roads.js skirtOutlines). Untouched when nothing is in the way.
+function reskirt(state, p, now) {
+  const task = p.task, route = task.route;
+  const rest = [p.x, p.z];
+  for (let k = task.seg; k < route.length; k++) rest.push(route[k]);
+  const out = skirtOutlines(state, rest, deckKeep(state));
+  if (out === rest) return;
+  task.route = out;
+  task.seg = 2;
+  setVelocity(state, p, task, now);
+}
+
 // Goals inside a footprint or in the river (a crowd spot on a roof or by a flood, a
-// stroll into a wall) move to the nearest open dry cell; the farm-field step stays where
-// it is (fields are open ground).
+// stroll into a wall) move to the nearest open dry cell, and goals on a drawn plinth or
+// step to the nearest point clear of it; the farm-field step stays where it is (fields
+// are open ground).
 function openGround(state, target) {
   const c = cellIndex(state.roads, target.x, target.z);
-  if (c < 0 || !(footprints(state).blocked[c] || (waterAt(target.x, target.z) && !deckAt(state, target.x, target.z)))) return;
-  const open = nearestOpen(state, c, 8);
+  if (c < 0) return;
+  if (!(footprints(state).walls[c] || (waterAt(target.x, target.z) && !deckAt(state, target.x, target.z)))) {
+    // Open, but on a drawn plinth or step reaching into the cell: the nearest clear point.
+    if (outlineClear(state, target.x, target.z)) return;
+    const at = standPoint(state, c);
+    target.x = at.x;
+    target.z = at.z;
+    return;
+  }
+  const open = nearestOpen(state, c, 8, true);
   if (open < 0) return;
-  const at = cellCenter(open);
+  const at = standPoint(state, open);
   target.x = at.x;
   target.z = at.z;
 }
@@ -1065,11 +1124,14 @@ function halt(p) {
 }
 
 function segmentBlocked(state, x0, z0, x1, z1) {
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   const steps = Math.ceil(Math.hypot(x1 - x0, z1 - z0) * 2);
   for (let i = 0; i <= steps; i++) {
-    const c = cellIndex(state.roads, x0 + ((x1 - x0) * i) / steps, z0 + ((z1 - z0) * i) / steps);
+    const x = x0 + ((x1 - x0) * i) / steps, z = z0 + ((z1 - z0) * i) / steps;
+    const c = cellIndex(state.roads, x, z);
     if (c >= 0 && blocked[c]) return true;
+    // ...or a drawn piece (a farmhouse's plinth by the rows) within a walker's margin.
+    if (i > 0 && !outlineClear(state, x, z)) return true;
   }
   return false;
 }
@@ -1258,7 +1320,7 @@ const APPROACH_OUT = [1, 1.6, 2.4];
 const APPROACH_SIDE = [0, 0.6, -0.6, 1.2, -1.2];
 function laneEndPath(state, e, ux, uz, x, z) {
   if (x != null && !deckZone(state, x, z) && dryLeg(state, x, z, e.x, e.z)) return [];
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   const standable = (px, pz) => !waterAt(px, pz) && !deckZone(state, px, pz) && clearOfWalls(state, blocked, px, pz);
   for (const k of APPROACH_OUT) {
     const ax = e.x + ux * DECK_APPROACH * k, az = e.z + uz * DECK_APPROACH * k;
@@ -1299,7 +1361,7 @@ function approach(state, out, bridge, e, o, x, z, always = false) {
   if (!always && (t < 0 || t > 1)) return;
   const px = e.x + ((e.x - o.x) / len) * DECK_APPROACH, pz = e.z + ((e.z - o.z) / len) * DECK_APPROACH;
   if (waterAt(px, pz) || deckZone(state, px, pz)) return;
-  if (!clearOfWalls(state, footprints(state).blocked, px, pz)) return;
+  if (!clearOfWalls(state, footprints(state).walls, px, pz)) return;
   const lx = out[out.length - 2], lz = out[out.length - 1];
   if (!legOpen(state, lx, lz, px, pz) || !legOpen(state, px, pz, e.x, e.z)) return;
   out.push(px, pz);
@@ -1312,6 +1374,7 @@ function legOpen(state, x0, z0, x1, z1) {
   for (let i = 0; i <= steps; i++) {
     const x = x0 + ((x1 - x0) * i) / steps, z = z0 + ((z1 - z0) * i) / steps;
     if (waterAt(x, z) && !deckZone(state, x, z) && !fordCell(state, x, z)) return false;
+    if (i > 0 && i < steps && !outlineClear(state, x, z)) return false;
   }
   return true;
 }
@@ -1368,7 +1431,7 @@ function workTarget(state, p, h, world) {
   }
   const b = byId(state, 'buildings', ent.buildingId);
   if (!b) return null;
-  const target = buildingTarget(b);
+  const target = buildingTarget(state, b);
   if (b.type === 'farm') farmRows(state, p, b, target);
   return target;
 }
@@ -1401,7 +1464,7 @@ function nearestOf(state, world, types, p, k, h) {
     }
   }
   if (!nearScratch.length) return null;
-  return buildingTarget(pickQuiet(state, p, nearScratch, crowdTolerance(p, h)));
+  return buildingTarget(state, pickQuiet(state, p, nearScratch, crowdTolerance(p, h)));
 }
 
 // Crowd-aware choice. Each candidate scores its distance, a stable per-walker taste
@@ -1425,7 +1488,7 @@ export function crowdTolerance(p, h) {
 // walkers per 8-unit block, smoothed), plus, for a building with seats, the share of
 // its seats taken (SEAT_FULL when all are).
 export function crowdAt(state, b) {
-  const door = accessPoint(b);
+  const door = accessPoint(b, state);
   let crowd = densityAt(state, door.x, door.z);
   if (b.type === 'park' || LEISURE_TYPES.includes(b.type)) {
     let n = scratch.seatCount.get(b.id);
@@ -1481,7 +1544,7 @@ function gatherTarget(state, p) {
 
 // Tools and tests: send a walker to a building now, as chooseTask would.
 export function sendWalker(state, p, kind, b, ctx = {}) {
-  startTask(state, ctx, p, kind, buildingTarget(b), simTime(state));
+  startTask(state, ctx, p, kind, buildingTarget(state, b), simTime(state));
   return p.task;
 }
 
@@ -1588,7 +1651,7 @@ function requestRoute(state, ctx, p, task, now) {
 // A* over sim-world's structural grid: a pure function of the saved state (no wear
 // sampled at an arbitrary moment), so a restored town plans exactly the same routes.
 function syncRoute(state, x0, z0, x1, z1) {
-  const grid = structuralGrid(state);
+  const grid = walkerGrid(state);
   const result = findRoute(grid, cellOf(x0, z0), cellOf(x1, z1), {maxNodes: 20000});
   for (const band of result.crossings ?? []) recordCrossingBand(state, band);
   return result.cells ? cellsToWaypoints(grid, result.cells, {x: x0, z: z0}, {x: x1, z: z1}) : null;
@@ -1597,7 +1660,8 @@ function syncRoute(state, x0, z0, x1, z1) {
 function setRoute(state, p, task, route, reachable = true) {
   // A copy: planner routes are shared through its cache. Each walker keeps to its own
   // side of the path's centre line.
-  task.route = roundRoute(state, laneOffset(state, p.id, alongDecks(state, Array.from(route), laneFraction(p.id))));
+  // Last, legs that cut the corner of a drawn plinth, step or wing go round it.
+  task.route = skirtOutlines(state, roundRoute(state, laneOffset(state, p.id, alongDecks(state, Array.from(route), laneFraction(p.id)))), deckKeep(state));
   // A gathering's claimed spot is where this route goes (given up if it cannot be reached).
   if (task.claim && !reachable) task.claim = 0;
   if (!task.claim) task.spot = null;
@@ -1649,7 +1713,7 @@ export function laneOffset(state, id, route) {
   const lane = laneFraction(id);
   if (Math.abs(lane) < 0.02) return route;
   const decks = deckList(state);
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   // 1. Each interior point's wanted offset (magnitude; the side is the lane's sign)
   // and the direction to push it (the corner's bisector, mitred).
   const m = n / 2;
@@ -1737,7 +1801,7 @@ const ROUND_MAX = 1.2;      // and never more than this far (units)
 const ROUND_MIN_TURN = 0.1; // radians: straighter than this is left alone
 export function roundRoute(state, route) {
   let r = route;
-  const {blocked} = footprints(state);
+  const {walls: blocked} = footprints(state);
   for (let pass = 0; pass < ROUND_PASSES; pass++) {
     if (r.length < 6 || r.length > 800) break;
     const out = [r[0], r[1]];

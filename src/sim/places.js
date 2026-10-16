@@ -146,7 +146,7 @@ function staticPlaces(town, bridges) {
 // nearer the middle) and TRAIL_OUT beyond it, with no home within 12; well apart;
 // facing away from town.
 function trailEnds(state, town) {
-  const r = state.roads, {blocked} = footprints(state);
+  const r = state.roads, {walls: blocked} = footprints(state);
   const homes = (state.buildings ?? []).filter((b) => b.type === 'home');
   const homeD = homes.map((b) => Math.hypot(b.x - town.x, b.z - town.z)).sort((a, b) => a - b);
   const edge = homeD.length ? homeD[Math.floor(homeD.length * 0.85)] : town.radius * 0.55;
