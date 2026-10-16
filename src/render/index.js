@@ -1,7 +1,10 @@
 import * as THREE from 'three';
-import { heightAt, terrainSeed } from '../terrain.js';
+import { LAYER_REFLECT } from './shaderlib.js';
+import { heightAt, terrainKey } from '../terrain.js';
+import { LinearFogColor } from './atmosphere.js';
 import { createGrade } from './grade.js';
 import { TIERS, guessTier, createAutoTuner, loadQualityOverride, saveQualityOverride } from './quality.js';
+import { pace, powerState, effectiveTier, pixelRatioFor, createRefreshMeter, SAVER_MODES } from './pacing.js';
 import { createLights } from './lights.js';
 import { createSky } from './sky.js';
 import { createRoadSplat } from './roads.js';
@@ -17,20 +20,30 @@ import { createTrees } from './trees.js';
 import { createDecals } from './decals.js';
 import { createParticles } from './particles.js';
 import { createProps } from './props.js';
+import { createDecor } from './decor.js';
 import { createLabels } from './labels.js';
 
 // Hearthvale renderer: createWorld (contract §6). The UI owns the main loop
 // and calls world.update(view, timeSeconds, dtSeconds) every animation frame;
-// the world decides whether a frame is worth drawing (battery, §4.8).
+// the world decides whether a frame is worth drawing (battery, §4.8). A loop
+// that asks world.frameDue(time, dt) first can skip its own per-frame work
+// (sim step, view sync) on the frames that will not draw.
 
 const OVERLAYS = { none: 0, value: 1, roads: 2, health: 3 };
 
-export function createWorld(canvas, { quality = 'auto' } = {}) {
+export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } = {}) {
   const requested = quality === 'auto' ? loadQualityOverride() : quality;
   const probe = canvas.getContext('webgl2', { antialias: true, powerPreference: 'default' });
-  let tierName = requested === 'auto' ? guessTier(probe) : requested;
+  // What Auto would draw (first guess, then the tuner); tierName is what is
+  // drawn after the Battery saver has had its say.
+  let autoTier = guessTier(probe);
+  let tierName = requested === 'auto' ? autoTier : requested;
   let tier = { ...TIERS[tierName] };
   let qualityMode = requested;
+  let saverMode = SAVER_MODES.includes(batterySaver) ? batterySaver : 'off';
+  let battery = null; // {charging, level} once the Battery API answers
+  let power = powerState(saverMode, battery);
+  const powerListeners = new Set();
 
   const renderer = new THREE.WebGLRenderer({ canvas, context: probe ?? undefined, antialias: true, powerPreference: 'default' });
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -40,6 +53,8 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
 
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog('#c9dccb', 150, 440);
+  // One atmosphere for every material, applied in linear light (atmosphere.js).
+  scene.fog.color = new LinearFogColor().copy(scene.fog.color);
   const rig = createCameraRig(canvas);
   const camera = rig.camera;
   scene.add(camera);
@@ -50,11 +65,14 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
   const ground = createGround();
   Object.assign(grade.uniforms, ground.uniforms);
   const lights = createLights({ renderer, scene, grade });
+  // In view of the mirror camera too (zeroed for that pass, see update()).
+  lights.hemi.layers.enable(LAYER_REFLECT);
+  lights.sun.layers.enable(LAYER_REFLECT);
   const sky = createSky({ scene, grade });
   const roads = createRoadSplat();
   let terrain = createTerrain({ scene, grade, roads, quality: tier });
   let water = createWater({ renderer, scene, grade, quality: tier });
-  let builtSeed = terrainSeed();
+  let builtSeed = terrainKey();
   const buildings = createBuildings({ scene, grade, lights, ground });
   const ctx = {
     renderer, scene, camera, grade, lights, roads, buildings, ground, heightAt: ground.sample, quality: tier,
@@ -66,8 +84,9 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
   let decals = createDecals(ctx);
   const particles = createParticles(ctx);
   const props = createProps(ctx);
+  const decor = createDecor(ctx);
   const labels = createLabels(ctx);
-  const systems = [people, trees, decals, particles, props, labels];
+  const systems = [people, trees, decals, particles, props, decor, labels];
 
   /**
    * The sim seeds the terrain when it creates or restores a town. If that
@@ -75,7 +94,8 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
    * everything shaped by the ground: terrain, water, heights, trees, decals.
    */
   function rebuildTerrain() {
-    builtSeed = terrainSeed();
+    builtSeed = terrainKey();
+    warmPending = true;
     scene.remove(terrain.group);
     for (const m of terrain.meshes) m.geometry.dispose();
     terrain = createTerrain({ scene, grade, roads, quality: tier });
@@ -95,6 +115,7 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
   }
   /** Rebuild trees (and the decals that mirror them) for a new town centre. */
   function regrowForest() {
+    warmPending = true;
     trees.dispose();
     decals.dispose();
     trees = createTrees(ctx);
@@ -107,15 +128,15 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
   }
 
   const picking = createPicking({ canvas, camera, buildings, people, ground });
-  const post = createPost(renderer);
+  const post = createPost(renderer, ctx);
   const focusNdc = new THREE.Vector3();
 
   const tuner = createAutoTuner();
   const frame = { time: 0, dt: 0, camera, target: rig.controls.target, distance: 100, tier: tierName };
   const statsState = { fps: 0, frameMs: 0, drawCalls: 0, triangles: 0, frames: 0, windowStart: 0, renderMs: 0 };
   // Smoothed CPU ms per stage, for stats().cpu.
-  const cpu = { grade: 0, roads: 0, buildings: 0, people: 0, trees: 0, decals: 0, particles: 0, props: 0, labels: 0, lights: 0, render: 0 };
-  const SYSTEM_NAMES = ['people', 'trees', 'decals', 'particles', 'props', 'labels'];
+  const cpu = { grade: 0, roads: 0, buildings: 0, people: 0, trees: 0, decals: 0, particles: 0, props: 0, decor: 0, labels: 0, lights: 0, render: 0 };
+  const SYSTEM_NAMES = ['people', 'trees', 'decals', 'particles', 'props', 'decor', 'labels'];
   let mark = 0;
   const lap = (key) => {
     const now = performance.now();
@@ -140,6 +161,7 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
   };
   reducedQuery?.addEventListener?.('change', syncReduced);
   syncReduced();
+  let warmPending = true; // compile every material once the town is built
   let footVersion = -1; // buildings.version() last rasterised into the road mask
   const homePoint = { x: -20, z: 4 };
 
@@ -158,10 +180,11 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
   }
 
   function applyQuality() {
+    tierName = effectiveTier(qualityMode, autoTier, power);
     tier = { ...TIERS[tierName] };
     ctx.quality = tier;
     frame.tier = tierName;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, tier.pixelRatio));
+    renderer.setPixelRatio(pixelRatioFor(window.devicePixelRatio, tier, power));
     lights.applyQuality(tier);
     terrain.applyQuality(tier);
     water.applyQuality(tier);
@@ -179,22 +202,26 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
     rig.resize(w, h);
     forceFrame = true;
   }
-  // Low battery (where the Battery API exists): discharging below 20 % forces
-  // the low tier in auto mode and caps drawing at 30 Hz.
-  let lowBattery = false;
-  navigator.getBattery?.().then((battery) => {
-    const check = () => {
-      const low = !battery.charging && battery.level < 0.2;
-      if (low === lowBattery) return;
-      lowBattery = low;
-      if (qualityMode === 'auto') {
-        tierName = low ? 'low' : guessTier(renderer.getContext());
-        applyQuality();
-      }
-    };
-    battery.addEventListener('levelchange', check);
-    battery.addEventListener('chargingchange', check);
-    check();
+  /**
+   * Recompute the power state (Battery saver setting + battery). Saving draws
+   * at 30 Hz while watching, at most 1.25x pixels and, in Auto detail, one
+   * tier lower; unplugged below 20 % always saves and forces Low (pacing.js).
+   */
+  function syncPower() {
+    const next = powerState(saverMode, battery);
+    const changed = next.saving !== power.saving || next.lowBattery !== power.lowBattery;
+    const known = next.batteryKnown !== power.batteryKnown || next.chosen !== power.chosen || next.unplugged !== power.unplugged;
+    power = next;
+    if (changed) applyQuality();
+    if (changed || known) for (const fn of powerListeners) fn({ ...power, mode: saverMode });
+  }
+  // The Battery API exists in Chromium only; elsewhere battery stays null and
+  // 'On battery' never engages.
+  navigator.getBattery?.().then((b) => {
+    const read = () => { battery = { charging: b.charging, level: b.level }; syncPower(); };
+    b.addEventListener('levelchange', read);
+    b.addEventListener('chargingchange', read);
+    read();
   }).catch(() => {});
 
   const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(resize) : null;
@@ -202,27 +229,39 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
   applyQuality();
   rig.home();
 
-  /** Decide whether this animation frame should draw (battery rules). */
+  /** Decide whether this animation frame should draw (pacing.js, §4.8). */
   function wantFrame(view, time, moved) {
-    paced = false;
-    if (forceFrame || moved || rig.isTweening()) return true;
-    const since = time - lastRender;
     const yearT = view?.time?.yearT ?? 0;
-    const paused = simSpeed !== null ? simSpeed === 0 : lastYearT !== null && yearT === lastYearT;
-    const idleFor = (performance.now() - rig.lastInput()) / 1000;
-    paced = true;
-    if (paused && idleFor > 2) return since >= 1.0; // ambient only, once a second
-    if (idleFor > 20 && (simSpeed ?? 1) <= 1) return since >= 1 / 30 - 0.002; // idle cap at 1x
-    if (lowBattery) return since >= 1 / 30 - 0.002;
-    paced = false;
-    return since >= 1 / tier.maxFps - 0.002;
+    const p = pace({
+      forced: forceFrame || moved || rig.isTweening(),
+      paused: simSpeed !== null ? simSpeed === 0 : lastYearT !== null && yearT === lastYearT,
+      idleFor: (performance.now() - rig.lastInput()) / 1000,
+      saving: power.saving,
+      maxFps: tier.maxFps,
+      refreshHz: refresh.hz(),
+    });
+    paced = p.paced;
+    return time - lastRender >= p.interval;
+  }
+
+  // frameDue's answer for one animation frame, reused by update at that time.
+  const due = { time: -1, draw: false };
+  const refresh = createRefreshMeter();
+  /** Run the camera for this animation frame and decide whether it draws. */
+  function decide(time, dt) {
+    if (due.time === time) return due.draw;
+    refresh.sample(dt * 1000);
+    const moved = rig.update(dt);
+    due.time = time;
+    due.draw = wantFrame(lastView, time, moved);
+    return due.draw;
   }
 
   function update(view, time, dt) {
     if (disposed) return;
     const t0 = performance.now();
     lastView = view;
-    if (terrainSeed() !== builtSeed) rebuildTerrain();
+    if (terrainKey() !== builtSeed) rebuildTerrain();
     if (!homed && view?.buildings?.length) {
       homed = true;
       Object.assign(homePoint, townCentre(view.buildings));
@@ -235,8 +274,7 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
       }
       rig.home(homePoint.x, homePoint.z);
     }
-    const moved = rig.update(dt);
-    if (!wantFrame(view, time, moved)) {
+    if (!decide(time, dt)) {
       lastYearT = view?.time?.yearT ?? lastYearT;
       return;
     }
@@ -279,7 +317,23 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
 
     renderer.info.reset();
     water.setEmbankments(view?.embankments);
+    // The mirror render draws the trees' far level only (one call per species).
+    trees.setReflectionPass?.(true);
+    // The mirror is drawn unlit, as before, but with the same lights in view
+    // (at zero): a different light set per pass made three.js re-derive every
+    // material's program twice a frame.
+    const hemiI = lights.hemi.intensity, sunI = lights.sun.intensity;
+    lights.hemi.intensity = 0;
+    lights.sun.intensity = 0;
+    // A shadow refresh waits for the main pass: drawn from the mirror camera
+    // it would leave out everything not on the reflection layer.
+    const shadowDue = renderer.shadowMap.needsUpdate;
+    renderer.shadowMap.needsUpdate = false;
     water.beforeRender(camera);
+    renderer.shadowMap.needsUpdate = shadowDue;
+    lights.hemi.intensity = hemiI;
+    lights.sun.intensity = sunI;
+    trees.setReflectionPass?.(false);
     if (tier.post) {
       // Keep the tilt-shift focus band on the view target, wherever the UI
       // insets have moved it on screen.
@@ -287,6 +341,12 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
       post.render(scene, camera, time, THREE.MathUtils.clamp(focusNdc.y * 0.5 + 0.5, 0.25, 0.75));
     } else {
       renderer.render(scene, camera);
+    }
+    // Warm the shaders of things not drawn yet (stars, night and seasonal
+    // meshes), so their first appearance does not stall a frame compiling.
+    if (warmPending && view?.buildings?.length) {
+      warmPending = false;
+      (tier.post ? post.warm(scene, camera) : renderer.compileAsync(scene, camera)).catch(() => {});
     }
     lap('render');
 
@@ -301,9 +361,9 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
       statsState.windowStart = time;
     }
     // Auto tier: measure the real animation-frame interval, only at full rate.
-    if (qualityMode === 'auto' && !paced) {
-      const next = tuner.sample(dt * 1000, tierName);
-      if (next && !lowBattery) { tierName = next; applyQuality(); }
+    if (qualityMode === 'auto' && !paced && !power.saving) {
+      const next = tuner.sample(dt * 1000, autoTier);
+      if (next) { autoTier = next; applyQuality(); }
     }
   }
 
@@ -311,16 +371,20 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
     qualityMode = mode;
     saveQualityOverride(mode);
     if (mode === 'auto') {
-      tierName = guessTier(renderer.getContext());
+      autoTier = guessTier(renderer.getContext());
       tuner.reset();
-    } else {
-      tierName = mode;
     }
     applyQuality();
   }
 
   return {
     update,
+    /**
+     * Call before update(view, time, dt) with the same time and dt: false
+     * means this animation frame will not draw, so the caller may skip its
+     * sim step and view sync (update then returns early).
+     */
+    frameDue: decide,
     setQuality,
     quality: () => tierName,
     setDayCycle(mode) {
@@ -330,6 +394,16 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
       forceFrame = true;
     },
     dayCycle: () => dayCycle,
+    /**
+     * People shadows: 'blob' (default; a soft sun-aware blob, no shadow-map
+     * casting) or 'full' (walkers near the view also cast into the shadow
+     * map, on tiers that have one; the blob stays as a contact touch).
+     */
+    setPeopleShadows(mode) {
+      people.setShadowMode(mode);
+      forceFrame = true;
+    },
+    peopleShadows: () => people.shadowMode(),
     setOverlay(mode) {
       grade.uniforms.uOverlay.value = OVERLAYS[mode] ?? 0;
       forceFrame = true;
@@ -393,12 +467,25 @@ export function createWorld(canvas, { quality = 'auto' } = {}) {
         drawCalls: statsState.drawCalls,
         triangles: statsState.triangles,
         tier: tierName,
+        saving: power.saving,
+        refreshHz: refresh.hz(),
+        pixelRatio: renderer.getPixelRatio(),
         buildings: buildings.lots.size,
         instances: buildings.instanceCount(),
         people: people.count?.() ?? 0,
         cpu: Object.fromEntries(Object.entries(cpu).map(([k, v]) => [k, Math.round(v * 100) / 100])),
       };
     },
+    /** Battery saver: 'off' | 'battery' (when unplugged) | 'always'. */
+    setBatterySaver(mode) {
+      saverMode = SAVER_MODES.includes(mode) ? mode : 'off';
+      syncPower();
+      forceFrame = true;
+    },
+    /** {mode, saving, chosen, lowBattery, unplugged, batteryKnown}. */
+    power: () => ({ ...power, mode: saverMode }),
+    /** cb(power) whenever saving, low battery or what is known changes. */
+    onPowerChange(cb) { powerListeners.add(cb); return () => powerListeners.delete(cb); },
     /** Tell the renderer the sim speed (0 = paused) for battery pacing. */
     setSimSpeed(speed) {
       if (speed !== simSpeed) forceFrame = true;

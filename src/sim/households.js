@@ -12,6 +12,7 @@ import {capacityOf, canUpgrade, costOf, repairBuilding, noteRebuildWish} from '.
 import {HOME_TIERS, TRADES, makeHousehold, byId, emitChronicle} from './state.js';
 import {pay, payBuilders, workersOf, flow} from './economy.js';
 import {priceLevel, clamp} from './pressures.js';
+import {districtLooks} from './aesthetics.js';
 
 const NEWCOMER_YEARS = 10;
 const SPLIT_SIZE = 6;
@@ -119,8 +120,10 @@ function housingMarket(state) {
     let best = null, bestScore = -Infinity;
     for (const v of free) {
       if (v.free < Math.min(h.size, 3)) continue;
+      // Those who can choose pick the nicer streets (looks 0..1, 0.5 plain).
+      const looks = ((v.home.looks ?? 0.5) - 0.5) * (h.savings >= 100 ? 8 : 3);
       const score = v.free + (v.home.districtId === h.districtId ? 4 : 0) + (h.preferCentre != null && v.home.centreId === h.preferCentre ? 6 : 0) -
-        (v.home.tier ?? 1) * (h.savings < 100 ? 1 : 0);
+        (v.home.tier ?? 1) * (h.savings < 100 ? 1 : 0) + looks;
       if (score > bestScore) { best = v; bestScore = score; }
     }
     if (!best) continue;
@@ -369,17 +372,20 @@ function stayOrMove(state, rand) {
   for (const h of state.households) {
     const hunger = hungerOf(h);
     const rentBurden = h.income > 0 ? clamp(h.rent / h.income, 0, 2) : h.rent > 0 ? 1 : 0;
+    // An eyesore next door: those with savings look for a nicer street.
+    const home = h.homeId != null ? byId(state, 'buildings', h.homeId) : null;
+    const shabby = home?.looks != null ? clamp((0.45 - home.looks) / 0.25, 0, 1) : 0;
     const prior = {
       stay: 1,
-      move_within: h.homeId == null || rentBurden > 0.4 ? 0.15 : 0.02,
-      emigrate: 0.008 + 0.25 * hunger + 0.04 * P.unrest + (I.wellbeing < 40 ? 0.03 : 0) + 0.02 * (state.migrationBias < 0 ? -state.migrationBias : 0),
+      move_within: (h.homeId == null || rentBurden > 0.4 ? 0.15 : 0.02) + (h.savings > 100 ? 0.06 : 0.02) * shabby,
+      emigrate: 0.008 + 0.25 * hunger + 0.04 * P.unrest + (I.wellbeing < 40 ? 0.03 : 0) + 0.02 * (state.migrationBias < 0 ? -state.migrationBias : 0) + 0.006 * shabby,
       bring_kin: I.wellbeing > 60 && homesFree > 6 && I.jobBalance > -0.1 ? 0.012 : 0.003,
       move_to_centre: 0,
     };
     // Another town in the valley with better work draws those who lack it here.
     const better = centres.length > 1 ? betterCentre(centres, h) : null;
     if (better) prior.move_to_centre = 0.01 + 0.15 * better.gain;
-    const facts = {emigrate: h.savings < h.rent ? 0.2 : 1};
+    const facts = {emigrate: h.savings < h.rent ? 0.2 : 1, move_within: 1 + 1.5 * shabby};
     const mask = ['stay', 'emigrate'];
     if (homesFree > 0) mask.push('move_within', 'bring_kin');
     if (better) mask.push('move_to_centre');
@@ -519,7 +525,7 @@ function settleDistrict(state, rand, free, migrant = 'poor_family') {
   for (const id of candidates) {
     const d = districts.find((x) => x.id === id);
     const work = centreWorkPull(state, d?.centreId);
-    prior[`d${id}`] = (1 + (free[id] ?? 0)) * work;
+    prior[`d${id}`] = (1 + (free[id] ?? 0)) * work * (0.6 + 0.8 * districtLooks(state, id));
   }
   const pick = decide(state, 'where_to_settle', {type: 'migrant', record: {migrant, candidates}}, {prior, rng: rand});
   return Number(pick?.slice(1)) || candidates[0];

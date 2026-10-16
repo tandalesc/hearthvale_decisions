@@ -51,8 +51,9 @@ export function restore(raw, {services = {}} = {}) {
   validate(data);
   // The valley first: everything after this reads the terrain. Saves from before
   // seeded valleys have no terrainSeed and keep the classic valley.
-  setTerrainSeed('terrainSeed' in data ? data.terrainSeed : null);
-  const state = {...emptyState(data.seed), terrainSeed: data.terrainSeed ?? null, ...data};
+  // Saves from before water bodies have no terrainVersion and keep their valley (1).
+  setTerrainSeed('terrainSeed' in data ? data.terrainSeed : null, data.terrainVersion ?? 1, data.terrainArchetype ?? null);
+  const state = {...emptyState(data.seed), terrainSeed: data.terrainSeed ?? null, terrainVersion: data.terrainVersion ?? 1, terrainArchetype: data.terrainArchetype ?? null, ...data};
   runPhase('restore', state, {services});
   return state;
 }

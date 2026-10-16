@@ -3,9 +3,9 @@
 // src/sim/index.js registers it with registerSystem(governanceSystem).
 //
 //   tick     scheduler: due questions out, answers in (sorted by key)
-//   month    modifiers -> rules -> upkeep -> bodies -> events -> docket expiry
+//   month    modifiers -> rules -> upkeep -> bodies -> budgets -> events -> docket expiry
 //   quarter  docket session
-//   year     factions -> bodies (purses, patience, power) -> yearly transfers
+//   year     factions -> approval -> bodies (purses, patience, power) -> budgets -> yearly transfers
 //   yearEnd  chronicle line (and the end page at year 150)
 
 import {monthIndex} from './clock.js';
@@ -17,16 +17,19 @@ import {
   POLICIES, CATEGORIES, policiesMonthly, policyModifiers, yearlyUpkeep, weightsFor, costScale, adoptPolicy, fiscalBase,
 } from './policies.js';
 import {
-  INSTITUTIONS, TEMPLATES, METRICS, initGovernance, institutionsMonthly, bodyColor, bodySeat, updateAutonomy, unionCard, hallCard, institutionsYearly, setDelegated, dissolveBody, setStandingOrder,
+  INSTITUTIONS, TEMPLATES, METRICS, initGovernance, institutionsMonthly, bodyColor, bodySeat, updateAutonomy, unionCard, hallCard, institutionsYearly, dissolveBody,
   eligibleTemplates, draftCard, bodyOf, markDrafted,
 } from './institutions.js';
-import {docketMonthly, docketQuarterly, rule, addCard, setCardProse} from './docket.js';
+import {docketMonthly, docketQuarterly, rule, addCard, setCardProse, answerBudget} from './docket.js';
+import {initBudgets, budgetsMonthly, budgetsYearly, strikeBudgetLine, approveAllBudgets, trimAllToFit} from './budgets.js';
+import {initAdvisers, advisersMonthly, advisersYearly, hireAdviser, dismissAdviser, setAdviserMode, redrawSlate, letStand} from './advisors.js';
 import {EVENTS, eventsMonthly, eventModifiers} from './events.js';
-import {initFactions, factionsYearly, countFactions, addFactionStory} from './factions.js';
+import {initFactions, factionsYearly, countFactions, addFactionStory, nudgeMood} from './factions.js';
 import {addStory} from './households.js';
 import {chronicleYearly, addChronicle, setChronicleProse, setSummaryProse} from './chronicle.js';
 import {schedulerTick, distribution, resetScheduler} from './decisions/scheduler.js';
 import {updateBands} from './decisions/slices.js';
+import {initApproval, approvalYearly} from './approval.js';
 
 // Player-facing catalogues are linted once at load in development builds.
 devLint('rules', {CATEGORIES, POLICIES});
@@ -86,6 +89,8 @@ function month(state) {
   }
   for (const a of state.events.active) if (a.mods?.unrestDrift) delta(state, 'unrest', a.mods.unrestDrift, `event:${a.event}`);
   institutionsMonthly(state);
+  budgetsMonthly(state);
+  advisersMonthly(state);
   eventsMonthly(state);
   docketMonthly(state);
 }
@@ -143,7 +148,10 @@ function year(state) {
   if (n >= 2) addChronicle(state, `Rents and land sales pushed ${n} old businesses out of the centre last year.`, 'line', {displaced: n});
   countFactions(state);
   factionsYearly(state);
+  approvalYearly(state);
   institutionsYearly(state);
+  budgetsYearly(state);
+  advisersYearly(state);
   updateAutonomy(state);
   unionCard(state);
   hallCard(state);
@@ -187,12 +195,15 @@ function yearEnd(state) {
 
 function init(state) {
   initGovernance(state);
+  initBudgets(state);
+  initAdvisers(state);
   initFactions(state);
   updateBands(state);
   state.governance.yearStart = null;
   writeModifiers(state);
   // The hamlet starts with one card on the table, so there is something to rule on.
   if (state.time.year === 0 && !state.docket.length) firstCard(state);
+  initApproval(state);
 }
 
 function firstCard(state) {
@@ -210,9 +221,12 @@ function firstCard(state) {
 
 function restore(state) {
   initGovernance(state);
+  initBudgets(state);
+  initAdvisers(state);
   initFactions(state);
   resetScheduler(state);
   writeModifiers(state);
+  initApproval(state);
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +246,7 @@ export function noteDisplaced(state, info = {}) {
   for (const y of Object.keys(table)) if (state.time.year - Number(y) > 10) delete table[y];
   setTag(state, DISPLACED_TAG[kind] ?? 'shop-displaced');
   const trade = info.trade ?? TRADE_OF[kind] ?? 'trade';
-  for (const f of state.factions) if (f.trades?.includes(trade)) f.mood = Math.max(0, f.mood - 0.02);
+  for (const f of state.factions) if (f.trades?.includes(trade)) nudgeMood(f, Math.max(0, f.mood - 0.02), 'displaced');
   delta(state, 'unrest', 0.003, `displaced:${kind}`);
   const text = info.reason === 'sale' ? 'sold up and moved out' : 'priced out of the centre';
   for (const id of (info.households ?? []).slice(0, 12)) {
@@ -264,10 +278,16 @@ export const governanceSystem = {
     return Object.keys(w).length ? w : null;
   },
   actions: {
-    rule,
-    setDelegated,
+    rule: (state, cardId, optionKey) => rule(state, cardId, optionKey),
+    strikeBudgetLine,
+    hireAdviser,
+    dismissAdviser,
+    setAdviserMode,
+    redrawSlate,
+    letStand: (state, cardId) => letStand(state, cardId, {rule, answerBudget}),
+    approveAllBudgets: (state) => approveAllBudgets(state, rule),
+    trimAllToFit: (state) => trimAllToFit(state, (card, choice, opts) => answerBudget(state, card.id, choice, opts)),
     dissolveBody,
-    setStandingOrder,
     setCardProse,
     setChronicleProse,
     setSummaryProse,

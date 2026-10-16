@@ -10,24 +10,29 @@ test('a hamlet starts minimal and has no build toolbar', async ({page}) => {
   await expect(page.locator('.metric[data-key="people"]')).toBeVisible();
   await expect(page.locator('.metric[data-key="food"]')).toBeVisible();
   await expect(page.locator('.metric[data-key="coin"]')).toBeVisible();
-  await expect(page.locator('.binder .tabstrip')).toHaveCount(0);
   await expect(page.locator('.dock .dock-btn')).toHaveCount(1);
-  await expect(page.locator('.rail .rail-btn:not([data-view="fullscreen"]):not([data-view="home"])')).toHaveCount(1);
-  await expect(page.locator('.binder .card:not(.is-next)')).toHaveCount(1);
+  await expect(page.locator('.rail .rail-btn')).toHaveCount(1);
   await expect(page.locator('[data-tool], .build-bar')).toHaveCount(0);
-  await expect(page.locator('.feed .feed-line').first()).toBeVisible();
+  // The Council opens with the one waiting card.
+  await page.keyboard.press('c');
+  await expect(page.locator('.dk .card:not(.is-next)')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.dk')).toBeHidden();
   expect(errors).toEqual([]);
 });
 
 test('ruling a card folds it away, spends coin and writes the chronicle', async ({page}) => {
   await open(page, {fixture: 'hamlet', stub: true});
   const before = await hv(page, () => window.hearthvale.state().stats?.coin ?? window.hearthvale.state().treasury);
-  const card = page.locator('.binder .card:not(.is-next)').first();
+  await hv(page, () => window.hearthvale.app.openDocket());
+  await settle(page);
+  const card = page.locator('.dk .card:not(.is-next)').first();
   const title = await card.locator('.card-title').textContent();
   await card.locator('.option.is-primary').click();
-  await expect(page.locator('.binder .card')).toHaveCount(0);
-  await expect(page.locator('.binder .docket .empty')).toBeVisible();
-  await expect(page.locator('.feed .feed-line').first()).toContainText(title.trim());
+  await expect(page.locator('.dk .card')).toHaveCount(0);
+  await expect(page.locator('.dk .docket .empty')).toBeVisible();
+  // The ruling passes through the notice stack as a happening.
+  await expect(page.locator('.notice-minor', {hasText: title.trim()})).toBeAttached();
   const after = await hv(page, () => window.hearthvale.state().stats?.coin ?? window.hearthvale.state().treasury);
   expect(after).toBeLessThan(before);
 });
@@ -43,11 +48,10 @@ test('the interface grows: new surfaces arrive with a reveal, a nudge and an exp
   await expect(page.locator('.rail [data-view="rules"]')).toHaveClass(/is-new/);
   await expect(page.locator('.rail [data-view="people"] .dot')).toBeVisible();
   await expect(page.locator('.metric[data-key="wellbeing"]')).toBeVisible();
-  await expect(page.locator('.nudge')).toBeVisible();
-  // A second body adds its crest to the dock, marked as new.
-  await expect(page.locator('.dock .dock-btn')).toHaveCount(2);
-  await expect(page.locator('.dock .dock-list .dock-btn').locator('.dot:not([hidden]), .badge:not(:empty)')).toBeVisible();
-  await expect(page.locator('.banner').first()).toBeVisible();
+  await expect(page.locator('.notice-major').first()).toBeVisible();
+  // A second body joins the Council: its crest is marked as new.
+  await expect(page.locator('.dock .dock-btn')).toHaveCount(1);
+  await expect(page.locator('.dock [data-body="council"]').locator('.dot:not([hidden]), .badge:not(:empty)')).toBeVisible();
   // Opening the Rule Book shows its one-time explainer, and dismissing it sticks.
   await page.locator('.rail [data-view="rules"]').click();
   await expect(page.locator('.drawer .explainer')).toContainText('Rule Book');
@@ -57,15 +61,21 @@ test('the interface grows: new surfaces arrive with a reveal, a nudge and an exp
   await expect(page.locator('.rail [data-view="rules"] .dot')).toBeHidden();
 });
 
-test('a late-game city shows many bodies, a long Rule Book, tensions, debates and delegation', async ({page}) => {
+test('a late-game city shows many bodies, a long Rule Book, tensions and debates', async ({page}) => {
   const errors = await open(page, {fixture: 'city', stub: true});
-  expect(await page.locator('.dock .dock-btn').count()).toBeGreaterThanOrEqual(8);
-  // A crowded dock sinks quiet bodies below busy ones.
-  const quiet = await hv(page, () => [...document.querySelectorAll('.dock-list .dock-btn')].map((b) => b.classList.contains('is-quiet')));
-  expect(quiet.indexOf(true)).toBeGreaterThan(0);
-  expect(quiet.slice(quiet.indexOf(true))).not.toContain(false);
-  await expect(page.locator('.binder .debate').first()).toBeVisible();
-  await expect(page.locator('.binder .card:not(.is-next) .chip.up').first()).toBeVisible();
+  await hv(page, () => window.hearthvale.app.openDocket());
+  await settle(page);
+  expect(await page.locator('.dk-index [data-page]').count()).toBeGreaterThanOrEqual(8);
+  // A crowded list puts busy bodies (with requests) above quiet ones.
+  const counted = await hv(page, () => [...document.querySelectorAll('.dk-index [data-page]:not([data-page="moot"])')].map((b) => Boolean(b.querySelector('.dk-filter-count'))));
+  expect(counted.slice(counted.indexOf(false))).not.toContain(true);
+  await expect(page.locator('.dk .card:not(.is-next) .chip.up').first()).toBeVisible();
+  // Debates show the town's lean per side, not a for-and-against strip.
+  await page.locator('.dk .card.is-next[data-kind="debate"]').first().click();
+  await expect(page.locator('.dk .card:not(.is-next):not([data-leaving]) .opinion .op-row').first()).toBeVisible();
+  await expect(page.locator('.dk .debate')).toHaveCount(0);
+  await page.locator('.dk-close').click();
+  await expect(page.locator('.dk')).toBeHidden();
 
   await page.locator('.rail [data-view="rules"]').click();
   expect(await page.locator('.drawer .rule').count()).toBeGreaterThanOrEqual(20);
@@ -80,43 +90,78 @@ test('a late-game city shows many bodies, a long Rule Book, tensions, debates an
   await page.locator('.rail [data-view="people"]').click();
   expect(await page.locator('.drawer .faction').count()).toBeGreaterThanOrEqual(5);
 
-  await page.locator('.dock [data-body="agri-council"]').click();
-  await expect(page.locator('.binder .metric-row')).toHaveCount(4);
-  await expect(page.locator('.binder .metric-row svg.spark').first()).toBeVisible();
-  const sw = page.locator('.binder .delegation .switch');
-  await expect(sw).toHaveAttribute('aria-checked', 'false');
-  await sw.click();
-  await expect(page.locator('.binder .view-head .chip')).toContainText('Runs its own affairs');
-  expect(await hv(page, () => window.hearthvale.state().bodies?.find((b) => b.id === 'agri-council')?.delegated)).toBe(true);
+  await hv(page, () => window.hearthvale.app.openView('agri-council'));
+  await expect(page.locator('.dk-page .metric-row')).toHaveCount(4);
+  await expect(page.locator('.dk-page .metric-row svg.spark').first()).toBeVisible();
+  // Delegation and standing orders wait for the advisors' work.
+  await expect(page.locator('.dk-page .delegation, .dk-page .orders')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
 test('desktop stack: a folded card comes forward when chosen', async ({page}) => {
   await open(page, {fixture: 'town', stub: true});
-  const next = page.locator('.binder .card.is-next').first();
+  await hv(page, () => window.hearthvale.app.openDocket());
+  await settle(page);
+  const next = page.locator('.dk .card.is-next').first();
   const title = (await next.locator('.next-title').textContent()).trim();
   await next.click();
-  await expect(page.locator('.binder .card:not(.is-next):not([data-leaving]) .card-title')).toHaveText(title);
-  await expect(page.locator('.binder .card')).toHaveCount(3);
-  await page.locator('.binder .card:not(.is-next) .details-btn').click().catch(() => {});
+  await expect(page.locator('.dk .card:not(.is-next):not([data-leaving]) .card-title')).toHaveText(title);
+  await expect(page.locator('.dk .card')).toHaveCount(3);
+  await page.locator('.dk .card:not(.is-next) .details-btn').click().catch(() => {});
 });
 
-test('phone: the sheet peeks, opens to the docket with full-width options, and pages by swipe or buttons', async ({page}) => {
+test('cards show a town feeling bar and verdict; tapping it lists the factions', async ({page}) => {
+  const errors = await open(page, {fixture: 'town', stub: true});
+  await hv(page, () => window.hearthvale.app.openDocket());
+  await settle(page);
+  const open1 = page.locator('.dk .card:not(.is-next):not([data-leaving])');
+  const row = open1.locator('.opinion .op-row').first();
+  await expect(row).toBeVisible();
+  await expect(row.locator('.op-verdict')).toHaveText(/^(Popular|Divisive|Unpopular|Indifferent)$/);
+  await expect(row.locator('.op-bar .op-for')).toHaveCount(1);
+  await expect(open1.locator('.op-detail')).toBeHidden();
+  await open1.locator('.op-head').click();
+  await expect(open1.locator('.op-detail')).toBeVisible();
+  expect(await open1.locator('.op-detail li').count()).toBeGreaterThanOrEqual(3);
+  await expect(open1.locator('.op-head')).toHaveAttribute('aria-expanded', 'true');
+  // A card whose factions have not answered yet shows a muted forming state.
+  await page.locator('.dk .card.is-next[data-kind="petition"]').click();
+  await expect(open1.locator('.op-row')).toHaveAttribute('data-verdict', 'forming');
+  await expect(open1.locator('.op-verdict')).toHaveText('Opinion forming…');
+  expect(errors).toEqual([]);
+});
+
+test('real sim: proposals read the town from the factions\' stances (offline fallback)', async ({page}) => {
+  const errors = await open(page, {fixture: 'city'});
+  test.skip(await hv(page, () => window.hearthvale.sim) !== 'real', 'real sim not present');
+  await hv(page, () => window.hearthvale.app.openDocket());
+  await settle(page);
+  const card = page.locator('.dk .card:not(.is-next):not([data-leaving])').first();
+  await expect(card.locator('.opinion .op-row').first()).toBeVisible();
+  await expect(card.locator('.op-verdict').first()).toHaveText(/^(Popular|Divisive|Unpopular|Indifferent|Opinion forming…)$/);
+  await card.locator('.op-head').click();
+  expect(await card.locator('.op-detail li').count()).toBeGreaterThanOrEqual(3);
+  expect(errors).toEqual([]);
+});
+
+test('phone: the sheet peeks, opens to the Council with full-width options, and pages by swipe or buttons', async ({page}) => {
   await page.setViewportSize({width: 390, height: 844});
   await open(page, {fixture: 'city', stub: true});
   await expect(page.locator('.sheet-peek .seg')).toBeInViewport();
-  await page.locator('.sheet-nav [data-view="moot"]').click();
+  // The Council opens tall in the sheet, the time controls above it: one card at a time, paged.
+  await page.locator('.sheet-nav [data-view="council"]').click();
   await settle(page);
   expect(await hv(page, () => window.hearthvale.app.sheet.index)).toBe(2);
-  await expect(page.locator('.sheet .pager .eyebrow')).toHaveText('1 of 6');
-  await page.locator('.sheet .pager .next').click();
-  await expect(page.locator('.sheet .pager .eyebrow')).toHaveText('2 of 6');
-  const option = page.locator('.sheet .card:not(.is-next) .option').first();
+  await expect(page.locator('.sheet-peek .seg')).toBeInViewport();
+  await expect(page.locator('.dk .pager .eyebrow')).toHaveText('1 of 6');
+  await page.locator('.dk .pager .next').click();
+  await expect(page.locator('.dk .pager .eyebrow')).toHaveText('2 of 6');
+  const option = page.locator('.dk .card:not(.is-next) .option').first();
   await option.scrollIntoViewIfNeeded();
   const box = await option.boundingBox();
   expect(box.width).toBeGreaterThan(390 - 80);
   expect(box.height).toBeGreaterThanOrEqual(52);
-  // Drag the sheet down by its head: it snaps back to the peek.
+  // Drag the raised sheet down by its head: it snaps back to the peek.
   const head = await page.locator('.sheet-grip').boundingBox();
   await page.mouse.move(head.x + head.width / 2, head.y + 8);
   await page.mouse.down();
@@ -138,7 +183,7 @@ test('title cards hold the town at 3×, banners do not', async ({page}) => {
   await expect(page.locator('.moment-layer h2')).toContainText('borough');
   // Era and body moments queue; each needs a Continue.
   for (let i = 0; i < 4 && await page.locator('.moment-layer:not(.is-leaving)').count(); i++) {
-    await page.locator('.moment-layer:not(.is-leaving) .btn').click();
+    await page.locator('.moment-layer:not(.is-leaving) .moment-go').click();
     await expect(page.locator('.moment-layer.is-leaving')).toHaveCount(0);
   }
   await expect(page.locator('.moment-layer')).toHaveCount(0);
@@ -146,10 +191,10 @@ test('title cards hold the town at 3×, banners do not', async ({page}) => {
   await hv(page, () => { window.hearthvale.setSpeed(1); window.hearthvale.dev.foundBody(); });
   await settle(page);
   await expect(page.locator('.moment-layer')).toHaveCount(0);
-  await expect(page.locator('.banner')).toBeVisible();
+  await expect(page.locator('.notice-major').first()).toBeVisible();
 });
 
-test('keys: space pauses, digits set speed, C tucks the docket away, Escape closes', async ({page}) => {
+test('keys: space pauses, digits set speed, C opens and closes the Council, Escape closes', async ({page}) => {
   await open(page, {fixture: 'town', paused: false, stub: true});
   await page.locator('.brand').click();
   await page.keyboard.press('Space');
@@ -157,33 +202,58 @@ test('keys: space pauses, digits set speed, C tucks the docket away, Escape clos
   await page.keyboard.press('2');
   expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
   await page.keyboard.press('3');
-  expect(await hv(page, () => window.hearthvale.speed())).toBe(8);
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(5);
   await page.keyboard.press('Space');
   await page.keyboard.press('Space');
-  expect(await hv(page, () => window.hearthvale.speed())).toBe(8);
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(5);
   await page.locator('.rail [data-view="chronicle"]').click();
   await expect(page.locator('.drawer')).toHaveClass(/is-open/);
   await page.keyboard.press('Escape');
   await expect(page.locator('.drawer')).not.toHaveClass(/is-open/);
-  await page.locator('.dock [data-body="agri-council"]').click();
   await page.keyboard.press('c');
-  await expect(page.locator('.ui')).toHaveClass(/docked/);
-  await expect(page.locator('.dock')).toBeVisible();
-  expect(await hv(page, () => localStorage.getItem('hearthvale-ui'))).toContain('"dock":"collapsed"');
+  await expect(page.locator('.dk')).toBeVisible();
   await page.keyboard.press('c');
-  await expect(page.locator('.ui')).not.toHaveClass(/docked/);
+  await expect(page.locator('.dk')).toBeHidden();
+  await page.keyboard.press('d');
+  await expect(page.locator('.dk')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.dk')).toBeHidden();
+});
+
+test('one speed button steps 1× → 3× → 5× → 1×, beside pause', async ({page}) => {
+  await open(page, {fixture: 'town', paused: false, stub: true});
+  const seg = page.locator('.timestrip .seg');
+  await expect(seg.locator('button')).toHaveCount(2);
+  const step = seg.locator('.speed');
+  await expect(step).toHaveText('1×');
+  await step.click();
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
+  await expect(step).toHaveText('3×');
+  await step.click();
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(5);
+  await step.click();
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(1);
+  // Paused, it shows the speed it will resume at, and a click starts the town again.
+  await seg.locator('.pause').click();
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(0);
+  await expect(step).toHaveText('1×');
+  await step.click();
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
 });
 
 test('settings: display, sound, pacing and model status persist', async ({page}) => {
   const errors = await open(page, {fixture: 'town', stub: true});
   await page.locator('.settings-btn').click();
   await expect(page.locator('.settings')).toBeVisible();
+  await page.locator('.settings [role="tab"][data-tab="display"]').click();
   await page.locator('[data-pref="theme"] [data-value="night"]').click();
   expect(await hv(page, () => document.documentElement.dataset.theme)).toBe('night');
+  await page.locator('.settings [role="tab"][data-tab="access"]').click();
   await page.locator('[data-pref="motion"] [data-value="reduced"]').click();
   expect(await hv(page, () => document.documentElement.dataset.motion)).toBe('reduced');
   await page.locator('[data-pref="textSize"] [data-value="large"]').click();
   expect(await hv(page, () => document.documentElement.dataset.text)).toBe('large');
+  await page.locator('.settings [role="tab"][data-tab="model"]').click();
   await page.locator('[data-decision="mode"]').selectOption('manual');
   await page.locator('[data-decision="cap"]').fill('42');
   await page.locator('[data-decision="cap"]').dispatchEvent('change');
@@ -254,44 +324,94 @@ test('boots with the real renderer when it is present', async ({page}) => {
   const kind = await hv(page, () => window.hearthvale.renderer);
   console.log(`renderer: ${kind}, sim: ${await hv(page, () => window.hearthvale.sim)}`);
   await expect(page.locator('.topbar')).toBeVisible();
-  await expect(page.locator('.binder .card').first()).toBeVisible();
+  await expect(page.locator('.dock [data-body="council"]')).toBeVisible();
   // UI errors fail the test; renderer failures fall back to the simple map.
+  expect(errors.filter((e) => !/render/i.test(e))).toEqual([]);
+});
+
+test('real renderer: Battery saver lowers pixels and Auto detail, and draws only some frames', async ({page}) => {
+  test.setTimeout(150000);
+  await page.addInitScript(() => {
+    localStorage.removeItem('hearthvale-quality');
+    // An unplugged laptop at half charge, as Chrome's Battery API reports it.
+    Object.defineProperty(navigator, 'getBattery', {configurable: true, value: () => Promise.resolve({charging: false, level: 0.5, addEventListener() {}})});
+  });
+  const errors = await open(page, {fixture: 'town', renderer: null, stub: true, paused: false});
+  test.skip(await hv(page, () => window.hearthvale.renderer) !== 'real', 'real renderer not present');
+  const before = await hv(page, () => ({tier: window.hearthvale.world.quality(), ...window.hearthvale.world.power()}));
+  expect(before).toMatchObject({mode: 'off', saving: false, unplugged: true, batteryKnown: true});
+  // 'On battery' engages at once, with a quiet note.
+  await hv(page, () => window.hearthvale.world.setBatterySaver('battery'));
+  await expect(page.locator('.toast', {hasText: 'On battery'})).toBeVisible();
+  const down = {high: 'medium', medium: 'low', low: 'low'};
+  const after = await hv(page, () => ({tier: window.hearthvale.world.quality(), pixelRatio: window.hearthvale.world.internals.renderer.getPixelRatio(), ...window.hearthvale.world.power()}));
+  expect(after.saving).toBe(true);
+  expect(after.tier).toBe(down[before.tier]);
+  expect(after.pixelRatio).toBeLessThanOrEqual(1.25);
+  // Watching (no input for over a second): at most 30 drawn frames a second,
+  // and the loop skips its sim step and drawing on the other animation frames.
+  await page.waitForTimeout(1500);
+  const rate = await hv(page, () => new Promise((resolve) => {
+    const w = window.hearthvale.world;
+    const update = w.update;
+    let draws = 0, ticks = 0;
+    w.update = (...args) => { draws++; return update(...args); };
+    const t0 = performance.now();
+    const step = () => {
+      ticks++;
+      if (performance.now() - t0 < 2000) requestAnimationFrame(step);
+      else { w.update = update; resolve({draws: draws / 2, ticks: ticks / 2}); }
+    };
+    requestAnimationFrame(step);
+  }));
+  console.log(`saver: ${rate.draws} drawn / ${rate.ticks} animation frames a second`);
+  expect(rate.draws).toBeLessThanOrEqual(32);
+  if (rate.ticks > 45) expect(rate.draws).toBeLessThan(rate.ticks * 0.75);
+  await hv(page, () => window.hearthvale.world.setBatterySaver('off'));
+  expect(await hv(page, () => window.hearthvale.world.quality())).toBe(before.tier);
   expect(errors.filter((e) => !/render/i.test(e))).toEqual([]);
 });
 
 test('real sim: fixtures drive the docket, bodies and Rule Book, and rulings land', async ({page}) => {
   const errors = await open(page, {fixture: 'city'});
   test.skip(await hv(page, () => window.hearthvale.sim) !== 'real', 'real sim not present');
-  expect(await page.locator('.dock .dock-btn').count()).toBeGreaterThanOrEqual(4);
+  await hv(page, () => window.hearthvale.app.openCouncil());
+  expect(await page.locator('.dk-index [data-page]').count()).toBeGreaterThanOrEqual(4);
+  await hv(page, () => window.hearthvale.app.council.close());
   await page.locator('.rail [data-view="rules"]').click();
   expect(await page.locator('.drawer .rule').count()).toBeGreaterThanOrEqual(5);
   await page.keyboard.press('Escape');
-  const cards = page.locator('.binder .card:not(.is-next):not([data-leaving])');
+  await hv(page, () => window.hearthvale.app.openDocket());
+  await settle(page);
+  const cards = page.locator('.dk .card:not(.is-next):not([data-leaving])');
   // Bring forward a card the town can afford to rule on.
   for (let i = 0; i < 8 && await cards.count(); i++) {
     if (await cards.first().locator('.minor, .option:not([disabled])').count()) break;
     await expect(cards.first().locator('.stuck')).toBeVisible();
-    if (!await page.locator('.binder .card.is-next').count()) break;
-    await page.locator('.binder .card.is-next').first().click();
+    if (!await page.locator('.dk .card.is-next').count()) break;
+    await page.locator('.dk .card.is-next').first().click();
   }
   if (await cards.count() && await cards.first().locator('.minor, .option:not([disabled])').count()) {
-    const before = await page.locator('.binder .card').count();
-    const title = (await cards.first().locator('.card-title').textContent()).trim();
+    const before = await page.locator('.dk .card').count();
+    // Follow the card by id: two cards can share a title ("Which first?").
+    const label = await cards.first().getAttribute('aria-labelledby');
     const option = cards.first().locator('.minor, .option:not([disabled])').first();
     await option.click();
-    await expect.poll(async () => page.locator('.binder .card:not([data-leaving]) .card-title', {hasText: title}).count()).toBe(0);
-    expect(await page.locator('.binder .card:not([data-leaving])').count()).toBeLessThan(before);
+    await expect.poll(async () => page.locator(`.dk .card:not([data-leaving])[aria-labelledby="${label}"]`).count()).toBe(0);
+    expect(await page.locator('.dk .card:not([data-leaving])').count()).toBeLessThan(before);
   }
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.dk')).toBeHidden();
   await page.locator('.settings-btn').click();
   await expect(page.locator('.settings')).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test('real sim: a fresh town runs at 8× without UI errors', async ({page}) => {
+test('real sim: a fresh town runs at 5× without UI errors', async ({page}) => {
   test.setTimeout(90000);
-  await page.addInitScript(() => localStorage.setItem('hearthvale-ui', JSON.stringify({pauseOnSession: false, moments: 'never'})));
+  await page.addInitScript(() => localStorage.setItem('hearthvale-ui', JSON.stringify({moments: 'never'})));
   const errors = await open(page, {paused: false});
-  await hv(page, () => window.hearthvale.setSpeed(8));
+  await hv(page, () => window.hearthvale.setSpeed(5));
   // Poll rather than sleep: a busy machine gives the page few frames.
   await expect.poll(() => hv(page, () => window.hearthvale.state().time.month + window.hearthvale.state().time.year * 12), {timeout: 45000}).toBeGreaterThan(2);
   await hv(page, () => window.hearthvale.setSpeed(0));
@@ -301,38 +421,23 @@ test('real sim: a fresh town runs at 8× without UI errors', async ({page}) => {
   expect(errors).toEqual([]);
 });
 
-test('docked: the binder tucks into crests, the camera reframes, and a petitioner chip announces new cards', async ({page}) => {
+test('a new card opens nothing and keeps focus; the Council stays where the player left it', async ({page}) => {
   await open(page, {fixture: 'town', stub: true});
-  const openInsets = await hv(page, () => window.hearthvale.world.insets().right);
-  await page.locator('.binder .collapse-btn').click();
-  await expect(page.locator('.dock')).toBeVisible();
-  await expect(page.locator('.binder')).toBeHidden();
-  await expect.poll(() => hv(page, () => window.hearthvale.world.insets().right)).toBeLessThan(openInsets);
-  expect(await page.locator('.dock .dock-btn[data-body]').count()).toBeGreaterThanOrEqual(3);
-  await expect(page.locator('.dock [data-body="moot"] .badge')).toHaveText('3');
-  // A new card: no panel opens and focus stays put; a chip slides out instead.
+  await expect(page.locator('.dock [data-body="council"] .badge')).toHaveText('3');
   await page.locator('.settings-btn').focus();
   await hv(page, () => window.hearthvale.dev.addCard());
-  await expect(page.locator('.petition')).toBeVisible();
-  await expect(page.locator('.petition')).toContainText('asks');
-  await expect(page.locator('.ui')).toHaveClass(/docked/);
+  await expect(page.locator('.notice-major[data-key="request"]')).toBeVisible();
+  await expect(page.locator('.dk')).toBeHidden();
   expect(await hv(page, () => document.activeElement?.className)).toContain('settings-btn');
-  await page.locator('.petition').click();
-  await expect(page.locator('.ui')).not.toHaveClass(/docked/);
-  await expect(page.locator('.binder')).toBeVisible();
-  // The choice persists across reloads.
-  await page.locator('.binder .collapse-btn').click();
-  await page.reload();
-  await page.waitForFunction(() => window.hearthvale?.app);
-  await expect(page.locator('.ui')).toHaveClass(/docked/);
+  await expect(page.locator('.dock [data-body="council"] .badge')).toHaveText('4');
 });
 
 test('starting a new town asks first, then begins at year 0 with a hamlet', async ({page}) => {
   test.setTimeout(60000);
-  await page.addInitScript(() => localStorage.setItem('hearthvale-ui', JSON.stringify({pauseOnSession: false, moments: 'never'})));
+  await page.addInitScript(() => localStorage.setItem('hearthvale-ui', JSON.stringify({moments: 'never'})));
   await open(page, {paused: false, stub: true});
-  await hv(page, () => window.hearthvale.setSpeed(8));
-  await expect.poll(() => hv(page, () => window.hearthvale.state().time.year), {timeout: 20000}).toBeGreaterThan(0);
+  await hv(page, () => window.hearthvale.setSpeed(5));
+  await expect.poll(() => hv(page, () => window.hearthvale.state().time.year), {timeout: 30000}).toBeGreaterThan(0);
   await page.locator('.settings-btn').click();
   await page.locator('[data-act="save"]').click();
   await page.locator('.settings [data-act="new"]').click();
@@ -368,30 +473,29 @@ test('real sim: tapping a building opens the inspector with a header, a note and
   await expect(page.locator('.inspector h3')).not.toBeEmpty();
   await expect(page.locator('.inspector .note-text')).not.toBeEmpty({timeout: 15000});
   await expect(page.locator('.inspector .note')).not.toHaveClass(/is-waiting/);
-  await page.locator('.inspector .why summary').click();
+  // Locate, Why and Refresh share one actions row at the foot.
+  const row = page.locator('.inspector .inspector-actions');
+  await expect(row.locator('[data-act="locate"]')).toBeVisible();
+  await expect(row.locator('[data-act="refresh"]')).toBeVisible();
+  await row.locator('[data-act="why"]').click();
+  await expect(row.locator('[data-act="why"]')).toHaveAttribute('aria-expanded', 'true');
   expect(await page.locator('.inspector .why li').count()).toBeGreaterThan(0);
 });
 
 for (const [width, height] of [[1920, 1080], [2560, 1440]]) {
-  test(`the docket tucks away at ${width}×${height}, stays tucked after a reload, and the scene reframes`, async ({page}) => {
+  test(`at ${width}×${height} the Council sits beside the dock, capped in width, and the scene does not reframe`, async ({page}) => {
     await page.setViewportSize({width, height});
     await open(page, {fixture: 'town', stub: true});
-    await expect(page.locator('.binder')).toBeVisible();
-    const before = await hv(page, () => window.hearthvale.world.insets().right);
-    await page.locator('.binder .collapse-btn').click();
-    await expect(page.locator('.dock')).toBeVisible();
-    await expect.poll(() => hv(page, () => window.hearthvale.world.insets().right)).toBeLessThan(before - 200);
-    await page.reload();
-    await page.waitForFunction(() => window.hearthvale?.app);
+    const before = await hv(page, () => JSON.stringify(window.hearthvale.world.insets()));
+    await hv(page, () => window.hearthvale.app.openCouncil());
     await settle(page);
-    await expect(page.locator('.ui')).toHaveClass(/docked/);
-    await expect(page.locator('.binder')).toBeHidden();
-    const after = await hv(page, () => window.hearthvale.world.insets().right);
-    expect(after).toBeLessThan(90);
-    // Resizing does not undo the choice.
-    await page.setViewportSize({width: 900, height: 700});
-    await settle(page);
-    await expect(page.locator('.ui')).toHaveClass(/docked/);
+    const r = await hv(page, () => {
+      const b = (s) => document.querySelector(s).getBoundingClientRect();
+      return {dk: b('.dk'), dock: b('.dock')};
+    });
+    expect(r.dk.width).toBeLessThanOrEqual(1400);
+    expect(r.dock.left - r.dk.right).toBeLessThan(20);
+    expect(await hv(page, () => JSON.stringify(window.hearthvale.world.insets()))).toBe(before);
   });
 }
 
@@ -407,7 +511,8 @@ test('H hides every layer and brings it back; F toggles full screen where suppor
   await expect(page.locator('.topbar')).toBeVisible();
   expect(await hv(page, () => window.hearthvale.world.insets().top)).toBeGreaterThan(40);
   const supported = await hv(page, () => Boolean(document.fullscreenEnabled || document.webkitFullscreenEnabled));
-  await expect(page.locator('.rail [data-view="fullscreen"]')).toHaveCount(supported ? 1 : 0);
+  // No full-screen tile on the rail; the F key still does it.
+  await expect(page.locator('.rail [data-view="fullscreen"]')).toHaveCount(0);
   if (supported) {
     await page.keyboard.press('f');
     await expect.poll(() => hv(page, () => Boolean(document.fullscreenElement))).toBe(true);
@@ -416,35 +521,29 @@ test('H hides every layer and brings it back; F toggles full screen where suppor
   }
 });
 
-test('standing orders can be added and removed, and a body can be dissolved after a confirm', async ({page}) => {
+test('a body can be dissolved after a confirm, and the Council goes back to the Town Council', async ({page}) => {
   await open(page, {fixture: 'city', stub: true});
-  await page.locator('.dock [data-body="agri-council"]').click();
-  const orders = page.locator('.binder .orders');
-  await orders.scrollIntoViewIfNeeded();
-  await orders.locator('[data-f="action"]').selectOption('approve');
-  await orders.locator('[data-f="cap"]').selectOption('400');
-  await orders.locator('[data-add]').click();
-  await expect(orders.locator('.order')).toHaveCount(1);
-  await expect(orders.locator('.order')).toContainText('up to 400 coin');
-  await orders.locator('.order [data-remove]').click();
-  await expect(orders.locator('.order')).toHaveCount(0);
-  await page.locator('.binder .dissolve-btn').click();
+  await hv(page, () => window.hearthvale.app.openView('agri-council'));
+  await expect(page.locator('.dk-page .orders')).toHaveCount(0);
+  await page.locator('.dk-page .dissolve-btn').click();
   await expect(page.locator('.confirm-layer')).toContainText('Dissolve');
   await page.locator('.confirm-layer [data-act="dissolve"]').click();
-  await expect(page.locator('.dock [data-body="agri-council"]')).toHaveCount(0);
-  await expect(page.locator('.dock [data-body="moot"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.dk-index [data-page="agri-council"]')).toHaveCount(0);
+  await expect(page.locator('.dk-index [data-page="moot"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#dk-title')).toHaveText('Town Council');
 });
 
-test('places: a second centre opens the Places view, a camera chip, and ward council crests', async ({page}) => {
+test('places: a second centre opens the Places view, a camera chip, and ward council pages', async ({page}) => {
   await open(page, {fixture: 'city', stub: true});
   await expect(page.locator('.rail [data-view="places"]')).toBeVisible();
   await expect(page.locator('.topbar .here-chip')).toBeVisible();
-  await expect(page.locator('.dock [data-body="ward:c2"]')).toHaveAttribute('data-tip', /Millbridge/);
   await page.locator('.topbar .here-chip').click();
   await expect(page.locator('.drawer .place')).toHaveCount(3);
   await expect(page.locator('.drawer .place').first()).toContainText('The seat');
   await page.locator('.drawer .place[data-centre="c2"] [data-body]').click();
-  await expect(page.locator('.dock [data-body="ward:c2"]')).toHaveAttribute('aria-pressed', 'true');
+  // A ward council's page opens in the Council, named for its place.
+  await expect(page.locator('.dk-index [data-page="ward:c2"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.dk-index [data-page="ward:c2"]')).toHaveAttribute('title', /Millbridge/);
   await page.locator('.drawer .place[data-centre="c3"] [data-go]').click();
   await expect.poll(() => page.locator('.topbar .here-chip').textContent(), {timeout: 5000}).toContain('Eastbank');
 });
@@ -470,7 +569,7 @@ test('world name labels hide in clean view and behind title cards and dialogs', 
   await expect(page.locator('.moment-layer')).toBeVisible();
   expect(await last()).toBe(false);
   for (let i = 0; i < 4 && await page.locator('.moment-layer:not(.is-leaving)').count(); i++) {
-    await page.locator('.moment-layer:not(.is-leaving) .btn').click();
+    await page.locator('.moment-layer:not(.is-leaving) .moment-go').click();
     await expect(page.locator('.moment-layer.is-leaving')).toHaveCount(0);
   }
   await expect.poll(last).toBe(true);

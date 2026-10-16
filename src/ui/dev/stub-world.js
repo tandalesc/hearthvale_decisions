@@ -7,11 +7,11 @@ const ROOF = ['#b5714d', '#a8593f', '#9a4e3c', '#7f6a5d', '#6b7480', '#5d7c86'];
 const WALL = ['#e9dcc0', '#d9d0bd', '#c98d6a', '#d6c1a1', '#e4ddcd', '#eef0ea'];
 const CLOTH = ['#b2563f', '#526d42', '#3f8a99', '#c9a24a', '#6c5a8a', '#8a6a4a', '#33433a'];
 
-export function createWorld(canvas, {quality = 'auto'} = {}) {
+export function createWorld(canvas, {quality = 'auto', batterySaver = 'off'} = {}) {
   const ctx = canvas.getContext('2d');
   let view = null, insets = {top: 0, right: 0, bottom: 0, left: 0};
   let cam = {x: -18, z: 4, scale: 0}, target = null, tier = quality === 'auto' ? 'medium' : quality;
-  let overlay = 'none', dayCycle = 'seasonal', pickCb = null;
+  let overlay = 'none', dayCycle = 'seasonal', pickCb = null, saver = batterySaver;
   let lastDraw = 0, frames = 0, fps = 60, fpsAt = 0;
   const dpr = Math.min(2, globalThis.devicePixelRatio || 1);
 
@@ -154,7 +154,10 @@ export function createWorld(canvas, {quality = 'auto'} = {}) {
     setOverlay(mode) { overlay = mode; },
     focus({x, z}, ms = 800) { target = {x, z, fx: cam.x, fz: cam.z, ms, t0: performance.now()}; },
     onPick(cb) { pickCb = cb; },
-    stats: () => ({fps, frameMs: 1000 / Math.max(1, fps), drawCalls: 0, triangles: 0, tier, stub: true}),
+    stats: () => ({fps, frameMs: 1000 / Math.max(1, fps), drawCalls: 0, triangles: 0, tier, saving: saver === 'always', stub: true}),
+    // Battery saver: the stub knows no battery, so only Always saves.
+    setBatterySaver(mode) { saver = mode; },
+    power: () => ({mode: saver, saving: saver === 'always', chosen: saver === 'always', lowBattery: false, unplugged: false, batteryKnown: false}),
     setSceneInsets(next) { insets = {...insets, ...next}; },
     insets: () => ({...insets}),
     projectPoint(x, z) { const r = canvas.getBoundingClientRect(); const [sx, sy] = project(x, z, 0, r.width, r.height); return {x: sx + r.left, y: sy + r.top}; },

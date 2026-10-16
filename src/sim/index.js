@@ -182,10 +182,16 @@ const callAction = (name) => (state, ...args) => {
 };
 
 export const rule = callAction('rule');
-export const setDelegated = callAction('setDelegated');
 export const dissolveBody = callAction('dissolveBody');
-export const setStandingOrder = callAction('setStandingOrder');
 export const setCardProse = callAction('setCardProse');   // the narrator writes card prose
+export const strikeBudgetLine = callAction('strikeBudgetLine');
+export const approveAllBudgets = callAction('approveAllBudgets');
+export const trimAllToFit = callAction('trimAllToFit');
+export const hireAdviser = callAction('hireAdviser');
+export const dismissAdviser = callAction('dismissAdviser');
+export const setAdviserMode = callAction('setAdviserMode');
+export const redrawSlate = callAction('redrawSlate');
+export const letStand = callAction('letStand');
 
 // ---------------------------------------------------------------------------
 // Re-exports for the rest of the game.
@@ -196,7 +202,7 @@ export {fixtureState, loadFixture} from './fixtures.js';
 export {setEntityNote, touchEntityNote} from './notes.js';
 export {createRenderView} from './render-view.js';
 export {rng, chance, pick, shuffle, sampleDist, roundRandom} from './rng.js';
-export {TICK_SECONDS, TICKS_PER_MONTH, TICKS_PER_YEAR, timeView, monthIndex, season, SEASON_NAMES} from './clock.js';
+export {TICK_SECONDS, PACE, TICKS_PER_MONTH, TICKS_PER_YEAR, timeView, monthIndex, season, SEASON_NAMES} from './clock.js';
 export {evalCond, holds, softScore, explainCond, makeCtx as conditionCtx, defineOp} from './conditions.js';
 export {delta, againstGrain, lockFor, priceLevel, ARCHETYPES, PRESSURES, INSTITUTION_AXES} from './pressures.js';
 export {ERA, STYLE_PACKS, eraProgress, eraCondition} from './eras.js';

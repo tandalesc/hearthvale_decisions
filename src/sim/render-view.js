@@ -51,7 +51,8 @@ import {embankmentViews, bridgeViews} from './works.js';
 
 export const PERSON_STRIDE = 16;          // default row size
 export const PERSON_STRIDE_EXTENDED = 20; // rows with the segment end (rowFloats: 20)
-const WALK_SPEED = 1.4;
+// On-screen speed (units per renderer second) the gait cycle was drawn for.
+const GAIT_SPEED = 1.4;
 const REFRESH_AGE = 2;          // seconds before a moving row is re-anchored (drift control)
 
 export function createRenderView(state, {capacity = 0, rowFloats = PERSON_STRIDE_EXTENDED} = {}) {
@@ -82,6 +83,7 @@ export function createRenderView(state, {capacity = 0, rowFloats = PERSON_STRIDE
     rowId: new Int32Array(0),
     rowRev: new Uint32Array(0),
     rowT: new Float32Array(0),
+    rowOpen: new Uint8Array(0), // 1 = the row's waypoint is a corner, not the route's end
     speed: -1,
     cursor: 0,
     verifyCursor: 0,
@@ -116,6 +118,9 @@ function grow(view, inner, rows) {
   const rowT = new Float32Array(cap);
   rowT.set(inner.rowT.subarray(0, Math.min(inner.rowT.length, cap)));
   inner.rowT = rowT;
+  const rowOpen = new Uint8Array(cap);
+  rowOpen.set(inner.rowOpen.subarray(0, Math.min(inner.rowOpen.length, cap)));
+  inner.rowOpen = rowOpen;
   view.peopleVersion++;
 }
 
@@ -138,6 +143,9 @@ function sync(view, inner, state, opts = {}) {
   view.era = state.era;
   view.styleEra = state.era;
   view.archetype = state.archetype;
+  // Gardens, eyesores and parks (aesthetics.js): read by the decor layer.
+  view.aesthetics = state.aesthetics ?? null;
+  view.landscape = state.landscape ?? null;
   return view;
 }
 
@@ -162,10 +170,15 @@ function syncPeople(view, inner, state, now, speed) {
     dirty.end = n;
   }
 
+  const stride = view.rowFloats;
+  const buf = view.people;
   for (let i = 0; i < n; i++) {
     const p = people[i];
-    if (!force && inner.rowId[i] === p.id && inner.rowRev[i] === p.rev) continue;
-    writeRow(view.people, view.rowFloats, i, p, state, now, speed, lag);
+    // A row also renews when its walker reaches a corner before the next tick
+    // (its waypoint time has passed), so they turn it instead of waiting there.
+    const turn = speed > 0 && inner.rowOpen[i] === 1 && stride === PERSON_STRIDE_EXTENDED && buf[i * stride + 16] <= now;
+    if (!force && !turn && inner.rowId[i] === p.id && inner.rowRev[i] === p.rev) continue;
+    inner.rowOpen[i] = writeRow(buf, stride, i, p, state, now, speed, lag);
     inner.rowId[i] = p.id;
     inner.rowRev[i] = p.rev;
     inner.rowT[i] = now;
@@ -187,7 +200,7 @@ function refreshStale(view, inner, state, now, speed, lag, n) {
     const i = inner.cursor++ % n;
     const p = state.people[i];
     if (p.speed <= 0 || now - inner.rowT[i] < REFRESH_AGE) continue;
-    writeRow(view.people, view.rowFloats, i, p, state, now, speed, lag);
+    inner.rowOpen[i] = writeRow(view.people, view.rowFloats, i, p, state, now, speed, lag);
     inner.rowT[i] = now;
     if (i < dirty.start) dirty.start = i;
     if (i + 1 > dirty.end) dirty.end = i + 1;
@@ -195,19 +208,48 @@ function refreshStale(view, inner, state, now, speed, lag, n) {
   if (inner.cursor > 1e9) inner.cursor = 0;
 }
 
+// Writes row i and returns 1 when its waypoint is a corner with more route
+// after it (the row then renews on reaching it), else 0.
 function writeRow(buf, stride, i, p, state, now, speed, lag) {
   const o = i * stride;
   const moving = p.speed > 0;
-  const x = moving ? p.x + p.vx * lag : p.x;
-  const z = moving ? p.z + p.vz * lag : p.z;
+  const route = p.task?.route;
+  // Carried on along the route by the time since the last tick, as the sim
+  // will move them (move() in people.js), turning any corners on the way. The
+  // row then points at the waypoint ahead of that spot: a row is extrapolated
+  // in a straight line, and never past its waypoint (writeSegmentEnd).
+  let x = p.x, z = p.z, vx = p.vx, vz = p.vz;
+  let seg = moving && route ? p.task.seg : Infinity;
+  if (seg + 1 < route?.length) {
+    let budget = p.speed * lag;
+    while (budget > 0 && seg + 1 < route.length) {
+      const dx = route[seg] - x, dz = route[seg + 1] - z;
+      const dist = Math.hypot(dx, dz);
+      if (dist <= budget) {
+        x = route[seg];
+        z = route[seg + 1];
+        budget -= dist;
+        seg += 2;
+      } else {
+        x += (dx / dist) * budget;
+        z += (dz / dist) * budget;
+        budget = 0;
+      }
+    }
+    if (seg !== p.task.seg && seg + 1 < route.length) {
+      const dx = route[seg] - x, dz = route[seg + 1] - z;
+      const dist = Math.hypot(dx, dz) || 1;
+      vx = (dx / dist) * p.speed;
+      vz = (dz / dist) * p.speed;
+    }
+  }
+  const hasWaypoint = seg + 1 < (route?.length ?? 0);
   const y = walkerY(state, x, z);
   // Vertical speed: from here to the current waypoint, so ramps and decks are followed.
   let vy = 0;
-  const route = p.task?.route;
-  const hasWaypoint = moving && route && p.task.seg + 1 < route.length;
   if (hasWaypoint) {
     // Aim at the waypoint, or one re-anchor step ahead on a deck (people.DECK_STEP).
-    const wx = route[p.task.seg], wz = route[p.task.seg + 1];
+    const wx = route[seg], wz = route[seg + 1];
     const dist = Math.hypot(wx - x, wz - z);
     const step = crossesDeck(state, x, z, wx, wz) ? Math.min(dist, DECK_STEP) : dist;
     if (step > 1e-3) vy = ((walkerY(state, x + ((wx - x) * step) / dist, z + ((wz - z) * step) / dist) - y) * p.speed) / step;
@@ -217,29 +259,30 @@ function writeRow(buf, stride, i, p, state, now, speed, lag) {
   buf[o + 1] = y;
   buf[o + 2] = z;
   const live = moving && speed > 0;
-  buf[o + 3] = live ? p.vx * speed : 0;
+  buf[o + 3] = live ? vx * speed : 0;
   buf[o + 4] = live ? vy * speed : 0;
-  buf[o + 5] = live ? p.vz * speed : 0;
+  buf[o + 5] = live ? vz * speed : 0;
   buf[o + 6] = now;
   buf[o + 7] = p.phase;
-  buf[o + 8] = live ? (p.speed / WALK_SPEED) * speed : 0;
+  buf[o + 8] = live ? (p.speed * speed) / GAIT_SPEED : 0;
   buf[o + 9] = p.action;
   buf[o + 10] = speed > 0 ? now - Math.max(0, simNow - p.actionT) / speed : now;
   buf[o + 11] = p.look.skin;
   buf[o + 12] = p.look.cloth;
   buf[o + 13] = p.look.hat;
   buf[o + 14] = p.indoor ? 0 : 0.9 + 0.2 * hashUnit(p.id);
-  buf[o + 15] = p.heading;
-  if (stride === PERSON_STRIDE_EXTENDED) writeSegmentEnd(buf, o, p, x, z, now, speed, live, state);
+  buf[o + 15] = seg === p.task?.seg || !hasWaypoint ? p.heading : Math.atan2(vx, vz);
+  if (stride === PERSON_STRIDE_EXTENDED) writeSegmentEnd(buf, o, p, x, z, seg, now, speed, live, state);
+  return live && route && seg + 3 < route.length ? 1 : 0;
 }
 
 // The current waypoint and when the walker gets there (renderer clock). The shader
 // stops extrapolating at t1, so a late row update never carries a walker past a corner.
-function writeSegmentEnd(buf, o, p, x, z, now, speed, live, state) {
-  const task = p.task;
-  const route = task?.route;
-  if (live && route && task.seg + 1 < route.length) {
-    const wx = route[task.seg], wz = route[task.seg + 1];
+function writeSegmentEnd(buf, o, p, x, z, seg, now, speed, live, state) {
+  const route = p.task?.route;
+  const ahead = live && route && seg + 1 < route.length;
+  if (ahead) {
+    const wx = route[seg], wz = route[seg + 1];
     buf[o + 16] = now + Math.hypot(wx - x, wz - z) / (p.speed * speed);
     buf[o + 17] = wx;
     buf[o + 18] = wz;
@@ -248,7 +291,7 @@ function writeSegmentEnd(buf, o, p, x, z, now, speed, live, state) {
     buf[o + 17] = x;
     buf[o + 18] = z;
   }
-  const onDeck = live && route && task.seg + 1 < route.length ? crossesDeck(state, x, z, route[task.seg], route[task.seg + 1]) : deckAt(state, x, z);
+  const onDeck = ahead ? crossesDeck(state, x, z, route[seg], route[seg + 1]) : deckAt(state, x, z);
   buf[o + 19] = onDeck ? 1 : 0;
 }
 

@@ -49,8 +49,8 @@ export const ERA = [
       },
     ],
     maxHomeTier: 4, maxStoreys: 4, materials: ['brick', 'stone', 'slate'], roadTier: {organic: 3, planned: 4},
-    ui: ['debates', 'delegation', 'tensions'], cardsPerYear: [3, 4],
-    arrival: 'Hearthvale is a borough now. Houses can rise to four storeys. Bodies can run their own affairs.',
+    ui: ['debates', 'budgets', 'tensions'], cardsPerYear: [3, 4],
+    arrival: 'Hearthvale is a borough now. Houses can rise to four storeys. Bodies can work to yearly budgets.',
   },
   {
     name: 'City', floor: 90, ceiling: 115,
@@ -60,7 +60,7 @@ export const ERA = [
       {label: 'At least ten rules in force', expr: ['gte', 'C.policies', 10]},
     ],
     maxHomeTier: 5, maxStoreys: 6, materials: ['stone', 'iron', 'glass'], roadTier: {organic: 3, planned: 5},
-    ui: ['budget', 'tensions-dashboard', 'compass'], cardsPerYear: [4, 4],
+    ui: ['budget', 'advisers', 'tensions-dashboard', 'compass'], cardsPerYear: [4, 4],
     arrival: 'Hearthvale is a city now. Apartment blocks can rise to six storeys. Wide avenues can be laid out.',
   },
   {

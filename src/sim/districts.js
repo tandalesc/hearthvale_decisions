@@ -4,7 +4,7 @@
 import { rng } from './rng.js';
 import { emitChronicle } from './state.js';
 import { centreRef } from './centres.js';
-import { riverX, heightAt } from '../terrain.js';
+import { riverX, heightAt, bankDistance, nearestWaterKind, KIND, bankSide } from '../terrain.js';
 
 const REACH = 56;          // world units: a building this far from every centre is unclaimed
 const MIN_NEW = 10;        // unclaimed buildings needed to found a district
@@ -26,7 +26,7 @@ const FEATURE_WORDS = {
 const COMPASS = ['North', 'East', 'South', 'West'];
 const BAD_PAIRS = new Set(['Hill Hill', 'Bank Bank', 'Bridge Bank', 'Water Bank', 'Ford Cross', 'Meadow Fields']);
 
-function sideOf(x, z) { return Math.sign(x - riverX(z)) || 1; }
+function sideOf(x, z) { return bankSide(x, z) ? 1 : -1; }
 
 function distance(a, b) {
   const d = Math.hypot(a.x - b.x, a.z - b.z);
@@ -171,7 +171,7 @@ function features(state, centroid, group) {
   const f = [];
   const types = new Map();
   for (const b of group) types.set(b.type, (types.get(b.type) ?? 0) + 1);
-  const nearRiver = Math.abs(centroid.x - riverX(centroid.z)) < 30;
+  const nearRiver = Math.abs(centroid.x - riverX(centroid.z)) < 30 && nearestWaterKind(centroid.x, centroid.z) === KIND.RIVER;
   if (types.get('quay') || types.get('warehouse')) f.push('quay');
   if (nearRiver) f.push('river');
   if (types.get('mill') || types.get('factory')) f.push('mill');
@@ -216,11 +216,16 @@ function characterOf(group) {
   return 'homes';
 }
 
+function waterWord(x, z) {
+  const k = nearestWaterKind(x, z);
+  return k === KIND.SEA ? 'sea' : k === KIND.LAKE ? 'lake' : k === KIND.POND ? 'pond' : k === KIND.CREEK ? 'creeks' : 'river';
+}
+
 function foundingLine(state, d) {
   const others = state.districts.filter(o => o !== d);
   const across = others.length && others.every(o => sideOf(o.centroid.x, o.centroid.z) !== sideOf(d.centroid.x, d.centroid.z));
   const where = across ? 'across the river'
-    : Math.abs(d.centroid.x - riverX(d.centroid.z)) < 30 ? 'by the river'
+    : bankDistance(d.centroid.x, d.centroid.z) < 26 ? `by the ${waterWord(d.centroid.x, d.centroid.z)}`
       : heightAt(d.centroid.x, d.centroid.z) > 3 ? 'up on the hill'
         : 'at the edge of town';
   return `A new quarter is growing ${where}. People call it ${d.name}.`;

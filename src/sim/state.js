@@ -6,7 +6,7 @@
 
 import {seedStreams, hashUnit, hash32} from './rng.js';
 import {createTime} from './clock.js';
-import {setTerrainSeed, terrainSeed} from '../terrain.js';
+import {setTerrainSeed, useTerrain, TERRAIN_VERSION, hasRiver, terrainArchetype} from '../terrain.js';
 import {placeStartingHamlet} from './buildings.js';
 import {createRoads as createWorldRoads, CELL, GRID_W, GRID_H, ORIGIN_X, ORIGIN_Z} from './roads.js';
 import {runPhase} from './hooks.js';
@@ -35,8 +35,14 @@ export const HOME_TIERS = {
 // share code / any text (see parseSeed). The terrain follows the seed.
 export function createState(seed, options = {}) {
   const value = seed == null ? newSeed() : parseSeed(seed);
-  setTerrainSeed(value);
+  // New towns get the newest valleys (lakes, deltas, the sea); options.terrainVersion 1
+  // gives the river-only valley, options.archetype forces one of waters.js's ARCHETYPES.
+  const terrainVersion = options.terrainVersion ?? TERRAIN_VERSION;
+  const terrainArchetype = options.archetype ?? null;
+  setTerrainSeed(value, terrainVersion, terrainArchetype);
   const state = emptyState(value, options);
+  state.terrainVersion = terrainVersion;
+  state.terrainArchetype = terrainArchetype;
   layOutHamlet(state);
   runPhase('init', state, {services: options.services ?? {}});
   return state;
@@ -48,6 +54,9 @@ export function emptyState(seed = DEFAULT_SEED, options = {}) {
     version: SAVE_VERSION,
     seed,
     terrainSeed: seed,
+    // 1: the river-only valley every save before water bodies had; see terrain.js.
+    terrainVersion: 1,
+    terrainArchetype: null,
     rng: seedStreams(seed),
     settings: {individualCap: 2000, ...(options.settings ?? {})},
     time: createTime(),
@@ -161,8 +170,7 @@ export function parseSeed(input) {
 
 // Point the shared terrain at this state's valley (cheap when it already is).
 export function useTerrainOf(state) {
-  const seed = state.terrainSeed ?? null;
-  if (terrainSeed() !== seed) setTerrainSeed(seed);
+  useTerrain(state.terrainSeed ?? null, state.terrainVersion ?? 1, state.terrainArchetype ?? null);
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +274,9 @@ function layOutHamlet(state) {
   // sim-world picks safe sites for this valley: off the bank, no overlaps, open doors.
   const placed = placeStartingHamlet(state, {homes: HAMLET_SIZES.length, districtId: 1});
   const centre = placed.centre;
-  state.districts.push({id: 1, name: 'Old Ford', character: 'old-town', centroid: {x: centre.x, z: centre.z}, lots: 0, tags: []});
+  // Named for what it was founded on: the ford, or, with no river, the shore or the well.
+  const firstName = hasRiver() ? 'Old Ford' : terrainArchetype() === 'shore' ? 'Old Strand' : 'Old Well';
+  state.districts.push({id: 1, name: firstName, character: 'old-town', centroid: {x: centre.x, z: centre.z}, lots: 0, tags: []});
   const civic = {occupied: true, open: true, wealth: 0.4};
   if (placed.moot) Object.assign(placed.moot, civic);
   for (const f of placed.farms) Object.assign(f, {occupied: true, open: true});
@@ -300,7 +310,7 @@ function layOutHamlet(state) {
 export function createMoot() {
   return {
     id: 'moot', kind: 'moot', foundedYear: 0, status: 'active', budgetShare: 0, power: 0.5,
-    patience: 1, metrics: {}, lastProposalMonth: -99, delegated: false, standingOrders: [], funds: 0,
+    patience: 1, metrics: {}, lastProposalMonth: -99, funds: 0,
   };
 }
 

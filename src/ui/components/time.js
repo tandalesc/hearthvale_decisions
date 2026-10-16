@@ -1,21 +1,27 @@
-// Time controls (design-visual §8.7): pause / 1× / 3× / 8×, a thin era
-// progress bar toward the next age, the season, and a sound toggle.
-// 'strip' variant lives in the desktop time strip; 'peek' in the phone sheet
-// (the docket and every other view sit in the sheet's view strip below it).
+// Time controls (design-visual §8.7): pause, and one speed button that
+// steps 1× → 3× → 5×, a thin era progress bar toward the next age, the
+// season, and a sound toggle. 'strip' variant lives in the desktop time
+// strip; 'peek' in the phone sheet (the Council and every other view sit in
+// the sheet's view strip below it).
 import {h, setAttr, setText} from '../dom.js';
 import {icon} from '../icons.js';
 import {SEASON_ICONS, SEASONS} from '../format.js';
 
-export const SPEEDS = [0, 1, 3, 8];
+export const SPEEDS = [1, 3, 5];
+
+// The speed after s, round to 1× again after the fastest.
+export function nextSpeed(s) {
+  return SPEEDS[(SPEEDS.indexOf(s) + 1) % SPEEDS.length];
+}
 
 function speedSeg(ctx) {
   const seg = h('div.seg', {role: 'group', 'aria-label': 'Speed'});
-  for (const s of SPEEDS) {
-    const b = h('button', {type: 'button', 'data-speed': s, class: s === 0 ? 'pause' : null, 'aria-label': s === 0 ? 'Pause' : `Speed ${s} times`, title: s === 0 ? 'Pause (Space)' : `${s}× (${SPEEDS.indexOf(s)})`});
-    b.innerHTML = s === 0 ? icon('pause') : `${s}×`;
-    b.addEventListener('click', () => ctx.setSpeed(s === 0 && ctx.speed() === 0 ? ctx.lastSpeed() : s));
-    seg.append(b);
-  }
+  const pause = h('button.pause', {type: 'button', title: 'Pause (Space)'});
+  pause.addEventListener('click', () => ctx.setSpeed(ctx.speed() === 0 ? ctx.lastSpeed() : 0));
+  // Steps to the next speed; when paused it also starts the town again.
+  const step = h('button.speed', {type: 'button', title: 'Change speed (1, 2, 3)'});
+  step.addEventListener('click', () => ctx.setSpeed(nextSpeed(ctx.speed() || ctx.lastSpeed())));
+  seg.append(pause, step);
   return seg;
 }
 
@@ -40,27 +46,28 @@ export function createTime(ctx, variant = 'strip') {
     sound.addEventListener('click', () => ctx.toggleMute());
     el.append(seg, era, season, sound);
   } else {
-    const date = h('button.peek-date', {type: 'button'});
-    date.innerHTML = '<b class="when"></b><span class="era-next"></span>';
-    date.addEventListener('click', () => ctx.openEraPopover(date));
-    el.append(seg, date);
+    // The phone drawer keeps only pause and speed; the date is in the top bar.
+    el.append(seg);
   }
 
   return {
     el,
     update({speed, top, era, muted}) {
-      for (const b of seg.children) {
-        const s = Number(b.dataset.speed);
-        setAttr(b, 'aria-pressed', String(s === speed));
-        if (s === 0) {
-          const want = speed === 0 ? 'play' : 'pause';
-          if (b.dataset.icon !== want) {
-            b.dataset.icon = want;
-            b.innerHTML = icon(want);
-            b.setAttribute('aria-label', speed === 0 ? 'Resume' : 'Pause');
-          }
-        }
+      const [pause, step] = seg.children;
+      const want = speed === 0 ? 'play' : 'pause';
+      if (pause.dataset.icon !== want) {
+        pause.dataset.icon = want;
+        pause.innerHTML = icon(want);
+        pause.setAttribute('aria-label', speed === 0 ? 'Resume' : 'Pause');
       }
+      setAttr(pause, 'aria-pressed', String(speed === 0));
+      const shown = speed || ctx.lastSpeed() || 1;
+      if (step.dataset.speed !== String(shown)) {
+        step.dataset.speed = String(shown);
+        step.textContent = `${shown}×`;
+        step.setAttribute('aria-label', `Speed ${shown} times. Change speed`);
+      }
+      setAttr(step, 'aria-pressed', String(speed > 0));
       const sum = eraSummary(era);
       if (variant === 'strip') {
         setText(el.querySelector('.era-name'), top.eraName);
@@ -79,13 +86,6 @@ export function createTime(ctx, variant = 'strip') {
           sound.setAttribute('aria-label', muted ? 'Turn sound on' : 'Mute sound');
           sound.title = muted ? 'Sound off' : 'Sound on';
         }
-      } else {
-        const when = el.querySelector('.when');
-        if (when.dataset.y !== String(top.year)) {
-          when.dataset.y = String(top.year);
-          when.innerHTML = `<span class="long">Year </span><span class="short">Yr </span>${top.year ?? 0}`;
-        }
-        setText(el.querySelector('.era-next'), `${SEASONS[top.season] ?? ''} · ${top.eraName ?? ''}`);
       }
     },
   };

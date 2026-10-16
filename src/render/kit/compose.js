@@ -19,6 +19,7 @@ const TRIM_DARK_SIGN = [new THREE.Color('#2f4a3a'), new THREE.Color('#5a2c24'), 
 const TIMBER_BASE = new THREE.Color('#6e5338');
 
 const DEG = Math.PI / 180;
+const GRID9 = [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5], [0, 0], [0, -0.5], [0, 0.5], [-0.5, 0], [0.5, 0]];
 const tmpColor = new THREE.Color();
 const grey = new THREE.Color();
 
@@ -133,6 +134,7 @@ export function composeLot(b, pool, anim = null, selected = false) {
   const progress = constructing ? Math.max(0.05, Math.min(1, built / 0.85)) : 1;
   const roofIn = constructing ? Math.max(0, (built - 0.85) / 0.15) : 1;
   const detailsIn = !constructing || built > 0.95;
+  let baseCount = 0;
 
   function add(piece, x, y, z, yaw, sx, sy, sz, opts = {}) {
     const s = pool.next();
@@ -151,15 +153,54 @@ export function composeLot(b, pool, anim = null, selected = false) {
     return s;
   }
 
+  // Attachments that stand outside the walls (posts, porticos, bays, poles)
+  // read their own ground: the lowest natural ground under their lot-local
+  // footprint, never above the lot's pad height (pads blend toward baseTop).
+  function groundUnder(x, z, w, d) {
+    let g = baseTop;
+    for (const [u, v] of GRID9) {
+      const px = x + u * w, pz = z + v * d;
+      g = Math.min(g, heightAt(wx(px, pz), wz(px, pz)));
+    }
+    return g;
+  }
+
+  /** A plinth under an attachment, from below its ground up to `top`. */
+  function skirt(x, z, w, d, top, color) {
+    const g = groundUnder(x, z, w + 0.36, d + 0.36) - 0.3;
+    if (top - g > 0.32) add('band', x, g, z, 0, w, top - g, d, { wall: color });
+    return g + 0.3;
+  }
+
+  /**
+   * Steps from a raised floor at `top` down to the ground, leaving the edge
+   * at lot-local (x, z) in direction (dx, dz) (one of the four axes), `w` wide.
+   * At most three treads; none when the floor is within a step of the ground.
+   */
+  function stepsDown(x, z, dx, dz, w, top, color) {
+    const T = 0.42; // visible tread depth (the band adds 0.18 m a side)
+    const g = groundUnder(x + dx * T * 1.5, z + dz * T * 1.5, dx ? T * 3 : w, dz ? T * 3 : w);
+    const n = Math.min(3, Math.floor((top - g) / 0.2) - 1);
+    for (let i = 1; i <= n; i++) {
+      const sx = x + dx * (i - 0.5) * T, sz = z + dz * (i - 0.5) * T;
+      const h = top - (i * (top - g)) / (n + 1);
+      const base = g - 0.3;
+      add('band', sx, base, sz, 0, dx ? T - 0.36 : w, h - base, dz ? T - 0.36 : w, { wall: color });
+    }
+  }
+
   /** Foundation under a block: plinth skirt, timber piles or a stone quay. */
   function base(x, z, bw, bd) {
+    // Each further block's plinth sits 2 cm lower, so overlapping plinths
+    // (extensions, towers, bays) never share a coplanar top or bottom face.
+    const dy = 0.02 * baseCount++;
     if (foundation === 'piles') {
-      add('piles', x, footY, z, 0, bw - 0.3, floorY - 0.3 - footY, bd - 0.3, { wall: TIMBER_BASE });
-      add('band', x, floorY - 0.32, z, 0, bw, 0.3, bd, { wall: TIMBER_BASE });
+      add('piles', x, footY - dy, z, 0, bw - 0.3, floorY - 0.3 - footY, bd - 0.3, { wall: TIMBER_BASE });
+      add('band', x, floorY - 0.32 - dy, z, 0, bw, 0.3, bd, { wall: TIMBER_BASE });
       return;
     }
     const stone = foundation === 'quay' ? STONE_BASE : (era === 0 ? TIMBER_BASE : STONE_BASE);
-    add('band', x, footY, z, 0, bw, floorY - footY, bd, { wall: stone });
+    add('band', x, footY - dy, z, 0, bw, floorY - footY, bd, { wall: stone });
     // Pad the ground flat under dry foundations (quays and piles stand in water).
     if (foundation === 'plinth' || foundation === 'field') {
       const ww = rot % 2 ? bd : bw, dd = rot % 2 ? bw : bd;
@@ -247,11 +288,18 @@ export function composeLot(b, pool, anim = null, selected = false) {
     const F = opts.floorH ?? style.floorH;
     const front = z + bd / 2;
     // Cornice under flat and low hipped roofs.
-    if (form === 'flat' || form === 'hip') add('band', x, top - 0.4, z, 0, bw, 0.4, bd, { wall: trim });
-    // Bay windows on terrace houses: a two-storey box on the front.
-    if (era === 3 && h4 < 0.45 && storeys >= 2 && bw > 4.5 && opts.window !== WINDOW.SHOP) {
+    // Kept 2 cm under the wall top and 2 cm inside its usual line, so its top
+    // and sides are never coplanar with the walls, eave fascia or sign board.
+    if (form === 'flat' || form === 'hip') add('band', x, top - 0.42, z, 0, bw - 0.04, 0.4, bd - 0.04, { wall: trim });
+    // Bay windows on terrace houses: a two-storey box on the front, on its
+    // own plinth down to the ground in front of the house. Not behind a
+    // civic portico (tall windows) or inside a front extension.
+    const frontExt = (b.extensions ?? []).some((e) => (e.side ?? 1) === 0);
+    if (era === 3 && h4 < 0.45 && storeys >= 2 && bw > 4.5 && opts.window !== WINDOW.SHOP && opts.window !== WINDOW.TALL && !frontExt) {
       const bx = x + (h2 < 0.5 ? -1 : 1) * Math.min(bw / 4, 1.6);
       const bayTop = y0 + sink + F * 2 - 0.25;
+      // 3 cm under the floor: never level with a block plinth (0, 2, 4 cm).
+      skirt(bx, front + 0.35, 1.9, 0.7, floorY - 0.03, STONE_BASE);
       add('body', bx, y0, front + 0.35, 0, 1.9, bayTop - y0, 0.7, { window: WINDOW.SASH, details: DETAIL.NO_DOOR | DETAIL.STRING, sink, floorH: F });
       add('flat', bx, bayTop - 0.05, front + 0.35, 0, 2.0, 0.3, 0.8, { roofKind: ROOF.FLAT });
     }
@@ -288,7 +336,9 @@ export function composeLot(b, pool, anim = null, selected = false) {
   function scaffold(x, z, bw, bd, top) {
     const s = anim?.scaffold ?? (constructing ? 1 : 0);
     if (s <= 0) return;
-    add('scaffold', x, y0 + sink - 0.1, z, 0, (bw + 1.4) * s, Math.max(1.5, top - (y0 + sink) + 1.1) * s, (bd + 1.4) * s, { roof: wall });
+    // Poles stand on the ground around the plinth, not at floor level.
+    const g = Math.min(y0 + sink - 0.1, groundUnder(x, z, bw + 1.4, bd + 1.4) - 0.1);
+    add('scaffold', x, g, z, 0, (bw + 1.4) * s, Math.max(1.5, top - g + 1) * s, (bd + 1.4) * s, { roof: wall });
   }
 
   /**
@@ -306,26 +356,30 @@ export function composeLot(b, pool, anim = null, selected = false) {
       : b.variant === 'fountain' && era < 4 ? 'fountain'
       : era >= 4 && (b.archetype === 'garden' || b.archetype === 'scholar') ? 'bandstand'
       : era >= 4 ? 'statue' : 'fountain';
+    // Bottom of a base block of size s: the lowest ground under it on a slope.
+    const foot = (s) => Math.min(g - 0.2, groundUnder(0, 0, s, s) - 0.15);
     if (kind === 'fountain') {
+      // A square stone step under the basin where the ground falls away.
+      skirt(0, 0, 4.04, 4.04, g - 0.1, stone);
       add('stack', 0, g - 0.2, 0, 0, 4.4, 0.85, 4.4, { wall: stone, trim: stone });
       add('flat', 0, g + 0.45, 0, 0, 3.1, 0.12, 3.1, { roof: new THREE.Color('#5f8f98'), roofKind: ROOF.FLAT, trim: stone, lit: 0 });
       add('stack', 0, g + 0.4, 0, 0, 0.5, 2.0, 0.5, { wall: grey, trim: grey });
       add('dome', 0, g + 2.25, 0, 0, 1.4, 0.6, 1.4, { roof: grey, trim: grey });
       summary.bodyH = 3;
     } else if (kind === 'cross') {
-      add('band', 0, g - 0.2, 0, 0, 2.6, 0.55, 2.6, { wall: stone });
+      add('band', 0, foot(3), 0, 0, 2.6, g + 0.35 - foot(3), 2.6, { wall: stone });
       add('band', 0, g + 0.35, 0, 0, 1.6, 0.45, 1.6, { wall: stone });
       add('band', 0, g + 0.8, 0, 0, 0.12, 4.0, 0.12, { wall: grey });
       add('band', 0, g + 3.6, 0, 0, 1.1, 0.18, 0.1, { wall: grey });
       summary.bodyH = 5;
     } else if (kind === 'statue') {
       const bronze = new THREE.Color('#58705f');
-      add('band', 0, g - 0.2, 0, 0, 2.2, 1.9, 2.2, { wall: stone });
+      add('band', 0, foot(2.6), 0, 0, 2.2, g + 1.7 - foot(2.6), 2.2, { wall: stone });
       add('stack', 0, g + 1.7, 0, 0, 0.9, 1.8, 0.9, { wall: bronze, trim: bronze });
       add('dome', 0, g + 3.4, 0, 0, 0.55, 0.5, 0.55, { roof: bronze, trim: bronze });
       summary.bodyH = 4.5;
     } else if (kind === 'bandstand') {
-      add('band', 0, g - 0.2, 0, 0, 4.6, 0.7, 4.6, { wall: stone });
+      add('band', 0, foot(5), 0, 0, 4.6, g + 0.5 - foot(5), 4.6, { wall: stone });
       add('posts', 0, g + 0.5, 0, 0, 3.8, 2.6, 3.8, {});
       add('hip', 0, g + 3.0, 0, 0, 4.8, 1.4, 4.8, { roof: new THREE.Color('#6f8a7c'), roofKind: ROOF.METAL, overhang: 0.2 });
       summary.bodyH = 4.5;
@@ -392,7 +446,9 @@ export function composeLot(b, pool, anim = null, selected = false) {
       scaffold(hx, hz, hw, hd, top);
       if (detailsIn) {
         const bwid = Math.min(7, lw * 0.45), bdep = Math.min(5.5, ld * 0.3);
-        const bx = lw / 2 - bwid / 2 - 0.6, bz = ld / 2 - bdep / 2 - 0.6;
+        // The barn stands 0.15 m further back than the farmhouse, so equal
+        // depths never put their walls and fascias in one plane.
+        const bx = lw / 2 - bwid / 2 - 0.6, bz = ld / 2 - bdep / 2 - 0.75;
         const barnWall = pick('timber', Math.floor(h4 * 3), h2, new THREE.Color());
         const barnRoof = era >= 1 ? pick('slate', 0, h3, new THREE.Color()) : pick('thatch', 1, h3, new THREE.Color());
         const btop = body(bx, bz, bwid, bdep, 1, { wall: barnWall, window: WINDOW.NONE, details: DETAIL.PLANKS, floorH: 3.6 });
@@ -408,7 +464,9 @@ export function composeLot(b, pool, anim = null, selected = false) {
     case 'market': {
       // Open market hall: posts under a broad roof. Stalls come from props.
       const top = y0 + sink + 3.4;
-      if (roofIn > 0) add('posts', 0, y0 + sink - 0.1, 0, 0, bw, 3.5, bd, {});
+      // No plinth (people walk through): the posts reach the lowest ground.
+      const gp = groundUnder(0, 0, bw, bd) - 0.15;
+      if (roofIn > 0) add('posts', 0, gp, 0, 0, bw, top + 0.1 - gp, bd, {});
       roofOn(era >= 2 ? 'hip' : era === 0 ? 'thatch' : 'gable', 0, 0, bw, bd, top, { pitch: Math.min(style.pitch, 38) });
       summary.bodyH = top - lo + 3;
       break;
@@ -499,9 +557,10 @@ export function composeLot(b, pool, anim = null, selected = false) {
       const rock = pick(PALETTE.stoneHoney && h2 < 0.5 ? 'stoneHoney' : 'stoneGrey', 0, h3, new THREE.Color());
       const g = Math.max(lo, 0) - 0.2;
       add('band', -lw * 0.15, g, -ld * 0.2, 0, lw * 0.6, 2.4, ld * 0.35, { wall: rock });
-      add('band', lw * 0.2, g, -ld * 0.25, 0, lw * 0.35, 1.5, ld * 0.3, { wall: rock.clone().multiplyScalar(0.9) });
+      add('band', lw * 0.2, g - 0.03, -ld * 0.25, 0, lw * 0.35, 1.5, ld * 0.3, { wall: rock.clone().multiplyScalar(0.9) });
       add('spire', lw * 0.25, g, ld * 0.22, Math.PI / 4, lw * 0.4, 1.4, ld * 0.4, { roof: rock.clone().multiplyScalar(0.8) });
-      for (let i = 0; i < 3; i++) add('band', -lw * 0.25 + i * 1.1, g + 0.2, ld * 0.3, 0, 0.8, 0.6, 0.7, { wall: rock.clone().multiplyScalar(1.05) });
+      // Staggered by a few centimetres so touching blocks never share a face.
+      for (let i = 0; i < 3; i++) add('band', -lw * 0.25 + i * 1.1, g + 0.2 + i * 0.03, ld * 0.3 + i * 0.04, 0, 0.8, 0.6, 0.7, { wall: rock.clone().multiplyScalar(1.05) });
       if (era >= 2 && detailsIn) {
         add('posts', -lw * 0.3, g, 0, 0, 0.8, 5, 0.8, {});
         add('band', -lw * 0.3 + 1.4, g + 4.8, 0, 0, 3.2, 0.25, 0.25, { wall: TIMBER_BASE });
@@ -531,14 +590,21 @@ export function composeLot(b, pool, anim = null, selected = false) {
       if (detailsIn && civic) {
         const pw = Math.min(bw * 0.62, 10);
         const ph = Math.min(F * 1.7, top - y0 - sink);
-        add('portico', 0, y0 + sink - 0.1, z0 + bd2 / 2 + 1.25, 0, pw, ph, 2.5, { trim: TRIM_LIGHT });
+        // The portico floor sits on a stone podium down to the ground in
+        // front, with steps down from its front edge.
+        const pz = z0 + bd2 / 2 + 1.25;
+        skirt(0, pz + 0.05, pw - 0.16, 2.6 - 0.36, y0 + sink - 0.1, STONE_BASE);
+        stepsDown(0, pz + 1.35, 0, 1, pw * 0.7 - 0.36, y0 + sink - 0.1, STONE_BASE);
+        add('portico', 0, y0 + sink - 0.1, pz, 0, pw, ph, 2.5, { trim: TRIM_LIGHT });
         add('gable', 0, y0 + sink + ph - 0.25, z0 + bd2 / 2 + 1.25, Math.PI / 2, 3.1, 1.6, pw + 0.4, { roofKind: ROOF.SLATE, overhang: 0.15, wall: TRIM_LIGHT });
       }
       // A round corner turret with a spire on some later civic buildings.
       if (detailsIn && civic && era >= 3 && h3 < 0.5 && bw > 7) {
         const cx = (h4 < 0.5 ? -1 : 1) * (bw / 2 - 0.6), cz = z0 + bd2 / 2 - 0.6;
         const th = top - y0 + 2.6;
-        add('stack', cx, y0, cz, 0, 2.8, th, 2.8, { wall, trim });
+        // It stands 0.8 m proud of the corner: its foot reaches that ground.
+        const ty = Math.min(y0, groundUnder(cx, cz, 2.8, 2.8) - 0.1);
+        add('stack', cx, ty, cz, 0, 2.8, th + y0 - ty, 2.8, { wall, trim });
         add('spire', cx, y0 + th - 0.1, cz, Math.PI / 4, 2.2, 2.6, 2.2, {});
       }
       if (detailsIn && (b.type === 'exchange' || b.type === 'bathhouse' || (b.type === 'library' && h2 < 0.5))) {
@@ -547,7 +613,8 @@ export function composeLot(b, pool, anim = null, selected = false) {
       } else if (detailsIn && (b.type === 'moot' || b.type === 'school')) {
         // Clock or bell tower on the ridge.
         const ts = b.type === 'moot' ? 2.6 : 1.6;
-        const ttop = body(0, z0, ts, ts, 1, { floorH: (ridge - y0 - sink) + (b.type === 'moot' ? 3.2 : 1.4), window: WINDOW.NONE, noBuild: true, details: DETAIL.QUOINS });
+        // Rises from inside the hall, so it needs no plinth of its own.
+        const ttop = body(0, z0, ts, ts, 1, { floorH: (ridge - y0 - sink) + (b.type === 'moot' ? 3.2 : 1.4), window: WINDOW.NONE, noBuild: true, raised: true, details: DETAIL.QUOINS });
         add('spire', 0, ttop, z0, 0, ts + 0.3, b.type === 'moot' ? 3.6 : 2.2, ts + 0.3, {});
         summary.bodyH = Math.max(summary.bodyH, ttop - lo + 3);
       }
@@ -574,13 +641,22 @@ export function composeLot(b, pool, anim = null, selected = false) {
         if (era >= 2) add('band', 0, y0 + sink + 2.95, frontZ + bd / 2 - 0.1, 0, bw * 0.6, 0.45, 0.12, { wall: TRIM_DARK_SIGN[Math.floor(h5 * 3)] });
       }
       if (detailsIn && isInn) {
-        add('banner', bw / 2 - 0.4, y0 + sink + 2.0, frontZ + bd / 2 + 0.25, 0, 1, 1.2, 1, { window: 3, details: 1 });
+        // Hanging sign: its pole against the front wall, the board standing
+        // out from it (piece +x turned to face the street).
+        add('banner', bw / 2 - 0.4, y0 + sink + 2.0, frontZ + bd / 2 + 0.05, -Math.PI / 2, 1, 1.2, 1, { window: 3, details: 1 });
       }
       if (detailsIn && isWork && era < 3) {
-        // Open-sided lean-to workshop with a timber frame.
-        const sx = -bw / 2 - 1.4;
-        add('posts', sx, y0 + sink - 0.1, frontZ, 0, 2.6, 2.4, bd * 0.7, {});
-        roofOn('gable', sx, frontZ, 2.6, bd * 0.7, y0 + sink + 2.3, { pitch: 25, alongZ: true, overhang: 0.2 });
+        // Open-sided lean-to workshop with a timber frame, on a side free of
+        // extensions; its posts reach the lowest ground beside the house
+        // (the roof stays at eave height).
+        const taken = new Set((b.extensions ?? []).map((e) => e.side ?? 1));
+        const lean = !taken.has(3) ? -1 : !taken.has(1) ? 1 : 0;
+        if (lean) {
+          const sx = lean * (bw / 2 + 1.4);
+          const gp = Math.min(y0 + sink - 0.1, groundUnder(sx, frontZ, 2.6, bd * 0.7) - 0.15);
+          add('posts', sx, gp, frontZ, 0, 2.6, y0 + sink + 2.3 - gp, bd * 0.7, {});
+          roofOn('gable', sx, frontZ, 2.6, bd * 0.7, y0 + sink + 2.3, { pitch: 25, alongZ: true, overhang: 0.2 });
+        }
       }
       scaffold(0, frontZ, bw, bd, top);
     }
@@ -589,7 +665,9 @@ export function composeLot(b, pool, anim = null, selected = false) {
   // Event banners hang from the front of any building.
   if (b.banner && detailsIn && b.type !== 'park') {
     const accent = b.banner === 'protest' ? 0 : b.banner === 'festival' ? 3 : 5;
-    add('banner', -lw * 0.3, y0 + sink, ld / 2 + 0.4, 0, 1.4, 3.4, 1, { window: accent, details: 1 });
+    // The pole stands on the ground at the lot front, not at floor level.
+    const gb = groundUnder(-lw * 0.3, ld / 2 + 0.4, 0.1, 0.1) - 0.1;
+    add('banner', -lw * 0.3, gb, ld / 2 + 0.4, 0, 1.4, 3.5, 1, { window: accent, details: 1 });
   }
 
   summary.top = y0 + sink + (summary.bodyH || 4);

@@ -1141,6 +1141,7 @@ test('a basic bridge is wanted within two years of the first cross-river househo
 test('walkers in a town use the bridges and never stand in deep water', async () => {
   const { fixtureState, stepTick } = await import('../src/sim/index.js');
   const { createRoutePlanner } = await import('../src/route-planner.js');
+  const { deckHeightAt } = await import('../src/sim/bridges.js');
   const s = fixtureState('town');
   // Walkers re-drawn on load got straight-line routes before any planner
   // existed; start them afresh so every route comes from the planner.
@@ -1166,7 +1167,9 @@ test('walkers in a town use the bridges and never stand in deep water', async ()
     for (const p of s.people) {
       const i = cellOf(p.x, p.z);
       if (i < 0) continue;
-      const deck = (s.roads.planned[i] & 2) !== 0;
+      // On a deck: a bridge cell, or anywhere on the deck as drawn (walkers keep lanes
+      // across its whole width, beyond the cells flagged along its axis).
+      const deck = (s.roads.planned[i] & 2) !== 0 || deckHeightAt(s, p.x, p.z) != null;
       // In the river, not on the shoreline: half a unit past the water's edge.
       if (water[i] === 1 && !deck && bankDistance(p.x, p.z) < -0.5) { deep++; if (deepInfo.length < 3) deepInfo.push({ tick, kind: p.task?.kind, x: +p.x.toFixed(1), z: +p.z.toFixed(1), bank: +bankDistance(p.x, p.z).toFixed(2), end: p.task?.route?.slice(-2), seg: p.task?.seg, len: p.task?.route?.length }); }
       if (water[i]) {

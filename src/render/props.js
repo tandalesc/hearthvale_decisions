@@ -6,6 +6,7 @@ const BRIDGE_DECK = 0.9;
 import * as Bridges from '../sim/bridges.js';
 import { patchMaterial, hashId, LAYER_REFLECT } from './shaderlib.js';
 import { GROUND_GLSL } from './ground.js';
+import { createFleet, planReaches, boatPose, BOAT_POSE_GLSL } from './boats.js';
 
 // Props (design-visual §2.4, §5, §7): bridges (timber, stone, iron,
 // footbridges; built from both banks while under construction), embankment
@@ -182,7 +183,7 @@ const SNOW_TINT = /* glsl */ `
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.90, 0.92, 0.95), snowP) * uTint;
 `;
 
-function gradeLambert(grade, key, spec = {}) {
+export function gradeLambert(grade, key, spec = {}) {
   const m = new THREE.MeshLambertMaterial({ vertexColors: !!spec.vertexColors, side: spec.side ?? THREE.FrontSide });
   patchMaterial(m, grade, {
     key: `props:${key}`,
@@ -233,7 +234,7 @@ function createRiverPath() {
     uniform: { value: texture },
     /** Refill when the terrain seed changes (cheap: 1,024 samples). */
     sync() {
-      const s = Terrain.terrainSeed();
+      const s = Terrain.terrainKey();
       if (s === seed) return;
       seed = s;
       for (let i = 0; i < RIVER_N; i++) {
@@ -712,13 +713,17 @@ export function buildCrossing(g, c, heightAt, era, bridges) {
 function bench(g, x, y, z, yaw) {
   const c = Math.cos(yaw), s = Math.sin(yaw);
   const P = (lx, lz) => [x + lx * c + lz * s, z - lx * s + lz * c];
+  // The seat sits on the highest ground under the legs; each leg reaches
+  // down to its own ground, so nothing hovers on a slope.
+  const legs = [-0.6, 0.6].map((lx) => P(lx, -0.02));
+  y = Math.max(y, ...legs.map(([lx, lz]) => groundAt(lx, lz)));
   let [px, pz] = P(0, 0);
   g.boxAt(px, y + 0.45, pz, 1.4, 0.07, 0.42, W_COL.bench, 0, yaw);
   [px, pz] = P(0, -0.2);
   g.boxAt(px, y + 0.7, pz, 1.4, 0.4, 0.06, W_COL.bench, 0, yaw);
-  for (const lx of [-0.6, 0.6]) {
-    [px, pz] = P(lx, -0.02);
-    g.boxAt(px, y + 0.22, pz, 0.07, 0.44, 0.42, W_COL.benchIron, 0, yaw);
+  for (const [lx, lz] of legs) {
+    const foot = Math.min(y, groundAt(lx, lz)) - 0.05;
+    g.boxAt(lx, (foot + y + 0.44) / 2, lz, 0.07, y + 0.44 - foot, 0.42, W_COL.benchIron, 0, yaw);
   }
 }
 
@@ -749,9 +754,12 @@ function lampGeometry() {
 
 function stallGeometry() {
   // Facing +z: counter, four posts, a sloped striped awning, produce crates.
+  // Posts and the counter reach a metre below y = 0: the stall stands on the
+  // highest ground under it, and on a slope the downhill side still meets
+  // the ground (the uphill side is simply buried).
   const g = new Geo();
-  g.boxAt(0, 0.45, 0.1, 1.9, 0.9, 0.8, C.wood);
-  for (const [x, z] of [[-0.95, -0.45], [0.95, -0.45], [-0.95, 0.6], [0.95, 0.6]]) g.boxAt(x, 1.1, z, 0.08, 2.2, 0.08, C.pile);
+  g.boxAt(0, -0.05, 0.1, 1.9, 1.9, 0.8, C.wood);
+  for (const [x, z] of [[-0.95, -0.45], [0.95, -0.45], [-0.95, 0.6], [0.95, 0.6]]) g.boxAt(x, 0.6, z, 0.08, 3.2, 0.08, C.pile);
   g.beam(0, 2.25, -0.6, 0, 1.85, 0.95, 0.06, C.cream, 1, 2.2);
   for (let i = 0; i < 5; i++) g.boxAt(-0.72 + i * 0.36, 0.98, 0.15, 0.3, 0.16, 0.42, PRODUCE[i], 2);
   return g.build();
@@ -765,26 +773,31 @@ function flagGeometry() {
   return g.build();
 }
 
-function boatGeometry() {
-  // Unit length along z (-0.5..0.5), unit width along x; heights in metres.
-  // aExtra: 0 hull, 1 cargo (collapsed on punts).
+export function boatGeometry() {
+  // Unit length along z (-0.5..0.5), unit width along x; heights in metres
+  // (boats.js HULL: keel -0.06, floor 0.17, gunwale 0.32; the craft's
+  // waterline is set per type there). aExtra: 0 hull, 1 cargo (collapsed on punts).
   const g = new Geo();
   const hull = col('#6b4f34'), rim = col('#8c6a44'), inside = col('#5a4330');
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
-  const h = 0.32;
-  // Sides (tapered at both ends) and bottom, as quads around the outline.
+  const h = 0.32, keel = -0.06, floor = 0.17;
+  const mid = (y) => V(0, y, 0);
+  // Sides (tapered at both ends), inner walls, gunwale rim, floor and keel
+  // plate, around the outline (counter-clockwise seen from above).
   const outline = [[-0.5, -0.36], [-0.5, 0.36], [-0.28, 0.5], [0.28, 0.5], [0.5, 0.36], [0.5, -0.36], [0.28, -0.5], [-0.28, -0.5]];
   for (let i = 0; i < outline.length; i++) {
     const [x0, z0] = outline[i];
     const [x1, z1] = outline[(i + 1) % outline.length];
-    g.quad(V(x0, -0.06, z0), V(x1, -0.06, z1), V(x1, h, z1), V(x0, h, z0), hull);
+    g.quad(V(x0, keel, z0), V(x1, keel, z1), V(x1, h, z1), V(x0, h, z0), hull);
     // Inner wall (thin rim reads as a hull edge).
-    g.quad(V(x1 * 0.86, 0.17, z1 * 0.92), V(x0 * 0.86, 0.17, z0 * 0.92), V(x0 * 0.86, h, z0 * 0.92), V(x1 * 0.86, h, z1 * 0.92), inside);
-    g.quad(V(x0 * 0.86, h, z0 * 0.92), V(x1 * 0.86, h, z1 * 0.92), V(x1, h, z1), V(x0, h, z0), rim);
+    g.quad(V(x1 * 0.86, floor, z1 * 0.92), V(x0 * 0.86, floor, z0 * 0.92), V(x0 * 0.86, h, z0 * 0.92), V(x1 * 0.86, h, z1 * 0.92), inside);
+    // Rim and floor face up, the keel plate down: seen from above the boat is
+    // closed, so the river never shows inside it (the floor sits above the
+    // waterline), and through clear shallows the hull reads solid.
+    g.quad(V(x0, h, z0), V(x1, h, z1), V(x1 * 0.86, h, z1 * 0.92), V(x0 * 0.86, h, z0 * 0.92), rim);
+    g.tri(mid(floor), V(x0 * 0.86, floor, z0 * 0.92), V(x1 * 0.86, floor, z1 * 0.92), inside);
+    g.tri(mid(keel), V(x1, keel, z1), V(x0, keel, z0), hull);
   }
-  // Bottom boards sit at 0.17 m, above the waterline (0.065 m, a third of
-  // the hull): the inside of the boat never shows the river.
-  g.quad(V(-0.43, 0.17, -0.46), V(0.43, 0.17, -0.46), V(0.43, 0.17, 0.46), V(-0.43, 0.17, 0.46), inside);
   for (let i = 0; i < 5; i++) g.boxAt(-0.34 + i * 0.17, 0.18, 0, 0.012, 0.012, 0.9, rim);
   // Thwarts (seats).
   for (const z of [-0.25, 0.22]) g.boxAt(0, 0.26, z, 0.86, 0.04, 0.06, rim);
@@ -1048,6 +1061,8 @@ void main() {
   local.y += abs(aWing) * flap * aBird2.z;
   // Hide at night.
   local *= 1.0 - smoothstep(0.55, 0.8, uNight);
+  // Shrink away as the camera comes close, rather than clip through the near plane.
+  local *= smoothstep(2.0, 7.0, distance(c + off, cameraPosition));
   vec3 rel = local + off;
   vec3 p = c + vec3(rel.x * cy + rel.z * sy, rel.y, -rel.x * sy + rel.z * cy);
   vec4 mvPosition = viewMatrix * vec4(p, 1.0);
@@ -1769,7 +1784,11 @@ export function createProps(ctx) {
             const yaw = Math.atan2(e.x - x, e.z - z);
             scratchQ.setFromAxisAngle(Y_AXIS, yaw);
             const s = 0.92 + 0.16 * hashId(id * 7 + i, 4);
-            scratchM.compose(scratchP.set(x, heightAt(x, z), z), scratchQ, scratchS.set(s, s, s));
+            // Highest ground under the corners (posts reach down from there).
+            const cy = Math.cos(yaw), sy = Math.sin(yaw);
+            let top = heightAt(x, z);
+            for (const [lx, lz] of [[-1, -0.5], [1, -0.5], [-1, 0.7], [1, 0.7]]) top = Math.max(top, heightAt(x + lx * cy + lz * sy, z - lx * sy + lz * cy));
+            scratchM.compose(scratchP.set(x, top, z), scratchQ, scratchS.set(s, s, s));
             stalls.setMatrixAt(counts.stalls, scratchM);
             stalls.setColorAt(counts.stalls, AWNINGS[(id + i) % AWNINGS.length]);
             counts.stalls++;
@@ -1840,79 +1859,50 @@ export function createProps(ctx) {
   }
 
   // --- Boats ---------------------------------------------------------------
+  // Paths and poses come from boats.js (CPU, riding the water's displayed
+  // surface); the shader only places the hull. Eight instances, one draw.
   const BOATS = 8;
+  const fleet = createFleet(BOATS);
   const boatGeo = new THREE.InstancedBufferGeometry().copy(boatGeometry());
-  const boatA = attr(boatGeo, 'aBoat', 4, BOATS);   // reach zA, reach zB, lane, speed
+  const boatP = attr(boatGeo, 'aBoatP', 4, BOATS);  // x, waterline y, z, yaw
+  const boatQ = attr(boatGeo, 'aBoatQ', 4, BOATS);  // pitch, roll, waterline (hull frame), 0
   const boatB = attr(boatGeo, 'aBoat2', 4, BOATS);  // length, width, cargo, seed
-  for (let i = 0; i < BOATS; i++) {
-    const barge = i >= 4;
-    boatB.array.set([barge ? 7.2 : 3.4, barge ? 2.1 : 1.05, barge ? 1 : 0, hashId(i, 44)], i * 4);
-  }
-  let reachSig = '';
+  for (const b of fleet) boatB.array.set([b.spec.length, b.spec.beam, b.spec.cargo, b.seed], b.i * 4);
+  const pose = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0 };
+  const boatFords = { fords: null, bridges: null };
 
-  /**
-   * Boats keep to clear reaches of deep water: the stretches between fords
-   * and bridges (they never cross a ford's shallows or pass under a deck).
-   * Each boat plies its reach back and forth on its own side of the channel.
-   */
-  function assignReaches(view) {
-    const stops = [];
-    for (const f of Terrain.FORDS ?? []) stops.push([f.z - f.half - 8, f.z + f.half + 8]);
-    for (const b of view.bridges ?? []) {
-      const bz = b.a && b.b ? (b.a.z + b.b.z) / 2 : b.z;
-      stops.push([bz - 8, bz + 8]);
+  function updateBoats(view) {
+    boatFords.fords = Terrain.FORDS ?? [];
+    boatFords.bridges = view.bridges ?? [];
+    planReaches(fleet, boatFords);
+    const u = grade.uniforms;
+    const decoT = u.uDecoTime.value, waterT = u.uTime.value;
+    const P = boatP.array, Q = boatQ.array;
+    for (let i = 0; i < boatGeo.instanceCount; i++) {
+      const b = fleet[i];
+      boatPose(b, decoT, waterT, pose);
+      P[i * 4] = pose.x; P[i * 4 + 1] = pose.y; P[i * 4 + 2] = pose.z; P[i * 4 + 3] = pose.yaw;
+      Q[i * 4] = pose.pitch; Q[i * 4 + 1] = pose.roll; Q[i * 4 + 2] = b.spec.waterline; Q[i * 4 + 3] = 0;
     }
-    const sig = stops.map((r) => r.map((v) => v.toFixed(0)).join(':')).join('|');
-    if (sig === reachSig) return;
-    reachSig = sig;
-    stops.sort((a, b) => a[0] - b[0]);
-    const reaches = [];
-    let from = -360;
-    for (const [a, b] of stops) {
-      if (a - from > 40) reaches.push([from, a]);
-      from = Math.max(from, b);
-    }
-    if (360 - from > 40) reaches.push([from, 360]);
-    if (!reaches.length) reaches.push([-360, 360]);
-    // Longest reaches first, so the busiest water gets the most boats.
-    reaches.sort((p, q) => (q[1] - q[0]) - (p[1] - p[0]));
-    for (let i = 0; i < BOATS; i++) {
-      const barge = i >= 4;
-      const [za, zb] = reaches[i % reaches.length];
-      const lane = (barge ? 0.9 : 1.4) + (hashId(i, 42) - 0.5) * 0.4;
-      boatA.array.set([za, zb, lane, barge ? 0.75 : 0.95 + hashId(i, 43) * 0.25], i * 4);
-    }
-    boatA.needsUpdate = true;
+    boatP.needsUpdate = true;
+    boatQ.needsUpdate = true;
   }
   boatGeo.instanceCount = 0;
   const boatMat = gradeLambert(grade, 'boat', {
     vertexColors: true,
-    uniforms: { tRiverPath: riverPath.uniform },
-    vertexHead: 'attribute vec4 aBoat;\nattribute vec4 aBoat2;\nattribute float aExtra;\n' + RIVER_GLSL,
+    vertexHead: 'attribute vec4 aBoatP;\nattribute vec4 aBoatQ;\nattribute vec4 aBoat2;\nattribute float aExtra;\n' + BOAT_POSE_GLSL,
     vertexNormal: /* glsl */ `
-      // Boat frame: ply the reach [zA, zB] back and forth (a triangle wave
-      // over twice its length), keeping to the right of the channel.
-      float reach = max(aBoat.y - aBoat.x, 1.0);
-      float trip = mod(aBoat.w * uDecoTime + aBoat2.w * 2.0 * reach, 2.0 * reach);
-      float dirB = trip < reach ? 1.0 : -1.0;
-      float bz = aBoat.x + (trip < reach ? trip : 2.0 * reach - trip);
-      float bx = riverXg(bz) + aBoat.z * dirB;
-      vec2 fwd = normalize(vec2(riverDX(bz), 1.0)) * dirB;
-      float yawB = atan(fwd.x, fwd.y);
-      float cyB = cos(yawB), syB = sin(yawB);
-      objectNormal.xz = vec2(objectNormal.x * cyB + objectNormal.z * syB, -objectNormal.x * syB + objectNormal.z * cyB);
+      mat3 boatR = boatBasis(aBoatQ, aBoatP.w);
+      objectNormal = boatR * objectNormal;
     `,
     vertexBegin: /* glsl */ `
       vec3 lb = transformed;
       lb.xz *= vec2(aBoat2.y, aBoat2.x);
       // Punts carry no cargo.
       if (aExtra > 0.5) lb *= aBoat2.z;
-      // Pitch gently with the swell.
-      lb.y += lb.z * 0.012 * sin(uDecoTime * 1.3 + aBoat2.w * 6.0);
-      // Bob with the water's vertex swell (src/render/water.js) plus a slow rock.
-      float bob = 0.012 * sin(bx * 1.7 + uDecoTime * 1.3) * sin(bz * 1.1 + uDecoTime * 0.9) + 0.015 * sin(uDecoTime * 1.6 + aBoat2.w * 6.283);
-      // Waterline at a third of the hull (hull -0.06..0.32 m: waterline 0.065).
-      transformed = vec3(bx, riverLevel(bz) - 0.065 + bob, bz) + vec3(lb.x * cyB + lb.z * syB, lb.y, -lb.x * syB + lb.z * cyB);
+      // Hull frame to the water: the waterline (aBoatQ.z) sits on the surface.
+      lb.y -= aBoatQ.z;
+      transformed = aBoatP.xyz + boatR * lb;
     `,
   });
   const boats = new THREE.Mesh(boatGeo, boatMat);
@@ -2014,9 +2004,9 @@ export function createProps(ctx) {
 
       // Boats appear with the era: punts from era 2, barges from era 4.
       const era = view.era ?? 0;
-      assignReaches(view);
-      boatGeo.instanceCount = era >= 4 ? BOATS : era >= 2 ? 4 : 0;
+      boatGeo.instanceCount = fleet.none ? 0 : era >= 4 ? BOATS : era >= 2 ? 4 : 0;
       boats.visible = boatGeo.instanceCount > 0;
+      if (boats.visible) updateBoats(view);
       // Reduced motion: no birds (boats stay, moored where the frozen clock left them).
       birds.visible = !ctxReduced();
     },

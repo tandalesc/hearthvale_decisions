@@ -26,6 +26,9 @@ export function openPopover(anchor, content, {label = 'Details', place = 'auto'}
   if (place === 'right' || (place === 'auto' && r.right + w + 12 < innerWidth && r.width < 80)) {
     x = r.right + 10;
     y = Math.min(innerHeight - ht - 12, Math.max(12, r.top));
+  } else if (place === 'below') {
+    x = Math.min(innerWidth - w - 12, Math.max(12, r.left));
+    y = Math.min(innerHeight - ht - 12, r.bottom + 10);
   } else {
     x = Math.min(innerWidth - w - 12, Math.max(12, r.left));
     y = r.top - ht - 10 > 12 ? r.top - ht - 10 : r.bottom + 10;

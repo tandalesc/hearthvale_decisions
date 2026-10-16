@@ -2,7 +2,7 @@
 // angles to its flow, from dry ground on one bank to dry ground on the other.
 // Records carry a {x, z} and b {x, z} (the abutments), width and deckY; the
 // deck's nav cells follow the a -> b line.
-import { riverX, waterAt, heightAt, waterLevelAt, bankDistance } from '../terrain.js';
+import { riverX, waterAt, heightAt, waterLevelAt, bankDistance, floodDepthAt, terrainVersion, FLOOD_RISE, KIND } from '../terrain.js';
 import { CELL, cellOf, cellIndex, cellXZ } from './roads.js';
 
 export const BRIDGE_WIDTH = { footbridge: 2, timber: 4, stone: 5, iron: 6 };
@@ -24,15 +24,26 @@ export function acrossAt(z) {
 
 // The crossing at z: abutments a (west) and b (east) on dry ground, along the
 // line through the river centre perpendicular to the flow.
-export function crossingAt(z) {
+//
+// In valleys with a floodplain (version 2), a cart bridge carries on over the
+// flood meadow to ground a great flood leaves dry, so its road never floods:
+// up to FLOOD_SPAN out from the river, else the first dry bank. A footbridge
+// is the cheap crossing a flood may take: it stays short and low.
+const FLOOD_SPAN = 60;
+const FLOOD_CLEAR = 0.05;
+export function crossingAt(z, style = 'timber') {
   const c = { x: riverX(z), z };
   const n = acrossAt(z);
+  const overFlood = style !== 'footbridge' && terrainVersion() >= 2;
   const end = dir => {
-    for (let t = 2; t < 40; t += 0.5) {
+    let bank = null;
+    for (let t = 2; t < (overFlood ? FLOOD_SPAN : 40); t += 0.5) {
       const p = { x: c.x + dir * n.x * t, z: c.z + dir * n.z * t };
-      if (!waterAt(p.x, p.z) && bankDistance(p.x, p.z) >= DRY) return p;
+      if (waterAt(p.x, p.z) || bankDistance(p.x, p.z) < DRY) continue;
+      bank ??= p;
+      if (!overFlood || floodDepthAt(p.x, p.z) <= FLOOD_CLEAR) return p;
     }
-    return { x: c.x + dir * n.x * 40, z: c.z + dir * n.z * 40 };
+    return bank ?? { x: c.x + dir * n.x * 40, z: c.z + dir * n.z * 40 };
   };
   const a = end(-1), b = end(1);
   return { a, b, centre: c, length: Math.hypot(b.x - a.x, b.z - a.z) };
@@ -73,7 +84,9 @@ function bridgeCorner(prev, next, seen, out) {
 }
 
 export function deckYFor(a, b, z, style = 'timber') {
-  const water = waterLevelAt(z) + (DECK_CLEARANCE[style] ?? 1.4);
+  let water = waterLevelAt(z) + (DECK_CLEARANCE[style] ?? 1.4);
+  // A cart deck over a floodplain clears the great flood too.
+  if (style !== 'footbridge' && terrainVersion() >= 2) water = Math.max(water, waterLevelAt(z) + FLOOD_RISE[KIND.RIVER] + 0.4);
   // A footbridge keeps low even where the banks are high; cart decks never dip below the banks.
   return style === 'footbridge' ? water : Math.max(heightAt(a.x, a.z), heightAt(b.x, b.z), water);
 }
@@ -102,7 +115,9 @@ export function deckProfile(bridge, t) {
   const tt = Math.max(0, Math.min(1, t));
   const len = Math.hypot(bridge.b.x - bridge.a.x, bridge.b.z - bridge.a.z);
   const ga = heightAt(bridge.a.x, bridge.a.z), gb = heightAt(bridge.b.x, bridge.b.z);
-  const ramp = Math.min(RAMP, len / 4) / Math.max(len, 1e-6);
+  // A high deck over a floodplain comes down on longer ramps (about 1 in 3).
+  const climb = terrainVersion() >= 2 ? Math.max(bridge.deckY - ga, bridge.deckY - gb) * 3 : 0;
+  const ramp = Math.min(Math.max(RAMP, climb), len / 4) / Math.max(len, 1e-6);
   const rise = (ARCH_RISE[bridge.style ?? bridge.variant] ?? 0) * Math.sin(Math.PI * tt);
   const deck = bridge.deckY + rise;
   if (tt < ramp) return ga + (deck - ga) * smooth(tt / ramp);

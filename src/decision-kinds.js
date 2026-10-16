@@ -16,7 +16,17 @@
 //      id            lowercase snake_case, unique ('household_move').
 //      criteria      fixed option keys -> short plain-language labels. A
 //                    question may narrow them with `allowed`, never add any.
-//      context       per-question fields, built with the `field` helpers:
+//      type          how the model answers (optional, default 'choice'):
+//                      'choice'  pick one of the named options.
+//                      'score'   rate on an ordered scale: 2-10 criteria,
+//                                listed lowest first. Answers also carry
+//                                `score`, the expected level (0 = first key).
+//                      'noul'    yes/no: exactly two criteria, the "yes"
+//                                side first. Read as P(yes) by the model.
+//                    Every type comes back as {choice, confidence,
+//                    probabilities} over the option keys, so pooling,
+//                    sampling and fallbacks treat them alike.
+//      context      per-question fields, built with the `field` helpers:
 //                      field.int(min, max)        whole number in range
 //                      field.number(min, max)     finite number in range
 //                      field.oneOf([...values])   one of fixed strings
@@ -60,6 +70,8 @@ const QUESTION_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
 const SAFE_TEXT = /^[A-Za-z0-9 _,.\/-]*$/;
 const QUESTION_KEYS = new Set(['kind', 'id', 'context', 'allowed']);
 const SHARES = ['town', 'district', 'slice', 'proposal', 'individual'];
+// Answer types the decision model supports, with their option-count limits.
+const TYPES = {choice: [2, 16], score: [2, 10], noul: [2, 2]};
 
 export const MAX_QUESTIONS_PER_REQUEST = 64; // the service batches up to 64 questions per request
 export const MAX_GROUPS_PER_REQUEST = 64;
@@ -90,10 +102,13 @@ function checkSchema(owner, schemas) {
 export function defineDecisionKind(spec) {
   if (!spec || !KIND_ID.test(spec.id)) throw new Error('Decision kind needs a snake_case id');
   if (kinds.has(spec.id)) throw new Error(`Decision kind ${spec.id} already defined`);
+  const type = spec.type ?? 'choice';
+  if (!Object.hasOwn(TYPES, type)) throw new Error(`Decision kind ${spec.id}: unknown type`);
+  const [minOptions, maxOptions] = TYPES[type];
   const options = Object.keys(spec.criteria ?? {});
-  if (options.length < 2 || options.length > 16 || !options.every((k) => OPTION_KEY.test(k)) ||
+  if (options.length < minOptions || options.length > maxOptions || !options.every((k) => OPTION_KEY.test(k)) ||
       !options.every((k) => typeof spec.criteria[k] === 'string' && spec.criteria[k].length <= 240)) {
-    throw new Error(`Decision kind ${spec.id} needs 2-16 criteria with short labels`);
+    throw new Error(`Decision kind ${spec.id} needs ${minOptions}-${maxOptions} criteria with short labels`);
   }
   if (typeof spec.instructions !== 'function') throw new Error(`Decision kind ${spec.id} needs instructions()`);
   if (spec.share !== undefined && !SHARES.includes(spec.share)) throw new Error(`Decision kind ${spec.id}: unknown share`);
@@ -102,6 +117,7 @@ export function defineDecisionKind(spec) {
   checkSchema(spec.id, stateSchema);
   const kind = Object.freeze({
     id: spec.id,
+    type,
     criteria: Object.freeze({...spec.criteria}),
     options: Object.freeze(options),
     context: Object.freeze({...(spec.context ?? {})}),
@@ -160,6 +176,8 @@ function checkAllowed(kind, allowed) {
       new Set(allowed).size !== allowed.length || allowed.some((a) => !kind.options.includes(a))) {
     throw new Error('Invalid allowed options');
   }
+  // A scale needs two levels; a yes/no question needs both sides.
+  if (kind.type !== 'choice' && allowed.length < TYPES[kind.type][0]) throw new Error('Invalid allowed options');
   // Keep the kind's declared order so equivalent questions render identically.
   return kind.options.filter((a) => allowed.includes(a));
 }
@@ -209,15 +227,39 @@ export function stateKey(state) {
 
 export const offeredOptions = (question) => question.allowed ?? getDecisionKind(question.kind).options;
 
-// The verified upstream shape for one question: {instructions, criteria}.
+// The upstream shape for one question: {type, instructions, criteria}.
+// choice: {key: label}; score: [label, ...] lowest first; noul: {true, false}.
 export function renderQuestion(question, state = {}) {
   const kind = getDecisionKind(question.kind);
   const offered = offeredOptions(question);
+  const labels = offered.map((k) => kind.criteria[k]);
   return {
+    type: kind.type,
     instructions: String(kind.instructions(question.context, offered, state)),
-    criteria: Object.fromEntries(offered.map((k) => [k, kind.criteria[k]])),
+    criteria: kind.type === 'score' ? labels
+      : kind.type === 'noul' ? {true: labels[0], false: labels[1]}
+      : Object.fromEntries(offered.map((k, i) => [k, labels[i]])),
   };
 }
+
+// Model-native answers -> option-keyed probabilities (or null if malformed).
+// score: probabilities keyed by level index "0".."n-1" over the offered levels.
+// noul: a single P(yes), the first offered option.
+function nativeProbabilities(kind, raw, offered) {
+  if (kind.type === 'score' && raw.type === 'score') {
+    if (!isPlainObject(raw.probabilities) || Object.keys(raw.probabilities).some((k) => !/^\d$/.test(k) || +k >= offered.length)) return null;
+    return Object.fromEntries(offered.map((o, i) => [o, raw.probabilities[i] ?? 0]));
+  }
+  if (kind.type === 'noul' && raw.type === 'noul') {
+    if (!Number.isFinite(raw.noul) || raw.noul < 0 || raw.noul > 1) return null;
+    return {[offered[0]]: raw.noul, [offered[1]]: 1 - raw.noul};
+  }
+  return undefined;
+}
+
+// Expected level on the kind's full scale (0 = its first key).
+const expectedLevel = (kind, probabilities) =>
+  Object.entries(probabilities).reduce((sum, [o, p]) => sum + p * kind.options.indexOf(o), 0);
 
 // Probabilities must cover only offered options, each in [0, 1], summing to
 // ~1. Missing offered options become 0. Anything else is rejected outright.
@@ -236,16 +278,27 @@ export function normalizeOptionProbabilities(value, offered) {
   return result;
 }
 
-// Upstream {type, choice, confidence, probabilities?} -> normalized answer or null.
+// Upstream answer -> {kind, choice, confidence, probabilities?, score?} or null.
+// Accepts the model's native shape for the kind's type, and the normalized
+// 'choice' shape (which the browser re-checks after the server).
 export function normalizeAnswer(question, raw) {
   const kind = getDecisionKind(question.kind);
-  if (!kind || !isPlainObject(raw) || raw.type !== 'choice') return null;
+  if (!kind || !isPlainObject(raw)) return null;
   const offered = offeredOptions(question);
+  const native = nativeProbabilities(kind, raw, offered);
+  if (native === undefined && raw.type !== 'choice') return null;
+  const withScore = (answer) => (kind.type === 'score' && answer.probabilities ? {...answer, score: expectedLevel(kind, answer.probabilities)} : answer);
+  if (native !== undefined) {
+    const probabilities = native && normalizeOptionProbabilities(native, offered);
+    if (!probabilities) return null;
+    const choice = offered.reduce((best, o) => (probabilities[o] > probabilities[best] ? o : best));
+    return withScore({kind: kind.id, choice, confidence: probabilities[choice], probabilities});
+  }
   if (!offered.includes(raw.choice)) return null;
   if (raw.probabilities !== undefined) {
     const probabilities = normalizeOptionProbabilities(raw.probabilities, offered);
     if (!probabilities || !(probabilities[raw.choice] > 0)) return null;
-    return {kind: kind.id, choice: raw.choice, confidence: probabilities[raw.choice], probabilities};
+    return withScore({kind: kind.id, choice: raw.choice, confidence: probabilities[raw.choice], probabilities});
   }
   if (!Number.isFinite(raw.confidence) || raw.confidence < kind.minConfidence || raw.confidence > 1) return null;
   return {kind: kind.id, choice: raw.choice, confidence: raw.confidence};

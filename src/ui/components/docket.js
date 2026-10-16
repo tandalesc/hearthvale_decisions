@@ -36,6 +36,8 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
 
   function fullNode(card) {
     let node = full.get(card.id);
+    // A node still folding away cannot come back; build it afresh.
+    if (node?.dataset.leaving) node = null;
     if (!node) {
       node = createCard(card, ctx);
       node.dataset.id = card.id;
@@ -47,6 +49,7 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
 
   function nextNode(card) {
     let node = next.get(card.id);
+    if (node?.dataset.leaving) node = null;
     if (!node) {
       node = createNextCard(card, ctx, (id) => { active = id; render(0); ctx.sound?.('slide'); });
       node.dataset.id = card.id;
@@ -131,6 +134,17 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
       stack.querySelector('.card:not(.is-next) .option')?.focus({preventScroll: false});
     },
     get count() { return cards.length; },
+    get active() { return active; },
+    // Show a different set of cards at once (a filter changed): no fold-away
+    // for cards that were only filtered out.
+    reset() {
+      for (const node of stack.children) node.getAnimations?.().forEach((a) => a.cancel());
+      stack.replaceChildren();
+      full.clear();
+      next.clear();
+      active = null;
+      lastSig = '';
+    },
   };
 }
 

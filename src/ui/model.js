@@ -14,6 +14,8 @@ export function top(t = {}) {
     season: Number.isFinite(t.season) ? t.season : Math.floor(((t.month ?? 0) % 12) / 3),
     wellbeing: frac(t.wellbeing),
     homes: Number.isFinite(t.homes) ? t.homes : null,
+    approval: Number.isFinite(t.approval) ? Math.round(t.approval) : null,
+    approvalChange: Number.isFinite(t.approvalChange) ? Math.round(t.approvalChange) : null,
     coinTrend: Number.isFinite(t.coinTrend) ? t.coinTrend : 0,
   };
 }
@@ -24,6 +26,17 @@ function costLine(card) {
   if (card.cost > 0) parts.push(`Costs ${coin(card.cost)}.`);
   if (card.upkeep > 0) parts.push(`Upkeep ${num(card.upkeep)} a year.`);
   return parts.join(' ') || null;
+}
+
+// Town feeling (src/sim/opinion.js): shares as fractions, a row per side in a debate.
+const share = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(1, frac(v))) : 0);
+function opinion(o) {
+  if (!o || typeof o !== 'object') return null;
+  const one = (x) => ({
+    ...x, verdict: x.verdict ?? 'forming', for: share(x.for), against: share(x.against), pending: !!x.pending,
+    factions: (x.factions ?? []).map((r) => ({...r, share: share(r.share), for: share(r.for), against: share(r.against)})),
+  });
+  return {...one(o), sides: Array.isArray(o.sides) && o.sides.length ? o.sides.map(one) : null};
 }
 
 export function card(c) {
@@ -39,6 +52,7 @@ export function card(c) {
     costLine: costLine(c),
     note: c.grainNote ?? null,
     debate,
+    opinion: opinion(c.opinion),
     options: (c.options ?? []).map((o) => ({
       ...o,
       reactions: (o.reactions ?? []).map((r) => ({faction: r.faction, name: r.name, dir: r.dir})),
@@ -65,7 +79,6 @@ function explainerLines(e) {
 export function body(b) {
   return {
     ...b,
-    cap: b.cap ?? b.delegateCap ?? 0,
     explainer: explainerLines(b.explainer),
     metrics: (b.metrics ?? []).map((m) => ({...m, unit: m.unit === 'coin' || m.unit === 'level' ? '' : m.unit === 'months' ? ' mo' : m.unit, change: change(m.series, m.value)})),
     rules: (b.rules ?? []).map((r) => (typeof r === 'string' ? {id: r} : r)),

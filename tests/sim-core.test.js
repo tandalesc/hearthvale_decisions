@@ -12,7 +12,7 @@ import {invalidateCtx} from '../src/sim/conditions.js';
 import {touchBuilding, removeBuildingRecord, addBuildingRecord} from '../src/sim/state.js';
 import {riverClear} from '../src/sim/sites.js';
 import {relocateEnterprise} from '../src/sim/buildings.js';
-import {groundRent} from '../src/sim/economy.js';
+import {groundRent, purseBase, economyYearly} from '../src/sim/economy.js';
 import {monthlyRent} from '../src/sim/land.js';
 import {createRoutePlanner} from '../src/route-planner.js';
 
@@ -101,6 +101,39 @@ test('money is conserved in a busy city fixture', () => {
   assert.ok(Math.abs(conserved(s) - start) < 1e-6 * Math.abs(start));
 });
 
+test('bodies are funded in a land-tax town: purses from property, income and site tax, then yearly budgets', () => {
+  const s = fixtureState('city');
+  const start = conserved(s);
+  // The city fixture levies no property or income tax: its tax is the site tax.
+  assert.equal(s.economy.lastYear.propertyTax ?? 0, 0);
+  assert.equal(s.economy.lastYear.incomeTax ?? 0, 0);
+  assert.ok(s.economy.lastYear.siteTax > 0);
+  // Half a year of taxes, then the year's purses as the rollover pays them:
+  // each body its share of the base.
+  runTicks(s, TICKS_PER_YEAR / 2, {}, {skipPeople: true});
+  const live = s.institutions.filter((b) => b.kind !== 'moot' && b.status === 'active' && b.budgetShare > 0);
+  assert.ok(live.length >= 5);
+  const shares = Object.fromEntries(live.map((b) => [b.id, b.budgetShare]));
+  const base = purseBase(s.economy.year);
+  assert.ok(base > 0);
+  economyYearly(s);
+  for (const b of live) assert.ok(Math.abs(s.economy.lastYear.bodies[b.id] - shares[b.id] * base) < 1e-6, `${b.id} paid ${s.economy.lastYear.bodies[b.id]}`);
+  assert.equal(Math.round(s.budget.income.tax), Math.round(base));
+  assert.ok(Math.abs(conserved(s) - start) < 1e-6 * Math.abs(start));
+  // A City has budgets: after its first season (unanswered, each keeps its
+  // purse income), every budget body's money comes from its grant, not a purse.
+  fastForward(s, 1);
+  runTicks(s, TICKS_PER_MONTH, {}, {skipPeople: true});   // the year's jobs run just after the turn
+  const budgeted = s.institutions.filter((x) => x.kind !== 'moot' && x.status === 'active' && x.budget?.mode === 'annual');
+  assert.ok(budgeted.length >= 5);
+  for (const b of budgeted) {
+    assert.ok(b.budget.granted > 0, `${b.id} got no grant`);
+    assert.ok(Math.abs(b.budget.granted - Math.round(shares[b.id] * base)) <= 1 || b.budget.choice !== 'lapsed', `${b.id}: grant ${b.budget.granted}, purse ${shares[b.id] * base}`);
+    assert.ok(!(s.economy.lastYear.bodies?.[b.id] > 0), `${b.id} also got a purse`);
+  }
+  assert.ok(Math.abs(conserved(s) - start) < 1e-6 * Math.abs(start));
+});
+
 test('serialize and restore round-trip, typed arrays included', () => {
   const s = fixtureState('town');
   runTicks(s, 75);
@@ -162,11 +195,16 @@ test('ground rent: tenants pay their landlord, owner-occupiers pay site tax, mon
 
 test('relocation goes through sim-world: new premises first, then the move, then the old building is cleared', () => {
   const s = fixtureState('town');
-  const ent = s.enterprises.find((e) => !e.public && e.type === 'workshop') ?? s.enterprises.find((e) => !e.public);
-  const oldId = ent.buildingId;
-  ent.cash = 50000;
-  const result = relocateViaWorld(s, ent);
-  assert.ok(result.ok, `relocateEnterprise: ${result.reason}`);
+  // A business that can find new premises (workshops first): which one is the town's own affair.
+  const movers = [...s.enterprises.filter((e) => !e.public && e.type === 'workshop'), ...s.enterprises.filter((e) => !e.public && e.type !== 'workshop')];
+  let ent = null, oldId = null, result = null;
+  for (const e of movers) {
+    oldId = e.buildingId;
+    e.cash = 50000;
+    result = relocateViaWorld(s, e);
+    if (result.ok) { ent = e; break; }
+  }
+  assert.ok(result?.ok, `relocateEnterprise: ${result?.reason}`);
   const project = s.projects.find((p) => p.data?.enterpriseId === ent.id);
   assert.ok(project);
   for (let k = 0; k < 40 && ent.buildingId === oldId; k++) runTicks(s, TICKS_PER_MONTH);
@@ -368,11 +406,20 @@ test('render view: rows, extrapolation, dirty ranges and building events', () =>
   assert.deepEqual({...view.peopleDirty}, {start: 0, end: s.people.length});
   assert.equal(view.buildingEvents.length, s.buildings.length);
   assert.ok(view.buildingEvents.every((e) => e.kind === 'add'));
-  assert.equal(view.bridges.length, s.buildings.filter((b) => b.type === 'bridge').length);
+  assert.equal(view.bridges.length, s.buildings.filter((b) => b.type === 'bridge' && !b.collapsed).length, 'every standing bridge (a fallen one is not drawn)');
   consume(view);
 
+  // Nothing changed in the sim: 16 ms on, the only rows renewed are walkers
+  // who reached a corner in between (their waypoint time came due).
+  const rows = Float32Array.from(view.people);
   view.sync(s, 10.016);
-  assert.equal(view.peopleDirty, null, 'nothing changed, nothing to upload');
+  for (let i = 0; i < view.peopleCount; i++) {
+    const o = i * view.rowFloats;
+    let same = true;
+    for (let k = 0; k < view.rowFloats; k++) if (view.people[o + k] !== rows[o + k]) same = false;
+    if (!same) assert.ok(view.rowFloats > 16 && rows[o + 16] > 10 && rows[o + 16] <= 10.016, `row ${i} renewed with no corner due`);
+  }
+  if (view.peopleDirty) assert.ok(view.peopleDirty.end - view.peopleDirty.start < view.peopleCount / 10, 'nothing changed, little to upload');
   assert.equal(view.buildingEvents.length, 0);
 
   runTicks(s, 30);

@@ -144,9 +144,12 @@ export function pitchedRoof(profile, { gableAo = 1 } = {}) {
   k.quad(T(-0.5, ez, 0, 1), T(0.5, ez, 0, 1), T(0.5, ez, 0), T(-0.5, ez, 0), PART.TRIM, 0.85);
   k.quad(T(0.5, -ez, 0, 1), T(-0.5, -ez, 0, 1), T(-0.5, -ez, 0), T(0.5, -ez, 0), PART.TRIM, 0.85);
   // Gable ends: a fan under the profile, inset by the overhang in x and z.
-  // aShape.x/z = -sign means "move inward by one overhang".
+  // aShape.x/z = -sign means "move inward by one overhang". The fan's foot
+  // runs below the wall top (the eave line is lower), so it is set a further
+  // GABLE_INSET metres inside the wall face: coplanar with the wall it
+  // z-fights up close; recessed, the wall hides it and the verge covers the step.
   for (const sx of [1, -1]) {
-    const g = (z, y) => [0.5 * sx, y, z, 0, 0, 0, -sx, 0, z === 0 ? 0 : -Math.sign(z)];
+    const g = (z, y) => [0.5 * sx, y, z, -GABLE_INSET * sx, 0, 0, -sx, 0, z === 0 ? 0 : -Math.sign(z)];
     for (let i = 0; i < prof.length - 1; i++) {
       const [z0, y0] = prof[i];
       const [z1, y1] = prof[i + 1];
@@ -157,6 +160,9 @@ export function pitchedRoof(profile, { gableAo = 1 } = {}) {
   }
   return k.build();
 }
+
+/** How far gable ends sit behind the wall face (metres; see pitchedRoof). */
+export const GABLE_INSET = 0.05;
 
 export const PROFILES = {
   gable: [[0.5, 0], [0, 1]],

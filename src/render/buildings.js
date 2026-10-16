@@ -11,7 +11,7 @@ import { LAYER_REFLECT } from './shaderlib.js';
 // Construction, completion, grow-in and demolition are short tweens on the
 // affected lots only.
 
-const GEOMETRY = {
+export const GEOMETRY = {
   body: () => G.bodyPiece(),
   gable: () => G.pitchedRoof(G.PROFILES.gable),
   thatch: () => G.pitchedRoof(G.PROFILES.thatch),

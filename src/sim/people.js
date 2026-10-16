@@ -11,20 +11,32 @@
 // without a planner, from a straight-line fallback that crosses the river at the
 // nearest ford or bridge.
 
-import {heightAt, riverX, waterAt, FORDS} from '../terrain.js';
+import {heightAt, riverX, waterAt, bankDistance, FORDS, hasRiver} from '../terrain.js';
 import {rng, hash32, hashUnit} from './rng.js';
 import {decide, findHook} from './hooks.js';
 import {byId, cellIndex, lookFor, nextId, BRIDGE} from './state.js';
 import {monthIndex} from './clock.js';
-import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, structuralGrid, cellOf, recordCrossingBand} from './roads.js';
+import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, structuralGrid, cellOf, recordCrossingBand, FLAG} from './roads.js';
+import {halfWidth, wearBucket} from '../render/paths.js';   // the drawn path widths (pure, no renderer state)
 import {findRoute, cellsToWaypoints} from '../navigation.js';
 import {projectSite} from './buildings.js';
 import {alongBridge, deckSurfaceY, DECK_VERGE} from './bridges.js';
+import {seatsOf} from './seats.js';
+import {rebuildDensity, densityAt} from './density.js';
+import {gatheringActivity, layoutOf, occasionFor, occasionSpot, wanderRoute, kinReset, kinAdd, ACTIVITIES, deckSpot, RAIL_MIN_HALF, railStand} from './gatherings.js';
+// A passer-by keeps this far (centre to centre) from a rail stander: half a body's
+// width plus half its depth.
+const RAIL_PASS = 0.37;
+import {outingTarget, alternativeOuting} from './leisure.js';
 
-export const ACTION = {none: 0, carry: 1, build: 2, sit: 3, cheer: 4, protest: 5, dance: 6};
+// 8-12: leisure poses (render/people.js): a fishing rod cast then held, leaning on a rail,
+// lying on the grass, kneeling (a picnic, berry picking), pointing (birds, the view).
+export const ACTION = {none: 0, carry: 1, build: 2, sit: 3, cheer: 4, protest: 5, dance: 6, bench: 7, fish: 8, lean: 9, lie: 10, kneel: 11, point: 12};
 export const TASK_KINDS = ['work', 'rest', 'shop', 'leisure', 'worship', 'gather', 'build', 'flee', 'travel'];
 
-const WALK_SPEED = 1.4;                                  // units per sim second on grass
+// Units per sim second on grass. The game runs at half pace (sim/clock.js PACE),
+// so this reads on screen as an ordinary 1.4 units a second at 1x.
+const WALK_SPEED = 2.8;
 const TIER_SPEED = [1, 1.1, 1.25, 1.5, 1.75, 1.9];
 const FORD_SPEED = 0.6;
 const WEAR_PER_CELL = 3;
@@ -171,7 +183,11 @@ export function assignBuilders(state) {
 // Reused per tick so the hot loop allocates nothing.
 const SYNC_ROUTES_PER_TICK = 4;
 const inFlight = new WeakSet();   // tasks with a planner request out (transient)
-const scratch = {projectsById: new Map(), workerProject: new Map(), onSite: new Map(), syncRoutes: SYNC_ROUTES_PER_TICK};
+const scratch = {
+  projectsById: new Map(), workerProject: new Map(), onSite: new Map(), seats: new Set(), syncRoutes: SYNC_ROUTES_PER_TICK,
+  // Rebuilt each tick (see crowdIndex): seats taken per building, seat counts (lazily).
+  seatsTaken: new Map(), seatCount: new Map(),
+};
 
 export function stepPeople(state, ctx, dt) {
   const people = state.people;
@@ -181,6 +197,8 @@ export function stepPeople(state, ctx, dt) {
   scratch.syncRoutes = SYNC_ROUTES_PER_TICK;
   const world = worldIndex(state);
   checkFootprints(state, now);
+  crowdIndex(state);
+  // In array order: the array (and so the order) is part of the save.
   for (let i = 0; i < people.length; i++) {
     const p = people[i];
     decayNeeds(p, dt);
@@ -193,7 +211,7 @@ export function stepPeople(state, ctx, dt) {
       if (now >= task.retryAt || (task.awaitingPlanner && !inFlight.has(task))) requestRoute(state, ctx, p, task, now);
       continue;
     }
-    if (task.seg < task.route.length) move(state, p, task, dt, now);
+    if (task.seg < task.route.length) move(state, ctx, p, task, dt, now);
     else dwell(state, p, task, dt, now);
   }
   for (const pr of state.projects) pr.onSite = scratch.onSite.get(pr.id) ?? 0;
@@ -219,7 +237,7 @@ function decayNeeds(p, dt) {
   n.social = n.social > 0 ? n.social - NEED_DECAY.social * dt : 0;
 }
 
-function move(state, p, task, dt, now) {
+function move(state, ctx, p, task, dt, now) {
   const route = task.route;
   if (p.speed <= 0) setVelocity(state, p, task, now);
   let budget = p.speed * dt;
@@ -241,7 +259,7 @@ function move(state, p, task, dt, now) {
   }
   enterCell(state, p, task, now);
   reanchorOnDeck(state, p, task, now);
-  if (task.seg >= route.length) arrive(state, p, task, now);
+  if (task.seg >= route.length) arrive(state, ctx, p, task, now);
 }
 
 // Bridge decks arch and ramp: while on one, the render row is renewed every
@@ -310,14 +328,506 @@ function addWear(state, x, z, amount) {
   state.roads.wearAddedMonth = (state.roads.wearAddedMonth ?? 0) + amount;
 }
 
-function arrive(state, p, task, now) {
+function arrive(state, ctx, p, task, now) {
   p.vx = 0;
   p.vz = 0;
   p.speed = 0;
+  if (task.leaving) return finish(p, now);   // off a bridge rail, at the deck's end
   const target = task.targetType === 'building' ? byId(state, 'buildings', task.targetId) : null;
   p.indoor = INDOOR.has(task.kind) && !!target && !(task.kind === 'work' && OUTDOOR_WORK.has(target.type));
+  // A gathering's spot claimed in advance but not reached (the route ended short):
+  // given up, and one found from here.
+  if (task.claim && task.spot && Math.hypot(task.spot[0] - p.x, task.spot[1] - p.z) > 0.05) {
+    task.claim = 0;
+    task.spot = null;
+  }
+  // Staying in sight: a standing spot of its own near the goal, not on someone's head.
+  if (!p.indoor && !task.seat && !task.spot && !takeSpot(state, ctx, p, task, now)) return;
+  if (task.seat) p.heading = task.seat.yaw;
+  else if (task.face && !p.indoor) p.heading = Math.atan2(task.face[0] - p.x, task.face[1] - p.z);
   setAction(p, dwellAction(state, p, task, target), now);
   p.rev++;
+}
+
+// Per-tick crowd index, from the saved state alone: seats taken, the standing hash
+// (standing walkers, spots claimed by walkers on their last step to one, seats being
+// walked to) for the spot finder, and the coarse density grid (density.js) the
+// destination choice reads. Exported for tests.
+export function crowdIndex(state) {
+  scratch.seats.clear();
+  scratch.seatsTaken.clear();
+  scratch.seatCount.clear();
+  standClear();
+  kinReset();
+  rebuildDensity(state);
+  for (const p of state.people) {
+    const task = p.task;
+    if (!task) continue;
+    if (task.seat) {
+      scratch.seats.add(task.seat.key);
+      scratch.seatsTaken.set(task.targetId, (scratch.seatsTaken.get(task.targetId) ?? 0) + 1);
+    }
+    if (p.indoor) continue;
+    // A claimed spot holds while its walker waits for a route there (gatherings).
+    if (task.spot) {
+      standAdd(task.spot[0], task.spot[1], p.id, p.householdId);
+      if (task.activity) kinAdd(p);
+    } else if (task.waiting) continue;
+    else if (task.seat) standAdd(task.tx, task.tz, p.id, p.householdId);
+    else if (task.seg >= task.route.length) standAdd(p.x, p.z, p.id, p.householdId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Standing spots
+//
+// Walkers pass through each other on the move, but those who stop in sight (outdoor
+// work, a gate, a gathering, a building site, a halted flight) each take a spot of
+// their own. Candidates lie on a tight sunflower spiral round what they came for
+// (crowdPlan: the building, pulled toward its door; a gathering's own point; else where
+// the walk ended), turned by the walker's id and rev; a candidate is taken if it is
+// outside the building, open, dry ground off any deck, at least SPOT_SPACING from every
+// other standing walker, and reachable by a straight clear step. Within the plan's
+// inner reach the walker steps there and faces the attraction; if the crowd is fuller
+// than that, the goal is relaxed instead of squeezing in: another target of the same
+// kind nearby, else a short stay at the crowd's edge, else home. The chosen spot (and
+// the point faced) is kept in the task (saved), so a restored town picks the same.
+
+export const SPOT_SPACING = 0.7;
+const SPOT_STEP = 0.3;                     // spiral density: about 0.57 between candidates
+export const SPOT_INNER = 2.5;
+const SPOT_OUTER = 3.4;
+const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+const MAX_RETARGET = 2;
+const ALT_REACH = 60;                      // how far another stall or park may be
+const SHORT_DWELL = 3;                     // seconds, at the edge of a full crowd
+
+// Per-tick spatial hash of standing walkers: cells of SPOT_SPACING, each a flat
+// [x, z, id, household, ...] list (lists are pooled between ticks).
+const stand = {cells: new Map(), pool: []};
+const standKey = (ix, iz) => (ix + 4096) * 8192 + (iz + 4096);
+
+function standClear() {
+  for (const list of stand.cells.values()) {
+    list.length = 0;
+    stand.pool.push(list);
+  }
+  stand.cells.clear();
+}
+
+function standAdd(x, z, id, household = -1) {
+  const key = standKey(Math.floor(x / SPOT_SPACING), Math.floor(z / SPOT_SPACING));
+  let list = stand.cells.get(key);
+  if (!list) {
+    list = stand.pool.pop() ?? [];
+    stand.cells.set(key, list);
+  }
+  list.push(x, z, id, household ?? -1);
+}
+
+function spotFree(x, z, id) {
+  const ix = Math.floor(x / SPOT_SPACING), iz = Math.floor(z / SPOT_SPACING);
+  const min2 = SPOT_SPACING * SPOT_SPACING;
+  for (let dz = -1; dz <= 1; dz++)
+    for (let dx = -1; dx <= 1; dx++) {
+      const list = stand.cells.get(standKey(ix + dx, iz + dz));
+      if (!list) continue;
+      for (let k = 0; k < list.length; k += 4) {
+        if (list[k + 2] === id) continue;
+        const ex = list[k] - x, ez = list[k + 1] - z;
+        if (ex * ex + ez * ez < min2) return false;
+      }
+    }
+  return true;
+}
+
+// As spotFree, with a personal space r of the walker's own (gatherings.js), and near
+// (at most r) for standers of its own household.
+export function spotClear(x, z, id, r, household = -1, near = r) {
+  const ix = Math.floor(x / SPOT_SPACING), iz = Math.floor(z / SPOT_SPACING);
+  const reach = Math.ceil(r / SPOT_SPACING);
+  const r2 = r * r, n2 = near * near, hh = household ?? -1;
+  for (let dz = -reach; dz <= reach; dz++)
+    for (let dx = -reach; dx <= reach; dx++) {
+      const list = stand.cells.get(standKey(ix + dx, iz + dz));
+      if (!list) continue;
+      for (let k = 0; k < list.length; k += 4) {
+        if (list[k + 2] === id) continue;
+        const ex = list[k] - x, ez = list[k + 1] - z;
+        if (ex * ex + ez * ez < (hh >= 0 && list[k + 3] === hh ? n2 : r2)) return false;
+      }
+    }
+  return true;
+}
+
+// Open, dry ground off any bridge deck.
+export function standable(state, blocked, x, z) {
+  return clearOfWalls(state, blocked, x, z) && !waterAt(x, z) && !deckAt(state, x, z);
+}
+
+// Open, and not within WALL_GAP of a footprint cell. A point a hair from a blocked
+// cell's edge reads inside it once the renderer has rounded it to float32 (the drawn
+// walker at its spot or corner), so stops and corners keep this little gap.
+const WALL_GAP = 0.05;
+function clearOfWalls(state, blocked, x, z) {
+  const roads = state.roads;
+  for (let k = 0; k < 4; k++) {
+    const c = cellIndex(roads, x + (k & 1 ? WALL_GAP : -WALL_GAP), z + (k & 2 ? WALL_GAP : -WALL_GAP));
+    if (c < 0 || blocked[c]) return false;
+  }
+  return true;
+}
+
+// A short step with no wall, water or deck on the way.
+export function stepClear(state, x0, z0, x1, z1) {
+  if (!routeStillValid(state, [x0, z0, x1, z1], 0)) return false;
+  const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.4));
+  for (let i = 1; i < steps; i++) {
+    const x = x0 + ((x1 - x0) * i) / steps, z = z0 + ((z1 - z0) * i) / steps;
+    if (waterAt(x, z) || deckAt(state, x, z)) return false;
+  }
+  return true;
+}
+
+// Where a crowd for this goal gathers, and the point standers face. A building with
+// walls: spots round its footprint (ringSpots), front first and wrapping round the
+// sides, facing the building, not a disc round the empty doorstep. A park or farm (open
+// ground): a spiral from halfway between its middle and its gate, onto the lawn. A
+// gathering: a spiral round the event's own point, out to most of its radius. Farm
+// rows, building sites and the rest: a spiral round where the walk ended. Spiral plans
+// carry a centre and how far out a spot counts as in the crowd (inner) or at its edge
+// (outer). A walker with an activity (gatherings.js: task.activity) takes a spot of
+// that activity's layout at the place instead: plan.occ.
+export function crowdPlan(state, targetType, targetId, tail, x, z, activity = null) {
+  if (activity) {
+    const occ = occasionFor(state, layoutOf(activity), targetType, targetId);
+    if (occ) return {occ, fx: occ.fx, fz: occ.fz, skip: null};
+  }
+  if (targetType === 'building' && !tail) {
+    const b = byId(state, 'buildings', targetId);
+    if (b && b.type !== 'park' && b.type !== 'farm') return {ring: ringSpots(state, b), fx: b.x, fz: b.z, skip: b};
+    if (b) {
+      const door = accessPoint(b);
+      const cx = (b.x + door.x) / 2, cz = (b.z + door.z) / 2;
+      const inner = Math.hypot(door.x - cx, door.z - cz) + SPOT_INNER;
+      return {cx, cz, inner, outer: inner + SPOT_OUTER - SPOT_INNER, fx: b.x, fz: b.z, skip: null};
+    }
+  }
+  if (targetType === 'event') {
+    const ev = state.worldEvents.find((e) => e.id === targetId);
+    if (ev) {
+      const inner = Math.max(SPOT_INNER, (ev.radius ?? 6) * 0.8);
+      return {cx: ev.x, cz: ev.z, inner, outer: inner + SPOT_OUTER - SPOT_INNER, fx: ev.x, fz: ev.z, skip: null};
+    }
+  }
+  return {cx: x, cz: z, inner: SPOT_INNER, outer: SPOT_OUTER, fx: NaN, fz: NaN, skip: null};
+}
+
+const insideOf = (b, x, z, m) => Math.abs(x - b.x) < (b.w ?? 4) / 2 + m && Math.abs(z - b.z) < (b.d ?? 4) / 2 + m;
+
+// Standing spots round a building, best first: candidates on a lightly jittered grid
+// (RING_GRID apart) out to RING_OUTER from its walls, on open, dry ground off decks,
+// ordered by distance from the walls plus RING_FRONT for each unit of turning away from
+// the front (the side its door faces: 0 in front, 1 at the sides, 2 behind), so a crowd
+// fills the front a little deep, then wraps round. Spots within RING_INNER of the walls
+// come first; the rest are the crowd's edge. A pure function of the building and the
+// world (cached per building until the footprints or buildings change), the same list
+// for every walker: each takes the first that is free and reachable.
+const RING_GRID = 0.45;
+const RING_INNER = 4;
+const RING_OUTER = 4.9;
+const RING_FRONT = 1.2;
+const ringCache = new Map();
+
+function ringSpots(state, b) {
+  const key = `${footprintKey(state)}:${state.buildingsRev ?? 0}:${b.x},${b.z},${b.w},${b.d},${b.rot}`;
+  const hit = ringCache.get(b.id);
+  if (hit && hit.state === state && hit.key === key) return hit;
+  const {blocked} = footprints(state);
+  const hw = (b.w ?? 4) / 2, hd = (b.d ?? 4) / 2;
+  const door = accessPoint(b);
+  const fl = Math.hypot(door.x - b.x, door.z - b.z) || 1;
+  const fx = (door.x - b.x) / fl, fz = (door.z - b.z) / fl;
+  const found = [];
+  const n = Math.ceil((Math.max(hw, hd) + RING_OUTER) / RING_GRID);
+  for (let j = -n; j <= n; j++)
+    for (let i = -n; i <= n; i++) {
+      const h = hash32((b.id * 7919 + (i + 512) * 1031 + (j + 512)) >>> 0);
+      const x = b.x + (i + ((h & 255) / 255 - 0.5) * 0.5) * RING_GRID;
+      const z = b.z + (j + (((h >>> 8) & 255) / 255 - 0.5) * 0.5) * RING_GRID;
+      const ex = Math.max(0, Math.abs(x - b.x) - hw), ez = Math.max(0, Math.abs(z - b.z) - hd);
+      const wall = Math.hypot(ex, ez);
+      if (wall <= 0.3 || wall > RING_OUTER || !standable(state, blocked, x, z)) continue;
+      const dl = Math.hypot(x - b.x, z - b.z) || 1;
+      const turn = 1 - ((x - b.x) * fx + (z - b.z) * fz) / dl;
+      found.push({x, z, edge: wall > RING_INNER, score: wall + RING_FRONT * turn});
+    }
+  found.sort((p, q) => (p.edge - q.edge) || (p.score - q.score) || (p.x - q.x) || (p.z - q.z));
+  const spots = new Float64Array(found.length * 3);
+  found.forEach((c, k) => { spots[k * 3] = c.x; spots[k * 3 + 1] = c.z; spots[k * 3 + 2] = c.edge ? 1 : 0; });
+  if (ringCache.size > 512) ringCache.clear();
+  const entry = {state, key, spots, fx, fz};
+  ringCache.set(b.id, entry);
+  return entry;
+}
+
+// The first free spot on the spiral round the plan's centre that the walker can reach
+// from (ox, oz): {x, z, edge, via} (edge: beyond plan.inner), or null when there is none
+// out to plan.outer. Reached by a straight clear step, or, round a building, by two:
+// along the front to beside the spot (via), then straight in, so a crowd can wrap round
+// the sides as well as fill the front.
+export function findSpot(state, id, rev, plan, ox, oz) {
+  const {blocked} = footprints(state);
+  if (plan.ring) return ringSpot(state, blocked, id, plan.ring, ox, oz);
+  const turn = hashUnit(id * 53 + rev * 7 + 1) * Math.PI * 2;
+  const {cx, cz, skip} = plan;
+  // The front: from the building's centre toward where the walker stands (its door).
+  let fx = 0, fz = 0;
+  if (skip) {
+    const fl = Math.hypot(ox - skip.x, oz - skip.z) || 1;
+    fx = (ox - skip.x) / fl;
+    fz = (oz - skip.z) / fl;
+  }
+  for (let k = 0; ; k++) {
+    const r = SPOT_STEP * Math.sqrt(k);
+    if (r > plan.outer) return null;
+    const a = turn + k * GOLDEN;
+    const x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+    if (skip && insideOf(skip, x, z, 0.3)) continue;
+    if (!spotFree(x, z, id) || !standable(state, blocked, x, z)) continue;
+    if (Math.hypot(x - ox, z - oz) <= 0.02 || stepClear(state, ox, oz, x, z)) return {x, z, edge: r > plan.inner, via: null};
+    if (!skip) continue;
+    // Beside the spot on the door's line across the front.
+    const t = (x - ox) * fx + (z - oz) * fz;
+    const vx = x - fx * t, vz = z - fz * t;
+    if (t > -0.3 || !standable(state, blocked, vx, vz) || !stepClear(state, ox, oz, vx, vz) || !stepClear(state, vx, vz, x, z)) continue;
+    return {x, z, edge: r > plan.inner, via: [vx, vz]};
+  }
+}
+
+// The first free, reachable spot of a building's ring (ringSpots), or null.
+function ringSpot(state, blocked, id, ring, ox, oz) {
+  const {spots, fx, fz} = ring;
+  for (let k = 0; k < spots.length; k += 3) {
+    const x = spots[k], z = spots[k + 1];
+    if (!spotFree(x, z, id)) continue;
+    const edge = spots[k + 2] === 1;
+    if (Math.hypot(x - ox, z - oz) <= 0.02 || stepClear(state, ox, oz, x, z)) return {x, z, edge, via: null};
+    // Round the corner: along the front's line to beside the spot, then straight in.
+    const t = (x - ox) * fx + (z - oz) * fz;
+    const vx = x - fx * t, vz = z - fz * t;
+    if (t > -0.3 || !standable(state, blocked, vx, vz) || !stepClear(state, ox, oz, vx, vz) || !stepClear(state, vx, vz, x, z)) continue;
+    return {x, z, edge, via: [vx, vz]};
+  }
+  return null;
+}
+
+// On arrival in sight. True: stand here now. False: the walker set off on its last
+// step to a spot, or the goal was relaxed (a new task, or none).
+function takeSpot(state, ctx, p, task, now) {
+  const plan = crowdPlan(state, task.targetType, task.targetId, task.tail, p.x, p.z, task.activity);
+  const spot = plan.occ ? occasionSpot(state, p, task, plan.occ, p.x, p.z) : findSpot(state, p.id, p.rev, plan, p.x, p.z);
+  // A gathering's spot out of a straight step's reach is walked to by a route, once;
+  // after that, the plain finder round where the walker is.
+  // (Not at a bridge rail: a spot off the rail would face along the deck.)
+  if (spot && plan.occ && !spot.reach && task.rerouted && plan.occ.layout === 'rail') return relaxGoal(state, ctx, p, task, null, now);
+  if (spot && plan.occ && !spot.reach && task.rerouted) {
+    const near = crowdPlan(state, 'point', null, null, p.x, p.z);
+    const step = findSpot(state, p.id, p.rev, near, p.x, p.z);
+    if (step) step.activity = null;   // just standing by, not part of the activity's layout
+    return step && !step.edge ? stepTo(state, p, task, step, plan, now) : relaxGoal(state, ctx, p, task, step, now, near);
+  }
+  if (spot && !spot.edge) return plan.occ && !spot.reach ? routeToSpot(state, ctx, p, task, spot, now) : stepTo(state, p, task, spot, plan, now);
+  return relaxGoal(state, ctx, p, task, spot, now, plan);
+}
+
+// The crowd is full (spot: at its edge, or null): another target of the same kind,
+// else a short stay at the edge, else home.
+function relaxGoal(state, ctx, p, task, spot, now, plan = null) {
+  const relax = (task.relax ?? 0) + 1;
+  const alt = relax <= MAX_RETARGET ? alternativeTarget(state, p, task) : null;
+  if (alt) {
+    p.rev++;
+    startTask(state, ctx, p, task.kind, alt, now, {relax, avoid: [...(task.avoid ?? []), task.targetId], dwellFor: task.outing ? null : task.dwellFor});
+    return false;
+  }
+  if (spot) {
+    task.relax = relax;
+    task.dwellFor = Math.min(task.dwellFor, SHORT_DWELL);
+    if (plan?.occ) {
+      spot.hopIn = null;
+      if (!spot.reach) return routeToSpot(state, ctx, p, task, spot, now);
+    }
+    return stepTo(state, p, task, spot, plan, now);
+  }
+  p.rev++;
+  const home = p.homeId != null ? byId(state, 'buildings', p.homeId) : null;
+  if (home && !(task.kind === 'rest' && task.targetId === home.id)) {
+    startTask(state, ctx, p, 'rest', buildingTarget(home), now, {relax});
+    return false;
+  }
+  finish(p, now);
+  return false;
+}
+
+function stepTo(state, p, task, spot, plan, now) {
+  task.spot = [spot.x, spot.z];
+  // Standers face what they came for (kept in the task: the save carries it); at a
+  // gathering, what its spot faces (the focus, the group's middle, the view).
+  const fx = spot.fx ?? plan.fx, fz = spot.fz ?? plan.fz;
+  task.face = Number.isFinite(fx) && Math.hypot(fx - spot.x, fz - spot.z) > 0.05 ? [fx, fz] : null;
+  if (plan.occ) gatheringSpot(p, task, spot);
+  standAdd(spot.x, spot.z, p.id, p.householdId);
+  if (Math.hypot(spot.x - p.x, spot.z - p.z) < 0.02) return true;
+  if (spot.via) task.route.push(spot.via[0], spot.via[1]);
+  task.route.push(spot.x, spot.z);
+  setVelocity(state, p, task, now);
+  return false;
+}
+
+// An activity's spot (gatherings.js occasionSpot) taken: what the walker does there
+// (task.activity: the picker may settle it), its conversation group, and when it next
+// moves on (task.hopAt, seconds of dwell).
+function gatheringSpot(p, task, spot) {
+  if (spot.activity !== undefined) task.activity = spot.activity;
+  task.group = spot.group >= 0 ? spot.group : null;
+  task.hopAt = spot.hopIn != null ? task.dwell + spot.hopIn : null;
+}
+
+// Claim a gathering's spot and make it the walk's destination: the route pipeline
+// takes the walker there (the tail is the exact spot), and the claim holds meanwhile.
+function claimSpot(p, task, spot) {
+  if (!task.claim) task.goal = [task.tx, task.tz, task.tail];
+  task.spot = [spot.x, spot.z];
+  task.face = Math.hypot(spot.fx - spot.x, spot.fz - spot.z) > 0.05 ? [spot.fx, spot.fz] : null;
+  task.claim = 1;
+  task.tx = spot.x;
+  task.tz = spot.z;
+  task.tail = [spot.x, spot.z];
+  gatheringSpot(p, task, spot);
+  standAdd(spot.x, spot.z, p.id, p.householdId);
+  kinAdd(p);
+}
+
+// A claimed spot a new footprint has covered (or the river has taken) is given up: the
+// walk goes to the goal itself again, and a spot is found on arrival.
+function checkClaim(state, task) {
+  const [x, z] = task.spot;
+  if (layoutOf(task.activity) === 'rail' ? deckSpot(state, x, z) : standable(state, footprints(state).blocked, x, z)) return;
+  task.claim = 0;
+  task.spot = null;
+  [task.tx, task.tz, task.tail] = task.goal ?? [task.tx, task.tz, null];
+}
+
+function routeToSpot(state, ctx, p, task, spot, now) {
+  claimSpot(p, task, spot);
+  task.rerouted = 1;
+  requestRoute(state, ctx, p, task, now);
+  return false;
+}
+
+// A new task with an activity (a gathering, a leisure visit): from nearby, its spot is chosen now (when one
+// is free in the crowd's inner reach) and walked to by the route; from further off, on
+// arrival, as for any crowd (so the front fills with those who get there first, not
+// with places kept for walkers still crossing town).
+const CLAIM_REACH = 24;
+function planGathering(state, p, task) {
+  const activity = task.activity ?? gatheringActivity(state, task.kind, task.targetType, task.targetId, task.eventKind);
+  if (!activity) return;
+  task.activity = activity;
+  // An outing's spot (a reach of bank, a rail) is kept from the start, however far.
+  if (!task.outing && Math.hypot(task.tx - p.x, task.tz - p.z) > CLAIM_REACH) return;
+  const occ = occasionFor(state, layoutOf(activity), task.targetType, task.targetId);
+  if (!occ) return;
+  const spot = occasionSpot(state, p, task, occ, p.x, p.z);
+  if (spot && !spot.edge) claimSpot(p, task, spot);
+}
+
+// From a rail spot to just beyond the nearer end of its deck, along the deck: the end in
+// the stander's lane (half its offset, as deckLane keeps lanes inside the parapets), then
+// DECK_APPROACH beyond it on dry, open ground. False if there is no such way off.
+function leaveDeck(state, p, task, now) {
+  const deck = deckAt(state, p.x, p.z);
+  if (!deck) return false;
+  const b = deck.bridge;
+  const [e, o] = deck.t < 0.5 ? [b.a, b.b] : [b.b, b.a];
+  const len = Math.hypot(o.x - e.x, o.z - e.z) || 1;
+  const ux = (e.x - o.x) / len, uz = (e.z - o.z) / len;
+  // The stander's signed offset across the deck (positive: right of a -> b).
+  const ax = (b.b.x - b.a.x) / len, az = (b.b.z - b.a.z) / len;
+  const off = ((p.x - b.a.x) * az - (p.z - b.a.z) * ax) * 0.5;
+  const ex = e.x + az * off, ez = e.z - ax * off;
+  const qx = ex + ux * DECK_APPROACH, qz = ez + uz * DECK_APPROACH;
+  if (waterAt(qx, qz) || deckAt(state, qx, qz) || !clearOfWalls(state, footprints(state).blocked, qx, qz)) return false;
+  if (!legOpen(state, ex, ez, qx, qz)) return false;
+  task.leaving = 1;
+  task.route.push(ex, ez, qx, qz);
+  setVelocity(state, p, task, now);
+  return true;
+}
+
+// Moving on during the dwell: to another conversation group, a loop of play, a turn
+// round the park (gatherings.js wanderRoute). True if the walker set off.
+function wander(state, p, task, now) {
+  const occ = occasionFor(state, layoutOf(task.activity), task.targetType, task.targetId);
+  const pts = wanderRoute(state, p, task, occ);
+  if (!pts) return false;
+  standAdd(task.spot[0], task.spot[1], p.id, p.householdId);   // a new spot, held from now
+  for (let k = 0; k < pts.length; k++) task.route.push(pts[k]);
+  setVelocity(state, p, task, now);
+  return true;
+}
+
+// Another target of the same kind near the full one, with room to stand as things
+// are now, or null: one of the ALT_TRIES nearest other buildings of the type (any
+// leisure place, a free seat first, for leisure) within ALT_REACH. A gathering has no
+// other point: its crowd already fills most of its radius round its centre.
+const ALT_TRIES = 3;
+const altScratch = [];
+
+// Room in the crowd for a target (a candidate goal, before setting off): its plan, as
+// if the walker had just arrived at the target point.
+function hasRoom(state, p, target, kind) {
+  const activity = gatheringActivity(state, kind, target.type, target.id, target.eventKind);
+  const plan = crowdPlan(state, target.type, target.id, target.tail ?? null, target.x, target.z, activity);
+  const [ox, oz] = target.tail ?? [target.x, target.z];
+  const spot = plan.occ ? occasionSpot(state, p, {kind, targetType: target.type, targetId: target.id, activity}, plan.occ, ox, oz) : findSpot(state, p.id, p.rev, plan, ox, oz);
+  return !!spot && !spot.edge;
+}
+
+function alternativeTarget(state, p, task) {
+  // An outing whose place is full: the next such place (another reach, another rail).
+  if (task.outing) return alternativeOuting(state, p, task, worldIndex(state));
+  if (task.targetType !== 'building') return null;
+  const b = byId(state, 'buildings', task.targetId);
+  if (!b) return null;
+  const world = worldIndex(state);
+  const types = task.kind === 'leisure' ? LEISURE_TYPES : [b.type];
+  const avoid = task.avoid ?? [];
+  // The nearest few, nearest first (ties by list order, which is the save's).
+  altScratch.length = 0;
+  for (const t of types) {
+    for (const c of world.byType.get(t) ?? []) {
+      if (c === b || avoid.includes(c.id)) continue;
+      const d = (c.x - b.x) ** 2 + (c.z - b.z) ** 2;
+      if (d > ALT_REACH * ALT_REACH) continue;
+      let i = altScratch.length;
+      while (i > 0 && altScratch[i - 1].d > d) i--;
+      if (i < ALT_TRIES) altScratch.splice(i, 0, {c, d});
+      if (altScratch.length > ALT_TRIES) altScratch.length = ALT_TRIES;
+    }
+  }
+  for (const {c} of altScratch) {
+    if (task.kind === 'leisure') {
+      const target = seatTarget(state, p, buildingTarget(c));
+      if (target.seat || hasRoom(state, p, target, task.kind)) return target;
+      continue;
+    }
+    const target = buildingTarget(c);
+    if (c.type === 'farm') farmRows(state, p, c, target);
+    if (hasRoom(state, p, target, task.kind)) return target;
+  }
+  return null;
 }
 
 function dwellAction(state, p, task, target) {
@@ -330,6 +840,9 @@ function dwellAction(state, p, task, target) {
     if (kind === 'festival' || kind === 'wedding') return hash32(p.id) % 3 === 0 ? ACTION.dance : ACTION.cheer;
     return ACTION.none;
   }
+  if (task.seat) return task.seat.bench ? ACTION.bench : hash32(p.id + 7) % 4 === 0 ? ACTION.none : ACTION.sit;
+  // An activity's pose (gatherings.js ACTIVITIES: an ACTION name, or null to stand).
+  if (task.activity) return ACTION[ACTIVITIES[task.activity]?.action] ?? ACTION.none;
   if (task.kind === 'leisure') return hash32(p.id + 7) % 2 === 0 ? ACTION.sit : ACTION.none;
   return ACTION.none;
 }
@@ -351,6 +864,12 @@ function dwell(state, p, task, dt, now) {
     if (!pr) return finish(p, now);
     scratch.onSite.set(pr.id, (scratch.onSite.get(pr.id) ?? 0) + 1);
   }
+  if (task.hopAt != null && task.dwell >= task.hopAt && task.dwell < task.dwellFor && !p.indoor && wander(state, p, task, now)) return;
+  // Done at a bridge rail: first along the deck and off its nearer end, so the next walk
+  // starts on the bank (a route planned from the middle of a deck can step off its side).
+  if (task.dwell >= task.dwellFor && !task.leaving && task.spot && layoutOf(task.activity) === 'rail' && leaveDeck(state, p, task, now)) return;
+  // A bridge that has closed under someone at its rail: off they go.
+  if (task.spot && task.activity && layoutOf(task.activity) === 'rail' && !deckSpot(state, p.x, p.z)) return finish(p, now);
   if (task.dwell >= task.dwellFor) finish(p, now);
 }
 
@@ -399,9 +918,9 @@ function chooseTask(state, ctx, p, world, now) {
   const targets = {
     work: workTarget(state, p, h, world),
     rest: home ? buildingTarget(home) : null,
-    shop: nearestOf(world, SHOP_TYPES, p, 3),
-    leisure: nearestOf(world, LEISURE_TYPES, p, 4) ?? strollTarget(state, p),
-    worship: nearestOf(world, ['chapel'], p, 2),
+    shop: nearestOf(state, world, SHOP_TYPES, p, 3, h),
+    leisure: seatTarget(state, p, nearestOf(state, world, LEISURE_TYPES, p, 4, h)) ?? strollTarget(state, p),
+    worship: nearestOf(state, world, ['chapel'], p, 2, h),
     gather: gatherTarget(state, p),
   };
   const n = p.needs;
@@ -425,6 +944,11 @@ function chooseTask(state, ctx, p, world, now) {
   const kind = decide(state, 'resident_routine', {type: 'person', record: p, household: h}, {
     prior, facts, mask, rng: () => rng(state, 'people'),
   });
+  // Leisure: sometimes an outing of the walker's own (leisure.js) instead.
+  if (kind === 'leisure') {
+    const outing = outingTarget(state, p, h, world);
+    if (outing) return startTask(state, ctx, p, kind, outing, now);
+  }
   startTask(state, ctx, p, kind, targets[kind], now);
 }
 
@@ -434,6 +958,30 @@ function chooseTask(state, ctx, p, world, now) {
 function buildingTarget(b) {
   const door = accessPoint(b);
   return {type: 'building', id: b.id, x: door.x, z: door.z, building: b};
+}
+
+// A park, or a gathering place with benches by its door: sit on a free bench seat
+// or a spot on the lawn rather than all at the gate. Seats taken this tick are in
+// scratch.seats; one in a footprint's margin or the river is skipped. Every seat
+// taken: the gate, as before.
+function seatTarget(state, p, target) {
+  const b = target?.building;
+  if (!b) return target;
+  const seats = seatsOf(b);
+  if (!seats.length) return target;
+  const {blocked} = footprints(state);
+  const start = hash32(p.id * 31 + p.rev) % seats.length;
+  for (let k = 0; k < seats.length; k++) {
+    const seat = seats[(start + k) % seats.length];
+    if (scratch.seats.has(seat.key)) continue;
+    // A park's lawn is laid out by appeal instead (gatherings.js): only its benches here.
+    if (!seat.bench && b.type === 'park') continue;
+    const c = cellIndex(state.roads, seat.x, seat.z);
+    if (c < 0 || blocked[c] || waterAt(seat.x, seat.z)) continue;
+    scratch.seats.add(seat.key);
+    return {...target, x: seat.x, z: seat.z, seat: {key: seat.key, yaw: seat.yaw, bench: seat.bench}};
+  }
+  return target;
 }
 
 export function accessPoint(b) {
@@ -467,7 +1015,7 @@ function checkFootprints(state, now) {
       if (p.task) replan(p, now);
       continue;
     }
-    if (!first && p.task && !p.task.waiting && !routeStillValid(state, [p.x, p.z, ...p.task.route.slice(p.task.seg)], 0)) replan(p, now);
+    if (!first && p.task && !p.task.waiting && !routeClearFrom(state, p.x, p.z, p.task.route, p.task.seg)) replan(p, now);
   }
 }
 
@@ -526,23 +1074,252 @@ function segmentBlocked(state, x0, z0, x1, z1) {
   return false;
 }
 
-// Walkers cross a bridge along its centre line: where a leg of the route goes over a
-// deck, the deck's two ends are put in between (the end on the walker's side first).
-function alongDecks(state, route) {
+// Walkers use a bridge only along its centre line, joining and leaving it at its
+// ends. Grid routes do not know that: on a deck set at an angle to the grid the
+// path's cells lie up to a cell off the axis, and a path cell beside an abutment
+// can send a leg across the deck's side or corner, where the drawn walker would
+// meet the deck as a step. So:
+//   1. waypoints on a deck (or its verge) are dropped, unless that would take
+//      a leg through a wall;
+//   2. a leg over a deck from one bank to the other goes end to end;
+//   3. any other leg that touches a deck joins or leaves it at the nearer end,
+//      by a point just off the end along the axis; one that only grazes the
+//      deck goes round that end.
+// Inserted points are kept off walls and water.
+const DECK_APPROACH = 1.6;
+
+// lane: the walker's lane fraction in [-1, 1] (laneFraction): its bridge ends and their
+// approach points move across the deck by that share of the deck's walkable half-width
+// (right of the direction of travel), the same at both ends, so a crossing is a straight
+// line parallel to the parapets. 0 keeps the centre line.
+export function alongDecks(state, route, lane = 0) {
   if (route.length < 4 || !deckList(state).length) return route;
-  const out = [route[0], route[1]];
-  for (let k = 2; k + 1 < route.length; k += 2) {
-    const x0 = out[out.length - 2], z0 = out[out.length - 1], x1 = route[k], z1 = route[k + 1];
-    const bridge = deckCrossed(state, x0, z0, x1, z1);
-    if (bridge) {
-      // Enter at the end on the walker's side of the river (t < 0.5 is the a side).
+  const pts = [[route[0], route[1]]];
+  for (let k = 2; k + 3 < route.length; k += 2) {
+    const x = route[k], z = route[k + 1];
+    const deck = deckZone(state, x, z);
+    const prev = pts[pts.length - 1];
+    if (deck) {
+      // A run of waypoints on one deck (smoothed routes put nodes on its
+      // centre line) between points on opposite banks of it: drop the run, so
+      // the crossing below is one straight leg in the walker's lane.
+      let e = k;
+      while (e + 3 < route.length && deckZone(state, route[e], route[e + 1]) === deck) e += 2;
+      const nx = route[e], nz = route[e + 1];
+      if (!prev.cross && !deckZone(state, prev[0], prev[1]) && deckZone(state, nx, nz) !== deck &&
+        (alongBridge(deck, prev[0], prev[1]).t < 0.5) !== (alongBridge(deck, nx, nz).t < 0.5)) {
+        // A marker, expanded below into the crossing itself: never left to a
+        // straight bank-to-bank leg, which could miss the deck on a bend.
+        pts.push({cross: deck});
+        k = e - 2;
+        continue;
+      }
+    }
+    const next = [route[k + 2], route[k + 3]];
+    if (deck && legOpen(state, prev[0], prev[1], next[0], next[1])) continue;
+    pts.push([x, z]);
+  }
+  pts.push([route[route.length - 2], route[route.length - 1]]);
+  const out = [pts[0][0], pts[0][1]];
+  for (let k = 1; k < pts.length; k++) {
+    const x0 = out[out.length - 2], z0 = out[out.length - 1];
+    if (pts[k].cross) {
+      // End to end in the walker's lane, as for a leg that crosses the whole deck.
+      const bridge = pts[k].cross;
+      const [nx, nz] = pts[k + 1];
       const aFirst = alongBridge(bridge, x0, z0).t < 0.5;
       const [p, q] = aFirst ? [bridge.a, bridge.b] : [bridge.b, bridge.a];
-      out.push(p.x, p.z, q.x, q.z);
+      const [ps, qs, pre, post] = deckLane(state, bridge, p, q, lane, x0, z0, nx, nz);
+      if (pre) for (const a of pre) pushOpen(state, out, route, a.x, a.z);
+      else approach(state, out, bridge, ps, qs, x0, z0);
+      pushOpen(state, out, route, ps.x, ps.z);
+      pushOpen(state, out, route, qs.x, qs.z);
+      if (post) for (const a of post) pushOpen(state, out, route, a.x, a.z);
+      else approach(state, out, bridge, qs, ps, nx, nz);
+      continue;
     }
-    out.push(x1, z1);
+    const [x1, z1] = pts[k];
+    const on0 = deckZone(state, x0, z0), on1 = deckZone(state, x1, z1);
+    const bridge = deckCrossed(state, x0, z0, x1, z1);
+    if (bridge) {
+      // Enter at the end on the walker's side of the river (t < 0.5 is the a side);
+      // a walker already on this deck goes straight on to the far end.
+      const aFirst = alongBridge(bridge, x0, z0).t < 0.5;
+      const [p, q] = aFirst ? [bridge.a, bridge.b] : [bridge.b, bridge.a];
+      const [ps, qs, pre, post] = deckLane(state, bridge, p, q, lane, x0, z0, x1, z1);
+      if (on0 !== bridge) {
+        if (pre) for (const a of pre) pushOpen(state, out, route, a.x, a.z);
+        else approach(state, out, bridge, ps, qs, x0, z0);
+        pushOpen(state, out, route, ps.x, ps.z);
+      }
+      pushOpen(state, out, route, qs.x, qs.z);
+      if (on1 !== bridge) {
+        if (post) for (const a of post) pushOpen(state, out, route, a.x, a.z);
+        else approach(state, out, bridge, qs, ps, x1, z1);
+      }
+    } else {
+      const touched = on0 ?? on1 ?? deckTouched(state, x0, z0, x1, z1);
+      if (touched && !(on0 === touched && on1 === touched)) {
+        if (on1 === touched) {
+          // Stepping onto a deck: at its nearer end (heading for the other).
+          const e = nearerEnd(touched, x0, z0);
+          const [es, os] = deckLane(state, touched, e, otherEnd(touched, e), lane, x0, z0, null, null);
+          approach(state, out, touched, es, os, x0, z0);
+          pushOpen(state, out, route, es.x, es.z);
+        } else if (on0 === touched) {
+          // Stepping off: at the end nearer where the walker is going.
+          const e = nearerEnd(touched, x1, z1);
+          const [os, es] = deckLane(state, touched, otherEnd(touched, e), e, lane, null, null, x1, z1);
+          pushOpen(state, out, route, es.x, es.z);
+          approach(state, out, touched, es, os, x1, z1);
+        } else {
+          // Only grazing it: round the nearer end.
+          const e = nearerEnd(touched, x0, z0);
+          approach(state, out, touched, e, otherEnd(touched, e), x0, z0, true);
+        }
+      }
+    }
+    pushOpen(state, out, route, x1, z1);
   }
   return out;
+}
+
+// Adds a point, first by way of one of the grid route's own waypoints when the
+// straight leg there would cut a wall or wade (a dropped turn put back; nearest the
+// point first). With no such waypoint the leg stays as it was.
+function pushOpen(state, out, route, x, z) {
+  const lx = out[out.length - 2], lz = out[out.length - 1];
+  if (legOpen(state, lx, lz, x, z)) { out.push(x, z); return; }
+  let best = -1, bestD = Infinity;
+  for (let k = 0; k + 1 < route.length; k += 2) {
+    const wx = route[k], wz = route[k + 1];
+    const d = Math.hypot(wx - x, wz - z);
+    if (d < bestD && legOpen(state, lx, lz, wx, wz) && legOpen(state, wx, wz, x, z)) { best = k; bestD = d; }
+  }
+  if (best >= 0) out.push(route[best], route[best + 1]);
+  out.push(x, z);
+}
+
+// The bridge whose deck or verge is under (x, z), or null (sim-world's deck test).
+function deckZone(state, x, z) {
+  return deckAt(state, x, z)?.bridge ?? null;
+}
+
+// The first bridge whose deck or verge a leg passes over, or null.
+function deckTouched(state, x0, z0, x1, z1) {
+  const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.25));
+  for (let i = 1; i < steps; i++) {
+    const b = deckZone(state, x0 + ((x1 - x0) * i) / steps, z0 + ((z1 - z0) * i) / steps);
+    if (b) return b;
+  }
+  return null;
+}
+
+function nearerEnd(bridge, x, z) { return alongBridge(bridge, x, z).t < 0.5 ? bridge.a : bridge.b; }
+const otherEnd = (bridge, e) => (e === bridge.a ? bridge.b : bridge.a);
+
+// The walker's lane across a deck walked from end p to end q: both ends moved the same
+// way, right of the direction of travel, by lane times the deck's walkable half-width
+// (to the drawn deck's edge less 0.4; footbridges are drawn 1.3 wide).
+// Where a bank meets the deck at an angle, a lane far off the axis would start or end
+// over the water: the lane is halved, then given up (the centre line), unless both
+// ends can be walked onto dry from DECK_APPROACH beyond them, and from the walker's
+// previous point (x0, z0) and to its next (x1, z1) when those are off the deck.
+function deckLane(state, bridge, p, q, lane, x0, z0, x1, z1) {
+  if (!lane) return [p, q];
+  const half = (bridge.style ?? bridge.variant) === 'footbridge' ? 0.65 : Math.min(3, Math.max(1.2, (bridge.width ?? bridge.d ?? 3) / 2));
+  // On decks wide enough to stop on, walkers keep RAIL_PASS inside where people stand at
+  // the rails to look at the water (gatherings.js railStand), so they pass them.
+  const reach = Math.max(0, half >= RAIL_MIN_HALF ? Math.min(half - 0.4, railStand(bridge) - RAIL_PASS) : half - 0.4) * lane;
+  const dx = q.x - p.x, dz = q.z - p.z, len = Math.hypot(dx, dz) || 1;
+  const ux = dx / len, uz = dz / len;
+  for (const f of LANE_TRIES) {
+    const nx = uz * reach * f, nz = -ux * reach * f;
+    const ps = {x: p.x + nx, z: p.z + nz}, qs = {x: q.x + nx, z: q.z + nz};
+    const pre = laneEndPath(state, ps, -ux, -uz, x0, z0);
+    if (!pre) continue;
+    const post = laneEndPath(state, qs, ux, uz, x1, z1);
+    if (!post) continue;
+    // The ways on and off: walked bank-side first, then reversed on the far bank.
+    return [ps, qs, pre, post.slice().reverse()];
+  }
+  return [p, q, null, null];
+}
+
+// A shifted deck end e can be walked onto dry from (x, z), straight or by way of the
+// point DECK_APPROACH beyond it along the axis (outward u); with no such point given
+// (the walker is on the deck), that approach point must be open.
+// How a walker gets from (x, z) on the bank to lane end e (the deck runs on
+// from e along -(ux, uz)): a list of points to walk first ([] for straight
+// in), or null if nothing works. Rather than give up on the lane, it looks a
+// little: approach points further out along the deck's line, and a sidestep
+// before them (shuffling along the bank or a wall) until the walker lines up.
+const APPROACH_OUT = [1, 1.6, 2.4];
+const APPROACH_SIDE = [0, 0.6, -0.6, 1.2, -1.2];
+function laneEndPath(state, e, ux, uz, x, z) {
+  if (x != null && !deckZone(state, x, z) && dryLeg(state, x, z, e.x, e.z)) return [];
+  const {blocked} = footprints(state);
+  const standable = (px, pz) => !waterAt(px, pz) && !deckZone(state, px, pz) && clearOfWalls(state, blocked, px, pz);
+  for (const k of APPROACH_OUT) {
+    const ax = e.x + ux * DECK_APPROACH * k, az = e.z + uz * DECK_APPROACH * k;
+    if (!standable(ax, az) || !dryLeg(state, ax, az, e.x, e.z)) continue;
+    if (x == null || deckZone(state, x, z)) return [{x: ax, z: az}];
+    for (const side of APPROACH_SIDE) {
+      if (!side) {
+        if (dryLeg(state, x, z, ax, az)) return [{x: ax, z: az}];
+        continue;
+      }
+      const sx = ax - uz * side, sz = az + ux * side;
+      if (standable(sx, sz) && dryLeg(state, x, z, sx, sz) && dryLeg(state, sx, sz, ax, az)) return [{x: sx, z: sz}, {x: ax, z: az}];
+    }
+  }
+  return null;
+}
+
+// Clear of walls, and out of the river except on a deck: unlike legOpen, no ford
+// allowance (the nav grid counts water by a bridge's abutments as a ford; walking a
+// lane beside the abutment there would wade the deep channel).
+function dryLeg(state, x0, z0, x1, z1) {
+  if (segmentBlocked(state, x0, z0, x1, z1)) return false;
+  const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.25));
+  for (let i = 0; i <= steps; i++) {
+    const x = x0 + ((x1 - x0) * i) / steps, z = z0 + ((z1 - z0) * i) / steps;
+    if (waterAt(x, z) && !deckZone(state, x, z)) return false;
+  }
+  return true;
+}
+
+// Adds the point just off end e along the bridge's axis (o: the other end, in the same
+// lane), when (x, z) is beside the deck rather than already beyond that end, and the
+// point is dry, open ground the walker can reach from the last point in a straight
+// line. always: also when the walker is beyond the end (a leg that only grazes the deck).
+function approach(state, out, bridge, e, o, x, z, always = false) {
+  const len = Math.hypot(e.x - o.x, e.z - o.z) || 1;
+  const t = alongBridge(bridge, x, z).t;
+  if (!always && (t < 0 || t > 1)) return;
+  const px = e.x + ((e.x - o.x) / len) * DECK_APPROACH, pz = e.z + ((e.z - o.z) / len) * DECK_APPROACH;
+  if (waterAt(px, pz) || deckZone(state, px, pz)) return;
+  if (!clearOfWalls(state, footprints(state).blocked, px, pz)) return;
+  const lx = out[out.length - 2], lz = out[out.length - 1];
+  if (!legOpen(state, lx, lz, px, pz) || !legOpen(state, px, pz, e.x, e.z)) return;
+  out.push(px, pz);
+}
+
+// A straight leg clear of walls and of water (except over a deck or its verge).
+function legOpen(state, x0, z0, x1, z1) {
+  if (segmentBlocked(state, x0, z0, x1, z1)) return false;
+  const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.25));
+  for (let i = 0; i <= steps; i++) {
+    const x = x0 + ((x1 - x0) * i) / steps, z = z0 + ((z1 - z0) * i) / steps;
+    if (waterAt(x, z) && !deckZone(state, x, z) && !fordCell(state, x, z)) return false;
+  }
+  return true;
+}
+
+// A shallow ford cell on the nav grid (walkable water).
+function fordCell(state, x, z) {
+  const c = cellOf(x, z);
+  return c >= 0 && structuralGrid(state).water[c] === 2;
 }
 
 // The bridge a leg passes over from one side to the other, if any.
@@ -562,18 +1339,17 @@ function deckCrossed(state, x0, z0, x1, z1) {
 }
 
 function pathBlocked(state, x, z, route) {
-  return !routeStillValid(state, [x, z, ...route], 0);
+  return !routeClearFrom(state, x, z, route, 0);
 }
 
 
-// Builders stand where sim-world says the work is (the street in front, the next
-// unfinished road cell), spread a little so they don't stack.
+// Builders head where sim-world says the work is (the street in front, the next
+// unfinished road cell) and spread out there by the standing-spot finder.
 function projectTarget(state, pr, p) {
   if (!pr) return null;
   const site = projectSite(state, pr);
   if (!site || !Number.isFinite(site.x)) return null;
-  const a = hashUnit(p.id * 17) * Math.PI * 2;
-  return {type: 'project', id: pr.id, x: site.x, z: site.z, tail: [site.x + Math.cos(a) * 0.8, site.z + Math.sin(a) * 0.8]};
+  return {type: 'project', id: pr.id, x: site.x, z: site.z};
 }
 
 // Each walker keeps one workplace among the enterprises of its household's trade.
@@ -593,19 +1369,23 @@ function workTarget(state, p, h, world) {
   const b = byId(state, 'buildings', ent.buildingId);
   if (!b) return null;
   const target = buildingTarget(b);
-  if (b.type === 'farm') {
-    // Farm work happens out in the field: walk to the gate, then step into the rows.
-    const u = hashUnit(p.id * 3 + p.rev) - 0.5, v = hashUnit(p.id * 5 + p.rev) - 0.5;
-    const tail = [b.x + u * (b.w - 1), b.z + v * (b.d - 1)];
-    // Only if the step from the gate stays on open ground (a farmhouse may stand there).
-    if (!segmentBlocked(state, target.x, target.z, tail[0], tail[1])) target.tail = tail;
-  }
+  if (b.type === 'farm') farmRows(state, p, b, target);
   return target;
 }
 
-// One of the k nearest buildings of the given types, picked by a stable hash.
+// Farm work happens out in the field: walk to the gate, then step into the rows (a
+// spot there is found on arrival like any other).
+function farmRows(state, p, b, target) {
+  const u = hashUnit(p.id * 3 + p.rev) - 0.5, v = hashUnit(p.id * 5 + p.rev) - 0.5;
+  const tail = [b.x + u * (b.w - 1), b.z + v * (b.d - 1)];
+  // Only if the step from the gate stays on open ground (a farmhouse may stand there).
+  if (!segmentBlocked(state, target.x, target.z, tail[0], tail[1])) target.tail = tail;
+}
+
+// One of the k nearest buildings of the given types, the quietest by the walker's
+// taste (pickQuiet).
 const nearScratch = [];
-function nearestOf(world, types, p, k) {
+function nearestOf(state, world, types, p, k, h) {
   nearScratch.length = 0;
   for (const t of types) {
     const list = world.byType.get(t);
@@ -621,8 +1401,50 @@ function nearestOf(world, types, p, k) {
     }
   }
   if (!nearScratch.length) return null;
-  const pick = nearScratch[hash32(p.id + p.rev) % nearScratch.length].b;
-  return buildingTarget(pick);
+  return buildingTarget(pickQuiet(state, p, nearScratch, crowdTolerance(p, h)));
+}
+
+// Crowd-aware choice. Each candidate scores its distance, a stable per-walker taste
+// (up to PICK_SPREAD units, so not everyone goes to the nearest), and a crowd
+// penalty weighted by how little the walker likes crowds. Lowest score wins (ties:
+// the lower building id). Gatherings never come here: they pull people in on purpose.
+const PICK_SPREAD = 40;
+const CROWD_COST = 10;                     // units of extra walk per walker-per-block of density, at zero tolerance
+                                           // (a quiet street reads about 1, a busy centre 15-20)
+const SEAT_FULL = 8;                       // a building with every seat taken counts as this many
+const TRADE_TOLERANCE = {trade: 0.15, labour: 0.05, craft: 0, none: 0, farm: -0.1, gentry: -0.2};
+
+// 0 (always the quiet one) .. 1 (doesn't mind a crush): a hash of the walker's id,
+// nudged by its household's trade.
+export function crowdTolerance(p, h) {
+  const t = hashUnit(p.id * 61 + 5) + (TRADE_TOLERANCE[h?.trade] ?? 0);
+  return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+
+// How busy a building is this tick: the walker density round its door (density.js,
+// walkers per 8-unit block, smoothed), plus, for a building with seats, the share of
+// its seats taken (SEAT_FULL when all are).
+export function crowdAt(state, b) {
+  const door = accessPoint(b);
+  let crowd = densityAt(state, door.x, door.z);
+  if (b.type === 'park' || LEISURE_TYPES.includes(b.type)) {
+    let n = scratch.seatCount.get(b.id);
+    if (n == null) { n = seatsOf(b).length; scratch.seatCount.set(b.id, n); }
+    if (n > 0) crowd += ((scratch.seatsTaken.get(b.id) ?? 0) / n) * SEAT_FULL;
+  }
+  return crowd;
+}
+
+// cands: [{b, d}] with d the squared distance from the walker.
+export function pickQuiet(state, p, cands, tol) {
+  const w = CROWD_COST * (1 - tol) * (1 - tol);
+  let best = null, bestS = Infinity;
+  for (const {b, d} of cands) {
+    let score = Math.sqrt(d) + hashUnit(p.id * 131 + p.rev * 7 + b.id * 3) * PICK_SPREAD;
+    if (w > 0) score += w * crowdAt(state, b);
+    if (score < bestS || (score === bestS && b.id < best.id)) { best = b; bestS = score; }
+  }
+  return best;
 }
 
 function strollTarget(state, p) {
@@ -657,7 +1479,26 @@ function gatherTarget(state, p) {
   return null;
 }
 
-function startTask(state, ctx, p, kind, target, now) {
+// Tools and tests: send a walker to a building now, as chooseTask would.
+export function sendWalker(state, p, kind, b, ctx = {}) {
+  startTask(state, ctx, p, kind, buildingTarget(b), simTime(state));
+  return p.task;
+}
+
+// Tools and tests: send a walker on a leisure outing (leisure.js outingFor) now.
+export function goOut(state, p, target, ctx = {}) {
+  startTask(state, ctx, p, 'leisure', target, simTime(state));
+  return p.task;
+}
+
+// Tools and tests: send a walker to a gathering (a world event) now.
+export function joinGathering(state, p, ev, ctx = {}) {
+  startTask(state, ctx, p, 'gather', {type: 'event', id: ev.id, x: ev.x, z: ev.z, eventKind: ev.kind}, simTime(state));
+  return p.task;
+}
+
+// keep: carried over when a full goal is relaxed ({relax, avoid, dwellFor}).
+function startTask(state, ctx, p, kind, target, now, keep = null) {
   if (!target) {
     p.task = null;
     return;
@@ -672,15 +1513,27 @@ function startTask(state, ctx, p, kind, target, now) {
     tx: target.x,
     tz: target.z,
     tail: target.tail ?? null,
+    seat: target.seat ?? null,
     route: [],
     seg: 0,
     elapsed: 0,
     dwell: 0,
-    dwellFor: lo + rng(state, 'people') * (hi - lo),
+    dwellFor: keep?.dwellFor ?? lo + rng(state, 'people') * (hi - lo),
     waiting: true,
     retryAt: now,
     started: now,
+    spot: null,
   };
+  if (keep?.relax) p.task.relax = keep.relax;
+  if (keep?.avoid) p.task.avoid = keep.avoid;
+  // A leisure outing (leisure.js): its activity, and how long it lasts.
+  if (target.activity) {
+    p.task.activity = target.activity;
+    if (target.outing) p.task.outing = 1;
+    const span = ACTIVITIES[target.activity]?.dwell;
+    if (span && !keep?.dwellFor) p.task.dwellFor = span[0] + hashUnit((p.id * 389 + Math.floor(now * 10)) >>> 0) * (span[1] - span[0]);
+  }
+  if (!p.task.seat) planGathering(state, p, p.task);
   requestRoute(state, ctx, p, p.task, now);
 }
 
@@ -693,6 +1546,7 @@ function startTask(state, ctx, p, kind, target, now) {
 // A null route means unreachable; the walker uses the fallback path.
 
 function requestRoute(state, ctx, p, task, now) {
+  if (task.claim && task.spot) checkClaim(state, task);
   const planner = ctx?.services?.routes;
   if (planner?.plan) {
     task.waiting = true;
@@ -709,7 +1563,7 @@ function requestRoute(state, ctx, p, task, now) {
         return;
       }
       // Unreachable: stay put for this task rather than walking through walls.
-      setRoute(state, task, route && route.length >= 2 ? route : [], route && route.length >= 2);
+      setRoute(state, p, task, route && route.length >= 2 ? route : [], route && route.length >= 2);
     });
     if (accepted && task.waiting) {
       task.retryAt = now + 30;   // a lost answer is retried eventually
@@ -728,7 +1582,7 @@ function requestRoute(state, ctx, p, task, now) {
   }
   scratch.syncRoutes--;
   const route = syncRoute(state, p.x, p.z, task.tx, task.tz);
-  setRoute(state, task, route && route.length >= 2 ? route : [], !!route);
+  setRoute(state, p, task, route && route.length >= 2 ? route : [], !!route);
 }
 
 // A* over sim-world's structural grid: a pure function of the saved state (no wear
@@ -740,8 +1594,13 @@ function syncRoute(state, x0, z0, x1, z1) {
   return result.cells ? cellsToWaypoints(grid, result.cells, {x: x0, z: z0}, {x: x1, z: z1}) : null;
 }
 
-function setRoute(state, task, route, reachable = true) {
-  task.route = alongDecks(state, Array.from(route));   // a copy: planner routes are shared through its cache
+function setRoute(state, p, task, route, reachable = true) {
+  // A copy: planner routes are shared through its cache. Each walker keeps to its own
+  // side of the path's centre line.
+  task.route = roundRoute(state, laneOffset(state, p.id, alongDecks(state, Array.from(route), laneFraction(p.id))));
+  // A gathering's claimed spot is where this route goes (given up if it cannot be reached).
+  if (task.claim && !reachable) task.claim = 0;
+  if (!task.claim) task.spot = null;
   // The last step off the street (into a field) is checked again: something may have
   // been built there since the task began.
   const n = task.route.length;
@@ -752,11 +1611,200 @@ function setRoute(state, task, route, reachable = true) {
   task.waiting = false;
 }
 
+// Side offset. Walkers sharing a cached route would walk one centre line in single
+// file; each keeps a stable lane instead: a fraction in [-1, 1] from a hash of its id
+// (laneFraction, uniform, so a crowd fills the path evenly) of the path's reach, its
+// drawn half-width less half a walker and a little (render/paths.js widths), right of
+// its direction of travel. Interior waypoints move perpendicular to the local
+// direction (along the bisector at corners); the first and last points stay. A point
+// that would meet a wall or water at its full offset tries half; failing that, it
+// stays. Points on or by a bridge deck are left alone here: alongDecks has already
+// put the walker's lane across the deck. Edits the route in place and returns it.
+const LANE_EDGE = 0.3;            // centre of a walker this far inside the drawn edge
+const GRASS_REACH = 0.45;         // open ground: no drawn edge, a modest spread
+const PLANNED_HALF = 1.08;        // render/paths.js: planned cells are at least this wide
+const TOW_HALF = [0, 1.0, 1.1, 1.2, 1.35, 1.45];   // render/paths.js towpath lanes (not exported there)
+const DECK_KEEP = 2.6;            // no offset this near a bridge end (DECK_APPROACH + 1)
+
+export const laneFraction = (id) => hashUnit(id * 41 + 3) * 2 - 1;
+
+// How far either side of a waypoint in cell c a walker may keep: the drawn half-width
+// there (towpath lane, planned fill, or tier and wear) less LANE_EDGE.
+export function laneReach(state, c, x, z) {
+  const r = state.roads;
+  const t = r.tier[c];
+  if (!t) return GRASS_REACH;
+  let half;
+  if (r.planned && r.planned[c] & FLAG.TOWPATH && Math.abs(bankDistance(x, z) - 3.5) < 4.5) half = TOW_HALF[t];
+  else {
+    half = halfWidth(t, wearBucket(t, r.wear[c]));
+    if (r.planned && r.planned[c] & FLAG.PLANNED) half = Math.max(half, PLANNED_HALF);
+  }
+  return Math.max(0, half - LANE_EDGE);
+}
+
+export function laneOffset(state, id, route) {
+  const n = route.length;
+  if (n < 6) return route;
+  const lane = laneFraction(id);
+  if (Math.abs(lane) < 0.02) return route;
+  const decks = deckList(state);
+  const {blocked} = footprints(state);
+  // 1. Each interior point's wanted offset (magnitude; the side is the lane's sign)
+  // and the direction to push it (the corner's bisector, mitred).
+  const m = n / 2;
+  const want = new Float64Array(m), side = new Float64Array(m * 2), tan = new Float64Array(m * 2), seg = new Float64Array(m);
+  for (let i = 1; i < m; i++) seg[i] = Math.hypot(route[i * 2] - route[i * 2 - 2], route[i * 2 + 1] - route[i * 2 - 1]);
+  for (let i = 1; i < m - 1; i++) {
+    const k = i * 2, x = route[k], z = route[k + 1];
+    const ax = x - route[k - 2], az = z - route[k - 1], bx = route[k + 2] - x, bz = route[k + 3] - z;
+    const la = seg[i], lb = seg[i + 1];
+    if (la < 1e-6 || lb < 1e-6) continue;
+    let tx = ax / la + bx / lb, tz = az / la + bz / lb;
+    const lt = Math.hypot(tx, tz);
+    if (lt < 0.3) continue;                     // a near U-turn: leave it
+    tx /= lt;
+    tz /= lt;
+    const c = cellIndex(state.roads, x, z);
+    if (c < 0 || waterAt(x, z)) continue;
+    // On or by a deck: alongDecks already put it in this walker's deck lane.
+    if (decks.length && (deckAt(state, x, z) || decks.some(({bridge}) => Math.hypot(bridge.a.x - x, bridge.a.z - z) < DECK_KEEP || Math.hypot(bridge.b.x - x, bridge.b.z - z) < DECK_KEEP))) { want[i] = NaN; continue; }
+    // Miter: the offset at a corner is longer so both legs keep the same lateral gap.
+    const miter = Math.min(1.4, 1 / Math.max(0.2, (ax * tx + az * tz) / la));
+    want[i] = Math.abs(lane) * laneReach(state, c, x, z) * miter;
+    side[i * 2] = tz * Math.sign(lane); side[i * 2 + 1] = -tx * Math.sign(lane);
+    tan[i * 2] = tx; tan[i * 2 + 1] = tz;
+  }
+  // 2. The offset changes only gradually along the route: no sideways jump where
+  // the path changes width, and a ramp in from the start and out at the end.
+  // (Points fixed in a deck lane, NaN, are passed over: they are in lane already.)
+  const ease = (v) => {
+    let last = v[0], run = 0;
+    for (let i = 1; i < m; i++) {
+      run += seg[i];
+      if (Number.isNaN(v[i])) continue;
+      v[i] = Math.min(v[i], last + LANE_RATE * run);
+      last = v[i]; run = 0;
+    }
+    last = v[m - 1]; run = 0;
+    for (let i = m - 2; i >= 0; i--) {
+      run += seg[i + 1];
+      if (Number.isNaN(v[i])) continue;
+      v[i] = Math.min(v[i], last + LANE_RATE * run);
+      last = v[i]; run = 0;
+    }
+  };
+  want[0] = 0;
+  want[m - 1] = 0;
+  // 3. Apply, sliding along a wall before giving any up; a point that cannot take
+  // its share pins it lower, and the ramp is eased again round it.
+  const base = Float64Array.from(route);
+  for (let round = 0; round < 3; round++) {
+    ease(want);
+    let pinned = false;
+    for (let i = 1; i < m - 1; i++) {
+      const k = i * 2, x = base[k], z = base[k + 1];
+      route[k] = x;
+      route[k + 1] = z;
+      if (Number.isNaN(want[i]) || want[i] < 0.01) continue;
+      let got = 0;
+      for (const f of LANE_TRIES) {
+        for (const slide of LANE_SLIDES) {
+          const d = want[i] * f;
+          const sx = x + side[i * 2] * d + tan[i * 2] * slide, sz = z + side[i * 2 + 1] * d + tan[i * 2 + 1] * slide;
+          if (!laneOpen(state, decks, blocked, x, z, sx, sz, route[k - 2], route[k - 1], base[k + 2], base[k + 3])) continue;
+          route[k] = sx;
+          route[k + 1] = sz;
+          got = d;
+          break;
+        }
+        if (got) break;
+      }
+      if (got < want[i] - 1e-9) { want[i] = got; pinned = true; }
+    }
+    if (!pinned) break;
+  }
+  return route;
+}
+
+// Corner cutting (Chaikin) over a walker's route, so it walks curves instead
+// of swivelling at every waypoint. A corner is cut only where the cut stays on
+// open, dry ground off any deck; elsewhere (walls, water, deck lanes, the ends)
+// the original point is kept.
+const ROUND_PASSES = 2;
+const ROUND_CUT = 0.25;     // share of each leg cut away at a corner
+const ROUND_MAX = 1.2;      // and never more than this far (units)
+const ROUND_MIN_TURN = 0.1; // radians: straighter than this is left alone
+export function roundRoute(state, route) {
+  let r = route;
+  const {blocked} = footprints(state);
+  for (let pass = 0; pass < ROUND_PASSES; pass++) {
+    if (r.length < 6 || r.length > 800) break;
+    const out = [r[0], r[1]];
+    for (let k = 2; k + 3 < r.length; k += 2) {
+      const x = r[k], z = r[k + 1];
+      const px = r[k - 2], pz = r[k - 1], nx = r[k + 2], nz = r[k + 3];
+      const la = Math.hypot(x - px, z - pz), lb = Math.hypot(nx - x, nz - z);
+      const turn = la > 1e-6 && lb > 1e-6 ? Math.acos(Math.max(-1, Math.min(1, ((x - px) * (nx - x) + (z - pz) * (nz - z)) / (la * lb)))) : 0;
+      if (turn < ROUND_MIN_TURN || waterAt(x, z) || deckZone(state, x, z)) { out.push(x, z); continue; }
+      const ca = Math.min(ROUND_CUT * la, ROUND_MAX) / la, cb = Math.min(ROUND_CUT * lb, ROUND_MAX) / lb;
+      const qx = x + (px - x) * ca, qz = z + (pz - z) * ca, rx = x + (nx - x) * cb, rz = z + (nz - z) * cb;
+      const lx = out[out.length - 2], lz = out[out.length - 1];
+      const ok = [[qx, qz], [rx, rz]].every(([ux, uz]) => !waterAt(ux, uz) && !deckZone(state, ux, uz) && clearOfWalls(state, blocked, ux, uz)) &&
+        legOpen(state, lx, lz, qx, qz) && legOpen(state, qx, qz, rx, rz) && legOpen(state, rx, rz, nx, nz) &&
+        routeStillValid(state, [lx, lz, qx, qz, rx, rz, nx, nz], 0);
+      if (ok) out.push(qx, qz, rx, rz);
+      else out.push(x, z);
+    }
+    out.push(r[r.length - 2], r[r.length - 1]);
+    r = out;
+  }
+  return r;
+}
+const LANE_TRIES = [1, 0.75, 0.5];
+// How fast a walker's lane offset may change along its route (units per unit walked).
+const LANE_RATE = 0.3;
+// Slides along the route (in units) tried for a blocked lane point before its
+// offset is reduced: a walker shuffles along a wall rather than give up its lane.
+const LANE_SLIDES = [0, 0.3, -0.3, 0.6, -0.6];
+
+// (px, pz) is the previous point as already offset; (nx, nz) the next as planned.
+function laneOpen(state, decks, blocked, x, z, sx, sz, px, pz, nx, nz) {
+  if (!clearOfWalls(state, blocked, sx, sz) || waterAt(sx, sz)) return false;
+  if (decks.length) {
+    for (const {bridge} of decks) {
+      if (Math.hypot(bridge.a.x - x, bridge.a.z - z) < DECK_KEEP || Math.hypot(bridge.b.x - x, bridge.b.z - z) < DECK_KEEP) return false;
+    }
+    if (deckAt(state, x, z) || deckAt(state, sx, sz)) return false;
+  }
+  return laneLeg(state, decks, px, pz, sx, sz) && laneLeg(state, decks, sx, sz, nx, nz) && routeStillValid(state, [px, pz, sx, sz, nx, nz], 0);
+}
+
+// A leg of an offset route: off every deck and verge, and out of the water except at
+// a ford (walls are checked exactly by routeStillValid).
+function laneLeg(state, decks, x0, z0, x1, z1) {
+  const len = Math.hypot(x1 - x0, z1 - z0);
+  // Well back from the river (it bends gently), the leg cannot reach the water; away
+  // from every deck's bounding box, it cannot touch a deck.
+  const wet = bankDistance(x0, z0) < 3 * len + 1;
+  const lx0 = Math.min(x0, x1), lx1 = Math.max(x0, x1), lz0 = Math.min(z0, z1), lz1 = Math.max(z0, z1);
+  let near = false;
+  for (const d of decks) if (lx1 >= d.x0 && lx0 <= d.x1 && lz1 >= d.z0 && lz0 <= d.z1) { near = true; break; }
+  if (!near && !wet) return true;
+  const steps = Math.max(1, Math.ceil(len / 0.4));
+  for (let i = 1; i < steps; i++) {
+    const x = x0 + ((x1 - x0) * i) / steps, z = z0 + ((z1 - z0) * i) / steps;
+    if (near && deckAt(state, x, z)) return false;
+    if (wet && waterAt(x, z) && !fordCell(state, x, z)) return false;
+  }
+  return true;
+}
+
 // Straight line, or via the nearest crossing when the walk crosses the river. Without
 // any crossing the walker goes to its own bank opposite the goal and turns back.
 export function fallbackRoute(state, x0, z0, x1, z1) {
   const west0 = x0 < riverX(z0), west1 = x1 < riverX(z1);
-  if (west0 === west1) return [x1, z1];
+  if (west0 === west1 || !hasRiver()) return [x1, z1];
   const crossings = crossingsOf(state);
   if (!crossings.length) return [riverX(z1) + (west0 ? -9 : 9), z1];
   let best = crossings[0], bestCost = Infinity;
@@ -792,6 +1840,9 @@ export function walkerY(state, x, z) {
 // The finished bridge whose deck is under (x, z), with how far along it the point is,
 // or null. Finished bridges are cached with their bounding boxes.
 const bridgeCache = new WeakMap();
+
+// Finished bridges with their padded bounding boxes ({bridge, x0, x1, z0, z1}), cached.
+export const bridgeDecks = (state) => deckList(state);
 
 function deckList(state) {
   let entry = bridgeCache.get(state);

@@ -20,9 +20,11 @@ async function loadView() {
       const { stepTick } = sim;
       // ?seed=N starts a fresh town on that terrain seed (hilly / floodplain
       // comparisons); otherwise load the named fixture.
+      // &arch=coast forces a valley archetype (src/waters.js); &years=N grows the town first.
       const state = params.has('seed')
-        ? sim.createState(Number(params.get('seed')))
+        ? sim.createState(Number(params.get('seed')), params.has('arch') ? { archetype: params.get('arch') } : {})
         : sim.loadFixture ? await sim.loadFixture(fixture) : sim.fixtureState(fixture);
+      if (params.has('seed') && Number(params.get('years')) > 0) sim.fastForward(state, Number(params.get('years')));
       const view = createRenderView(state, { rowFloats: 20 });
       window.__state = state;
       const speed = Number(params.get('speed') ?? 1);
@@ -51,6 +53,7 @@ const world = createWorld(document.querySelector('#world'), { quality: tier });
 world.setDayCycle(params.get('cycle') ?? 'seasonal');
 world.setSimSpeed(Number(params.get('speed') ?? 1));
 if (params.has('overlay')) world.setOverlay(params.get('overlay'));
+if (params.has('peopleShadows')) world.setPeopleShadows(params.get('peopleShadows'));
 // Explicit camera: applied after the world's own first framing.
 const camAt = params.has('cx') ? [Number(params.get('cx')), Number(params.get('cz') ?? 0), params.has('dist') ? Number(params.get('dist')) : null] : null;
 world.onPick((p) => console.log('pick', JSON.stringify(p)));

@@ -18,7 +18,15 @@ export function budgetSection() {
       const bodies = all.filter((b) => b.coin > 0).sort((a, b) => b.coin - a.coin);
       const max = Math.max(1, budget.spend?.rules ?? 0, ...bodies.map((b) => b.coin));
       const bar = (label, value) => `<div class="budget-row"><span>${esc(label)}</span><span class="bar"><i style="width:${Math.round((Math.max(0, value) / max) * 100)}%"></i></span><b>${num(value)}</b></div>`;
-      el.innerHTML = `<div class="section-head"><h3>The town's purse</h3><span class="aside">last year</span></div>
+      // With yearly budgets, the bodies' rows are this year's grants (and what is spent of them).
+      const grants = (budget.budgets ?? []).filter((b) => b.granted > 0).sort((a, b) => b.granted - a.granted);
+      const gmax = Math.max(1, budget.spend?.rules ?? 0, ...grants.map((b) => b.granted));
+      const grantRow = (b) => `<div class="budget-row"><span>${esc(b.name)}</span><span class="bar"><i style="width:${Math.round((b.granted / gmax) * 100)}%"></i></span><b>${num(b.granted)}</b></div>`;
+      el.innerHTML = grants.length
+        ? `<div class="section-head"><h3>This year's budgets</h3><span class="aside">${num(grants.reduce((n, b) => n + b.spent, 0))} spent</span></div>
+        <div class="purse"><div><span>Came in last year</span><b>${num(budget.income?.total)}</b></div><div><span>Granted</span><b>${num(grants.reduce((n, b) => n + b.granted, 0))}</b></div></div>
+        <div class="budget-rows">${bar('Rules in force', budget.spend?.rules ?? 0)}${grants.map(grantRow).join('')}</div>`
+        : `<div class="section-head"><h3>The town's purse</h3><span class="aside">last year</span></div>
         <div class="purse"><div><span>Came in</span><b>${num(budget.income?.total)}</b></div><div><span>Went out</span><b>${num(budget.spend?.total)}</b></div></div>
         <div class="budget-rows">${bar('Rules in force', budget.spend?.rules ?? 0)}${bodies.map((b) => bar(b.name, b.coin)).join('')}</div>
         ${all.length && !bodies.length ? '<p class="purse-note">The bodies spent nothing of their own.</p>' : ''}`;

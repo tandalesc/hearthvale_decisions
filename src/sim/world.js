@@ -13,6 +13,10 @@ import { ensureCentres, updateCentresStep } from './centres.js';
 import { policyModifiers } from './policies.js';
 import { spendPavingFund, rebuildOldBridges, yearlyFootbridges, yearlyBridges, collapseBridge, rebuildBridge } from './works.js';
 import { rng } from './rng.js';
+import { yearlyAesthetics } from './aesthetics.js';
+import { yearlyLandscape } from './landscape.js';
+import { yearlyParkReserve } from './parks.js';
+import { reclaimDerelicts } from './reclaim.js';
 
 const FOUNDATIONS_V = 7;
 const FOUNDATION_SPAN = 150;
@@ -34,6 +38,8 @@ const YEAR_STEPS = {
     reportRaised(s, raised + span.raised);
   },
   age: s => ageBuildings(s),
+  // Empty buildings standing in the way of trodden paths come down.
+  reclaim: s => { reclaimDerelicts(s); },
   merge: s => mergeWilling(s),
   works: s => {
     spendPavingFund(s);
@@ -48,6 +54,10 @@ const YEAR_STEPS = {
     const next = updateCentresStep(s, step);
     if (next != null) return `centres:${next}`;
   },
+  // Green reserves set aside a natural spot; then gardens, eyesores and looks.
+  parks: s => { yearlyParkReserve(s); },
+  landscape: s => { yearlyLandscape(s); },
+  looks: s => { yearlyAesthetics(s, { landscape: false }); },
 };
 
 // A job is a step name, or 'name:arg:arg' for a step part done; a step that
@@ -67,9 +77,12 @@ export const worldSystem = {
     ensureRoads(state);
     adoptLots(state);
     ensureCentres(state);
+    yearlyAesthetics(state);
   },
   restore(state) {
     ensureRoads(state);
+    // Saves from before landscaping: tend what already stands once, now.
+    if (!state.landscape) yearlyAesthetics(state);
   },
   tick(state, ctx) {
     if (state.worldYearJobs?.length) runYearStep(state);

@@ -73,7 +73,9 @@ function account(state, ref) {
     if ('budgetShare' in ref) return {kind: 'body', rec: ref};
   }
   if (typeof ref === 'string') {
-    const [kind, raw] = ref.split(':');
+    // Split at the first colon only: ward ids carry one of their own ('body:ward:4').
+    const at = ref.indexOf(':');
+    const kind = at < 0 ? ref : ref.slice(0, at), raw = at < 0 ? '' : ref.slice(at + 1);
     if (kind === 'household') return {kind, rec: byId(state, 'households', Number(raw))};
     if (kind === 'enterprise') return {kind, rec: byId(state, 'enterprises', Number(raw))};
     if (kind === 'body') return {kind, rec: state.institutions.find((i) => i.id === raw)};
@@ -746,7 +748,7 @@ export function economyYearly(state) {
   e.year = {};
   const last = e.lastYear;
   state.budget = {
-    income: {tax: (last.propertyTax ?? 0) + (last.incomeTax ?? 0) + (last.siteTax ?? 0), tolls: last.tolls ?? 0, tithe: last.tithe ?? 0},
+    income: {tax: purseBase(last), tolls: last.tolls ?? 0, tithe: last.tithe ?? 0},
     spend: {
       upkeep: last.publicServices ?? 0,
       policies: last.policies ?? 0,
@@ -792,12 +794,20 @@ function membersByTrade(state) {
   return out;
 }
 
-// Each active body gets its share of last year's tax income.
+// Each active body gets its share of the year's tax income. The base is every
+// tax the treasury levies: property, income and site tax. A land-value-tax town
+// takes most of its tax as site tax, and it must still fund its bodies (the base
+// used to leave site tax out, so a town that taxed only land paid every purse 0).
+export const purseBase = (year = {}) => (year.propertyTax ?? 0) + (year.incomeTax ?? 0) + (year.siteTax ?? 0);
+
+// Bodies on a yearly budget (budgets.js), or with one answered and waiting to
+// be paid at this turn of the year, have no purse share.
 function fundInstitutions(state) {
-  const tax = (state.economy.year.propertyTax ?? 0) + (state.economy.year.incomeTax ?? 0);
+  const tax = purseBase(state.economy.year);
   const bodies = (state.economy.year.bodies = {});
   for (const inst of state.institutions) {
     if (inst.kind === 'moot' || inst.status !== 'active' || !(inst.budgetShare > 0)) continue;
+    if (inst.budget?.mode === 'annual' || inst.budget?.next) continue;
     const amount = Math.min(inst.budgetShare * tax, Math.max(0, state.treasury));
     bodies[inst.id] = pay(state, 'treasury', inst, amount, 'bodyBudgets');
   }

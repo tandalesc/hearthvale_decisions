@@ -87,7 +87,7 @@ export function enterprisesFound(state) {
   planFounding(state);
 }
 
-function monthlyCost(state, ent) {
+export function monthlyCost(state, ent) {
   return ent.jobs * wageRate(state) + (ent.upkeep ?? 2) * priceLevel(state);
 }
 
@@ -288,7 +288,9 @@ export function closeEnterprise(state, ent, reason = 'closed') {
 function maybeBorrow(state, ent, rand) {
   const cost = monthlyCost(state, ent);
   const prior = {hold: 1, borrow_small: 0.5, borrow_large: 0.1, sell_up: ent.lossYears > 1 ? 0.3 : 0.02};
-  const choice = decide(state, 'take_loan', {type: 'enterprise', record: ent}, {prior, rng: rand});
+  // Lenders balk at a business already owing a year of costs, whatever the owner wants.
+  const facts = (ent.debt ?? 0) > 12 * cost ? {borrow_small: 0.6, borrow_large: 0.2} : null;
+  const choice = decide(state, 'take_loan', {type: 'enterprise', record: ent}, {prior, facts, rng: rand});
   if (choice === 'borrow_small' || choice === 'borrow_large') {
     const amount = cost * (choice === 'borrow_small' ? 4 : 10);
     ent.cash += amount;

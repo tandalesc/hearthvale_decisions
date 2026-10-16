@@ -11,6 +11,7 @@
 
 import {POLICIES, activePolicies} from './policies.js';
 import {addChronicle} from './chronicle.js';
+import {factionLooks, LOOKS_CARE} from './aesthetics.js';
 
 export const FACTIONS = [
   {id: 'farmers', name: 'Farmers', trades: ['farm']},
@@ -99,6 +100,17 @@ export function mergeFaction(state, id) {
 
 export const factionById = (state, id) => state.factions.find((f) => f.id === id) ?? null;
 
+// Set a faction's mood between the yearly passes, noting what moved it
+// (f.moodLog[source], summed until the approval pass reads and clears it).
+// source: 'rulings' | 'reactions' | 'displaced' | 'events'.
+export function nudgeMood(f, next, source) {
+  const d = next - f.mood;
+  f.mood = next;
+  if (!d) return;
+  const log = (f.moodLog ??= {});
+  log[source] = Math.round(((log[source] ?? 0) + d) * 1e6) / 1e6;
+}
+
 export function initFactions(state) {
   if (!state.factions?.length) {
     state.factions = FACTIONS.map((f) => ({id: f.id, name: f.name, trades: [...f.trades], size: 0, households: 0,
@@ -136,12 +148,27 @@ export function ruleBalance(state, faction) {
   return n;
 }
 
+// What a faction's mood heads toward, by part: the rules that help or hurt it,
+// how life is, unrest, and how its own streets look. The yearly target is
+// 0.5 plus these, clamped to 0..1. The approval pass reads the parts.
+export function moodParts(state, f, wellbeing = state.indicators?.wellbeing ?? 60) {
+  return {
+    rules: 0.06 * ruleBalance(state, f),
+    wellbeing: (wellbeing - 60) / 200,
+    unrest: -(state.pressures?.unrest ?? 0) * 0.3,
+    // What their own streets look like: the gentry and clerks mind most.
+    looks: (LOOKS_CARE[f.parent ?? f.id] ?? 0.08) * (factionLooks(state, f.id) - 0.5),
+  };
+}
+
 export function factionsYearly(state) {
   countFactions(state);
   const wellbeing = state.indicators?.wellbeing ?? 60;
   const year = state.time.year;
   for (const f of [...state.factions]) {
-    const target = clamp01(0.5 + 0.06 * ruleBalance(state, f) + (wellbeing - 60) / 200 - (state.pressures?.unrest ?? 0) * 0.3);
+    const parts = moodParts(state, f, wellbeing);
+    const target = clamp01(0.5 + parts.rules + parts.wellbeing - (state.pressures?.unrest ?? 0) * 0.3 + parts.looks);
+    f.moodParts = Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, Math.round(v * 10000) / 10000]));
     f.lastMood = f.mood;
     f.mood = clamp01(f.mood * 0.8 + target * 0.2);
     f.trend = Math.round((f.mood - f.lastMood) * 1000) / 1000;

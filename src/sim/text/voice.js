@@ -59,8 +59,6 @@ export const LINES = {
   bodyDissolvedByYou: 'You closed {name}. Its members go home.',
   bodyRenamed: 'The {old} is now the {name}.',
   bodyDemands: '{name} is strong now. It no longer asks. It demands.',
-  delegated: '{name} now runs its own affairs.',
-  undelegated: '{name} brings its plans to you again.',
   ruleAdopted: 'A new rule: {title}.',
   ruleRaised: 'The rule on {title} is stronger now.',
   ruleLowered: 'The rule on {title} is softer now.',

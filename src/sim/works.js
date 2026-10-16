@@ -2,7 +2,7 @@
 // bodies turn candidates into docket cards; the player only approves. An
 // approved work becomes projects that builders carry out cell by cell.
 import { addBuildingRecord, removeBuildingRecord, touchBuilding, byId, emitChronicle, setTag } from './state.js';
-import { riverX, bankDistance, bankSide, WATER_HALF, FORDS } from '../terrain.js';
+import { riverX, bankDistance, bankSide, WATER_HALF, FORDS, riverOpenAt, nearestWaterKind, KIND, terrainVersion } from '../terrain.js';
 import {
   CELL, GRID_W, GRID_H, CELLS, PLANNED_MAX, FLAG, BAND_CELLS, ORIGIN_X, ORIGIN_Z,
   cellIndex, cellXZ, cellCenter, terrainGrid, footprints, setPlannedTier, bumpNav, bandCenterZ, markDirty, setTowpath,
@@ -16,6 +16,7 @@ import { crossingAt, bridgeGeometry, deckCells, deckYFor, BRIDGE_WIDTH, DECK_TIE
 import { findRoute } from '../navigation.js';
 import { districtById } from './districts.js';
 import { policyModifiers } from './policies.js';
+import { parkCandidates, designatePark } from './parks.js';
 
 export const UNIT_COST = { grade: 40, pave: 90, avenue: 150, ring: 70, square: 120, grid: 40, turnpike: 60 };
 export const BRIDGE_COST = { basic: 350, timber: 1600, stone: 4800 };
@@ -203,7 +204,7 @@ function basicBridgeCandidates(state) {
     const span = bridgeSpan(state, band, { preferFord: true });
     if (!span) continue;
     const card = bridgeCard(state, span, n);
-    const cost = Math.round(BRIDGE_COST.basic * scale(state));
+    const cost = Math.round(BRIDGE_COST.basic * scale(state) * spanScale(span.length));
     return [{
       ...card, key: `bridge:basic:${band}`, basic: true, cost, share: Math.round(share * 100) / 100,
       title: `A cart bridge at the ${card.where} ford`,
@@ -223,6 +224,7 @@ export function bridgeSpan(state, band, { preferFord = false } = {}) {
   let best = null;
   for (let k = 0; k < BAND_CELLS * 2; k++) {
     const z = z0 + (k + 0.5) * CELL / 2;
+    if (!riverOpenAt(z)) continue;   // never across a lake or out to sea
     const crossing = crossingAt(z);
     const centre = cellOf(crossing.centre.x, z);
     const ford = centre >= 0 && water[centre] === 2;
@@ -235,10 +237,16 @@ export function bridgeSpan(state, band, { preferFord = false } = {}) {
   return { crossing, cells: geo.cells, a: crossing.a, b: crossing.b, x: geo.x, z: geo.z, w: geo.w, d: geo.d, length: crossing.length, band, ford: best.ford };
 }
 
+// A bridge carried over a wide flood meadow costs by its length (version 2;
+// an ordinary crossing of the channel is about 18 m).
+function spanScale(length) {
+  return terrainVersion() >= 2 ? Math.max(1, length / 18) : 1;
+}
+
 function bridgeCard(state, span, crossings) {
   const where = placeName(state, span.x, span.z);
   const ford = span.ford || span.cells.some(i => terrainGrid().water[i] === 2);
-  const s = scale(state);
+  const s = scale(state) * spanScale(span.length);
   return {
     key: `bridge:${span.band}`,
     kind: 'bridge', cells: span.cells, x: span.x, z: span.z, w: span.w, d: span.d, band: span.band,
@@ -485,7 +493,7 @@ function ringDistance(i, cx, cz) {
 
 // Every candidate work right now. sim-governance picks from these to draft
 // cards for the Planning Office, River Authority or Moot.
-export const WORK_KINDS = ['pave', 'bridge', 'bridge-upgrade', 'widen', 'ring', 'square', 'grid', 'quay', 'embankment', 'turnpike'];
+export const WORK_KINDS = ['pave', 'bridge', 'bridge-upgrade', 'widen', 'ring', 'square', 'grid', 'quay', 'embankment', 'turnpike', 'park'];
 
 export function candidateWorks(state, kinds = WORK_KINDS) {
   const out = [];
@@ -500,6 +508,7 @@ export function candidateWorks(state, kinds = WORK_KINDS) {
   if (want.has('ring')) { const r = ringCandidate(state); if (r) out.push(r); }
   if (want.has('square')) { const s = squareCandidate(state); if (s) out.push(s); }
   if (want.has('grid')) out.push(...gridCandidates(state));
+  if (want.has('park')) out.push(...parkCandidates(state));
   const busy = new Set((state.projects ?? []).map(p => p.data?.workKey).filter(Boolean));
   for (const c of out) c.id = c.key;
   return out.filter(c => !busy.has(c.key));
@@ -566,6 +575,7 @@ export function executeWork(state, work, optionKey, { payer = 'treasury', paid =
     project.data.workKey = work.key;
     return { ok: true, projects: [project] };
   }
+  if (work.kind === 'park') return designatePark(state, work, { payer, paid });
   if (work.kind === 'bridge-upgrade') return executeBridgeUpgrade(state, work, option, payer, paid);
   if (work.kind === 'embankment') {
     return { ok: true, projects: [...demolitions, startEmbankment(state, work, option.cost, payer, after, paid)] };
@@ -586,7 +596,8 @@ function startCellWork(state, work, cells, cost, payer, after, paid) {
 }
 
 function startBridge(state, work, style, payer, after, paid, { width = null, replaces = null } = {}) {
-  const crossing = work.crossing ?? crossingAt(work.z);
+  // A footbridge takes the short crossing; cart bridges the one clear of floods.
+  const crossing = (style !== 'footbridge' && work.crossing) || crossingAt(work.z, style);
   const geo = bridgeGeometry(crossing, style, { width });
   const { cells, ...fields } = geo;
   retireFootbridgesNear(state, geo.z, geo.x, replaces);
@@ -767,7 +778,7 @@ export function rebuildOldBridges(state) {
         cleared.add(i);
       }
     const style = BRIDGE_WIDTH[b.variant] ? b.variant : 'timber';
-    const { cells, ...geo } = bridgeGeometry(crossingAt(b.z), style);
+    const { cells, ...geo } = bridgeGeometry(crossingAt(b.z, style), style);
     Object.assign(b, geo);
     if ((b.built ?? 1) >= 1) for (const i of cells) setPlannedTier(state, i, DECK_TIER[style], FLAG.BRIDGE, { uncapped: true });
     const p = (state.projects ?? []).find(q => q.buildingId === b.id);
@@ -878,7 +889,7 @@ registerProjectKind('bridge', {
 export function bridgeViews(state) {
   return (state.buildings ?? []).filter(b => b.type === 'bridge' && !b.collapsed).map(b => {
     const style = BRIDGE_WIDTH[b.variant] ? b.variant : 'timber';
-    const geo = b.a ? b : { ...bridgeGeometry(crossingAt(b.z), style) };
+    const geo = b.a ? b : { ...bridgeGeometry(crossingAt(b.z, style), style) };
     return {
       id: b.id, a: geo.a, b: geo.b, width: geo.width, deckY: geo.deckY, style, built: b.built ?? 1,
       z: geo.z, x0: Math.min(geo.a.x, geo.b.x), x1: Math.max(geo.a.x, geo.b.x),
@@ -907,6 +918,7 @@ export function embankmentCandidates(state, { limit = 1 } = {}) {
     for (const b of state.buildings ?? []) {
       if (b.type === 'bridge' || bankSide(b.x, b.z) !== side) continue;
       if ((b.bankDistance ?? bankDistance(b.x, b.z)) >= EMBANK_REACH) continue;
+      if (nearestWaterKind(b.x, b.z) !== KIND.RIVER) continue;   // lake and sea shores are not embanked
       const r0 = Math.max(0, Math.floor((b.z - b.d / 2 - 4 - ORIGIN_X) / CELL));
       const r1 = Math.min(GRID_H - 1, Math.floor((b.z + b.d / 2 + 4 - ORIGIN_X) / CELL));
       for (let r = r0; r <= r1; r++) press[r]++;
@@ -926,7 +938,7 @@ function pressedRuns(press, embanked, side) {
     start = -1; total = 0;
   };
   for (let r = 0; r < GRID_H; r++) {
-    const open = press[r] > 0 && !(embanked[r] & bit);
+    const open = press[r] > 0 && !(embanked[r] & bit) && riverOpenAt(ORIGIN_X + (r + 0.5) * CELL);
     if (open) {
       if (start < 0 || r - last > 4) { close(); start = r; }
       last = r;
@@ -1243,7 +1255,7 @@ export function yearlyFootbridges(state, rand = Math.random) {
     delete watch[band];
     const payer = footbridgePayer(state, f.z);
     if (!payer) continue;
-    const crossing = crossingAt(f.z);
+    const crossing = crossingAt(f.z, 'footbridge');
     const where = placeName(state, crossing.centre.x, f.z);
     const cost = Math.round(FOOTBRIDGE_COST * scale(state));
     const work = { key: `footbridge:${band}`, kind: 'bridge', crossing, z: f.z, where, band: Number(band), options: [{ key: 'footbridge', cost }] };

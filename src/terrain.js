@@ -6,6 +6,12 @@
 // restoring a town, before the renderer builds its terrain and water, and in
 // the navigation worker. setTerrainSeed(null) gives the classic valley.
 
+import {
+  deriveWaters, KIND, STILL_LEVEL, CREEK_BED, CREEK_RAMP, lakeDistance, pondDistance, seaDistance,
+  coveAt, coastZ, creekX, creekOffset, stillProfile,
+} from './waters.js';
+import { deriveLand, hillsAt, mountainsAt, riverLiftAt, swellAt, gradientNoise, noiseLine } from './land.js';
+
 // ---------------------------------------------------------------- parameters
 
 // The classic valley (seed null): the river and hills of the original game.
@@ -20,6 +26,13 @@ const CLASSIC = {
 };
 
 let P = CLASSIC;
+
+// Version-2 water bodies (lakes, ponds, a delta, the sea; src/waters.js), or
+// null for version-1 and classic valleys, which keep their exact old code paths.
+let W = null;
+
+// New towns get the newest terrain; saves without a terrainVersion are 1.
+export const TERRAIN_VERSION = 2;
 
 // Live bindings: importers always see the current seed's values.
 export let WATER_HALF = CLASSIC.half;
@@ -108,21 +121,67 @@ function deriveFords(rnd, range) {
   return fords.sort((a, b) => a.z - b.z);
 }
 
-export function setTerrainSeed(seed) {
+// version 1: the valley as first released for this seed (river and hills).
+// version 2: the same river and hills plus water bodies (src/waters.js), of
+// the seed's archetype or the one asked for.
+export function setTerrainSeed(seed, version = 1, archetype = null) {
   P = seed == null ? CLASSIC : deriveParams(seed);
+  W = null;
+  MEANDER = null;
+  if (seed != null && version >= 2) {
+    const mr = seededRandom((seed ^ 0x3c6ef372) >>> 0);
+    MEANDER = { noise: gradientNoise(mr), a: 14 + mr() * 8, l: 95 + mr() * 45 };
+    W = deriveWaters(seed, { riverX, half: P.half, fords: P.fords }, archetype);
+    W.forced = archetype ?? null;
+    W.land = deriveLand(seededRandom((seed ^ 0x51ed2705) >>> 0), P.relief);
+    W.seaTop = W.sea ? seaTop(W.sea) : -Infinity;
+    W.mouths = W.creeks.map((C) => ({ x: creekX(C, riverX, C.zEnd + 25), z: coastZ(W.sea, creekX(C, riverX, C.zEnd + 25)) - 14 }));
+  }
   WATER_HALF = P.half;
-  FORDS = P.fords;
+  FORDS = W ? W.fords : P.fords;
   return P.seed;
 }
 
+/**
+ * Point the shared terrain at a valley; cheap (returns false) when it already
+ * is. archetype null means the seed's own archetype.
+ */
+export function useTerrain(seed, version = 1, archetype = null) {
+  const v = seed != null && version >= 2 ? 2 : 1;
+  if (P.seed === (seed ?? null) && terrainVersion() === v && (W?.forced ?? null) === (v === 2 ? archetype ?? null : null)) return false;
+  setTerrainSeed(seed, version, archetype);
+  return true;
+}
+
 export function terrainSeed() { return P.seed; }
+export function terrainVersion() { return W ? 2 : 1; }
+export function terrainArchetype() { return W ? W.archetype : null; }
+/** Cache key for anything derived from the terrain: seed, version and archetype. */
+export function terrainKey() { return W ? `${P.seed}:2:${W.archetype}` : `${P.seed}`; }
+/** The current valley's water bodies (null for version-1 and classic valleys). */
+export function terrainWaters() { return W; }
+/** Whether this valley has a river (every one does but the riverless archetypes). */
+export function hasRiver() { return !W || !W.noRiver; }
+
+function seaTop(S) {
+  let top = -Infinity;
+  for (let x = -960; x <= 960; x += 2) top = Math.max(top, coastZ(S, x));
+  return top + 4;
+}
 
 // ---------------------------------------------------------------- the river
 
 export function riverX(z) {
   const r = P.river;
-  return r.base + r.tilt * z + Math.sin(z / r.l1 + r.p1) * r.a1 + Math.sin(z / r.l2 + r.p2) * r.a2;
+  if (!MEANDER) return r.base + r.tilt * z + Math.sin(z / r.l1 + r.p1) * r.a1 + Math.sin(z / r.l2 + r.p2) * r.a2;
+  // Version 2: the two waves damped, irregular bends laid over them.
+  const waves = Math.sin(z / r.l1 + r.p1) * r.a1 + Math.sin(z / r.l2 + r.p2) * r.a2;
+  return r.base + r.tilt * z + waves * 0.45 + MEANDER.a * noiseLine(MEANDER.noise, z / MEANDER.l, 3, 5.5);
 }
+
+// Version 2: irregular meanders over version 1's two waves, so no two bends
+// repeat (null for version 1 and classic valleys).
+let MEANDER = null;
 
 // Fords are shallow bands across the river. The bed rises to FORD_BED inside a
 // band and blends back to the full depth over FORD_BLEND units on each side.
@@ -136,7 +195,7 @@ function smooth(t) { return t * t * (3 - 2 * t); }
 // 0 outside every ford, 1 in the middle of one.
 export function fordFactor(z) {
   let best = 0;
-  for (const f of P.fords) {
+  for (const f of FORDS) {
     const d = Math.abs(z - f.z) - f.half;
     if (d <= 0) return 1;
     if (d < FORD_BLEND) best = Math.max(best, 1 - smooth(d / FORD_BLEND));
@@ -145,6 +204,10 @@ export function fordFactor(z) {
 }
 
 export function heightAt(x, z) {
+  return W ? heightV2(x, z) : heightV1(x, z);
+}
+
+function heightV1(x, z) {
   const rx = riverX(z);
   const dist = Math.abs(x - rx);
   const h = P.hills;
@@ -197,12 +260,14 @@ function mountainAt(x, z, rx) {
   const t = smooth(Math.min(1, (r - m.start) / (m.full - m.start)));
   const lobes = 0.75 + 0.25 * Math.sin(Math.atan2(z, x) * m.lobes + m.phase);
   const gap = Math.exp(-((x - rx) ** 2) / (m.gap * m.gap));
-  return m.h * t * lobes * (1 - 0.85 * gap);
+  const h = m.h * t * lobes * (1 - 0.85 * gap);
+  return W ? h * mountainOpen(x, z) : h;
 }
 
 // How far the river has come down from the mountains at z: the valley
 // floor of the gap at the centre line (0 inside the town).
 export function riverLift(z) {
+  if (W) { const rx = riverX(z); return riverLiftAt(W.land, rx, z) * mountainOpen(rx, z); }
   return P.relief ? mountainAt(riverX(z), z, riverX(z)) : 0;
 }
 
@@ -232,21 +297,288 @@ export function terrainInfo() {
     mountainHeight: ring?.h ?? 0,
     snowline: ring ? Math.round(ring.h * 0.6) : null,
     floodplain: P.rise[0] > P.rise[1] ? 'west' : 'east',
+    version: terrainVersion(),
+    archetype: terrainArchetype(),
   };
 }
 
-export function waterAt(x, z) { return Math.abs(x - riverX(z)) < P.half; }
+export function waterAt(x, z) {
+  return W ? waterKindAt(x, z) !== KIND.LAND : Math.abs(x - riverX(z)) < P.half;
+}
 
 // A ford is a z-band where the whole channel is shallow enough to wade
 // (contract: heightAt above -0.35). Testing the channel centre keeps the
 // shallow bank edges elsewhere from counting as crossings.
-export function fordAt(x, z) { return waterAt(x, z) && heightAt(riverX(z), z) > -0.35; }
+// Version 2: every creek of a delta is wadeable along its whole length; lakes,
+// ponds and the sea never are.
+export function fordAt(x, z) {
+  if (!W) return waterAt(x, z) && heightAt(riverX(z), z) > -0.35;
+  const k = waterKindAt(x, z);
+  return k === KIND.CREEK || (k === KIND.RIVER && heightAt(riverX(z), z) > -0.35);
+}
 
 // ---------------------------------------------------------------- banks
 
 // How far a point is from the water's edge: negative over the water, 0 at the
 // edge, growing inland. (The render ribbon reaches about WATER_HALF + 0.4.)
-export function bankDistance(x, z) { return Math.abs(x - riverX(z)) - P.half; }
+// Version 2 measures to the nearest water of any kind (lakes, ponds, creeks
+// and the sea too), so setbacks and "by the water" hold on every shore.
+export function bankDistance(x, z) {
+  if (!W) return Math.abs(x - riverX(z)) - P.half;
+  let d = z > W.riverEnd ? Math.abs(x - riverX(z)) - P.half : Infinity;
+  for (const C of W.creeks) {
+    if (z > C.zs || z < C.box.z0 || x < C.box.x0 || x > C.box.x1) continue;
+    d = Math.min(d, creekOffset(C, riverX, x, z) - C.half);
+  }
+  const s = stillDistance(x, z);
+  return s < d ? s : d;
+}
 
 // 0 for the west bank, 1 for the east bank.
-export function bankSide(x, z) { return x < riverX(z) ? 0 : 1; }
+// A valley without a river is all one side.
+export function bankSide(x, z) { return W?.noRiver ? 0 : x < riverX(z) ? 0 : 1; }
+
+// ---------------------------------------------------------------- version 2: water bodies
+
+export { KIND, KIND_NAMES, STILL_LEVEL } from './waters.js';
+
+const MARSH_H = 0.24;
+const STILL_BANK_SLOPE = 0.3;
+const smooth01 = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+
+// Nearest still body (lake, pond or sea) to (x, z): its signed distance is
+// returned and the body left in stillBody. Bodies whose box misses the point
+// are skipped in a few compares.
+let stillBody = null;
+function stillDistance(x, z) {
+  let best = Infinity;
+  stillBody = null;
+  for (const L of W.lakes) {
+    const b = L.box;
+    if (x < b.x0 || x > b.x1 || z < b.z0 || z > b.z1) continue;
+    const d = lakeDistance(L, x, z);
+    if (d < best) { best = d; stillBody = L; }
+  }
+  for (const Q of W.ponds) {
+    const b = Q.box;
+    if (x < b.x0 || x > b.x1 || z < b.z0 || z > b.z1) continue;
+    const d = pondDistance(Q, x, z);
+    if (d < best) { best = d; stillBody = Q; }
+  }
+  if (W.sea && z < W.seaTop + W.sea.rise) {
+    const d = seaDistance(W.sea, x, z);
+    if (d < best) { best = d; stillBody = W.sea; }
+  }
+  return best;
+}
+
+/** Signed distance to the nearest lake, pond or sea (Infinity when there are none). */
+export function stillDistanceAt(x, z) {
+  return W ? stillDistance(x, z) : Infinity;
+}
+
+/** Which still body is nearest (after stillDistanceAt): its KIND, and whether it is a great lake. */
+export function stillBodyKind() {
+  return stillBody ? (stillBody.great ? -KIND.LAKE : stillBody.kind) : KIND.LAND;
+}
+
+/** What kind of water is at (x, z): KIND.LAND, RIVER, CREEK, LAKE, POND or SEA. */
+export function waterKindAt(x, z) {
+  if (!W) return Math.abs(x - riverX(z)) < P.half ? KIND.RIVER : KIND.LAND;
+  if (stillDistance(x, z) < 0) return stillBody.kind;
+  if (z > W.riverEnd && Math.abs(x - riverX(z)) < P.half) return KIND.RIVER;
+  for (const C of W.creeks) {
+    if (z > C.zs || z < C.box.z0 || x < C.box.x0 || x > C.box.x1) continue;
+    if (creekOffset(C, riverX, x, z) < C.half) return KIND.CREEK;
+  }
+  return KIND.LAND;
+}
+
+/** The kind of the water nearest (x, z): mills and quays want KIND.RIVER. */
+export function nearestWaterKind(x, z) {
+  if (!W) return KIND.RIVER;
+  if (W.noRiver && !W.sea && !W.lakes.length) return KIND.LAND;
+  let d = z > W.riverEnd ? Math.abs(x - riverX(z)) - P.half : Infinity, k = KIND.RIVER;
+  for (const C of W.creeks) {
+    if (z > C.zs || z < C.box.z0 || x < C.box.x0 || x > C.box.x1) continue;
+    const c = creekOffset(C, riverX, x, z) - C.half;
+    if (c < d) { d = c; k = KIND.CREEK; }
+  }
+  if (stillDistance(x, z) < d) k = stillBody.kind;
+  return k;
+}
+
+// How far a great flood rises over each kind of water: the river in spate,
+// a creek, a lake after a wet winter, a pond, the sea in a storm surge.
+export const FLOOD_RISE = [0, 1.5, 1.0, 0.8, 0.4, 1.2];
+const FLOOD_REACH = 150;
+
+/**
+ * How deep a great flood would stand at (x, z), in metres (0 above it): the
+ * floodplain. Version-1 valleys have none (they keep their old flood rule).
+ */
+export function floodDepthAt(x, z) {
+  if (!W) return 0;
+  const d = bankDistance(x, z);
+  if (d > FLOOD_REACH) return 0;
+  const k = nearestWaterKind(x, z);
+  const level = (k === KIND.RIVER ? waterLevelAt(z) : STILL_LEVEL) + FLOOD_RISE[k];
+  return Math.max(0, level - heightAt(x, z));
+}
+
+/** Height of the water surface at (x, z): the river's level, or still water's. */
+export function surfaceLevelAt(x, z) {
+  if (!W) return waterLevelAt(z);
+  const k = waterKindAt(x, z);
+  return k === KIND.LAKE || k === KIND.POND || k === KIND.SEA ? STILL_LEVEL : waterLevelAt(z);
+}
+
+/** Delta marsh: 1 on the low flats of the fan between its outer creeks, 0 off them. */
+export function marshAt(x, z) {
+  const D = W?.delta;
+  if (!D) return 0;
+  const e = D.edge;
+  if (z < D.z0 - e || z > D.z1 + e || x < D.x0 - e || x > D.x1 + e) return 0;
+  let lo = riverX(z), hi = lo;
+  for (const C of W.creeks) {
+    const cx = creekX(C, riverX, Math.max(z, C.zEnd));
+    if (cx < lo) lo = cx;
+    if (cx > hi) hi = cx;
+  }
+  const fx = Math.min(x - lo, hi - x) + 18, fz = Math.min(z - D.z0, D.z1 - z);
+  return smooth01((fx + e) / (2 * e)) * smooth01((fz + e) / (2 * e));
+}
+
+/** Whether the river channel is open (not swallowed by a lake or the sea) at z. */
+export function riverOpenAt(z) {
+  if (!W) return true;
+  if (z <= W.riverEnd) return false;
+  const x = riverX(z);
+  for (const L of W.lakes) if (z >= L.box.z0 && z <= L.box.z1 && lakeDistance(L, x, z) < P.half + 2) return false;
+  if (W.sea && seaDistance(W.sea, x, z) < P.half + 2) return false;
+  return true;
+}
+
+// The ring opens where it meets the sea, and stands back from a great lake's shore.
+function mountainOpen(x, z) {
+  let k = 1;
+  if (W.sea) k *= smooth01((seaDistance(W.sea, x, z) - 60) / 260);
+  for (const L of W.lakes) if (L.great) k *= smooth01((lakeDistance(L, x, z) - 40) / 160);
+  return k;
+}
+
+// ---------------------------------------------------------------- version 2: the land
+
+// The land (everything but the water) is baked once per valley onto a 4 m
+// grid and read back bilinearly (far cheaper than the noise it is made of);
+// the water is carved into it analytically, so banks and shores stay crisp.
+const LAND_STEP = 4;
+const LAND_EXTENT = 1024;
+const LAND_N = (2 * LAND_EXTENT) / LAND_STEP + 1;
+const landCache = new Map(); // terrainKey -> Float32Array (a few valleys at most)
+
+/** The land at (x, z) from its noise: floodplain swells, hills, mountains. */
+function landRaw(x, z) {
+  const rx = riverX(z);
+  const dist = Math.abs(x - rx);
+  const side = x < rx ? 0 : 1;
+  const bank = Math.max(0, dist - P.half);
+  const ground = 0.18 + Math.max(0.1, swellAt(W.land, x, z) - 0.18) * Math.min(1, bank / P.rise[side]);
+  return ground + hillsAt(W.land, x, z, bank, side) + mountainsAt(W.land, x, z, rx) * mountainOpen(x, z);
+}
+
+function bakeLand() {
+  const key = terrainKey();
+  const hit = landCache.get(key);
+  if (hit) return hit;
+  const n = LAND_N;
+  const H = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) {
+    const z = -LAND_EXTENT + j * LAND_STEP;
+    for (let i = 0; i < n; i++) H[j * n + i] = landRaw(-LAND_EXTENT + i * LAND_STEP, z);
+  }
+  if (landCache.size >= 4) landCache.delete(landCache.keys().next().value);
+  landCache.set(key, H);
+  return H;
+}
+
+/**
+ * Land height at (x, z) from the baked grid (analytic beyond it). Bicubic
+ * (Catmull-Rom), so slopes are smooth across grid lines: bilinear would
+ * crease the ground every 4 m and the creases show in the shading.
+ */
+function landAt(x, z) {
+  const px = (x + LAND_EXTENT) / LAND_STEP, pz = (z + LAND_EXTENT) / LAND_STEP;
+  if (px < 1 || pz < 1 || px >= LAND_N - 2 || pz >= LAND_N - 2) return landRaw(x, z);
+  const H = W.landGrid ??= bakeLand();
+  const i = px | 0, j = pz | 0, fx = px - i, fz = pz - j;
+  let out = 0;
+  for (let b = -1; b <= 2; b++) {
+    const k = (j + b) * LAND_N + i;
+    const row = cubic(H[k - 1], H[k], H[k + 1], H[k + 2], fx);
+    out += row * cubicWeight(b, fz);
+  }
+  return out;
+}
+
+function cubic(a, b, c, d, t) {
+  return b + 0.5 * t * (c - a + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
+}
+
+// Catmull-Rom weight of tap b (-1..2) at t.
+function cubicWeight(b, t) {
+  const t2 = t * t, t3 = t2 * t;
+  if (b === -1) return 0.5 * (-t3 + 2 * t2 - t);
+  if (b === 0) return 0.5 * (3 * t3 - 5 * t2 + 2);
+  if (b === 1) return 0.5 * (-3 * t3 + 4 * t2 + t);
+  return 0.5 * (t3 - t2);
+}
+
+function heightV2(x, z) {
+  const rx = riverX(z);
+  const dist = Math.abs(x - rx);
+  let h;
+  if (dist < P.half && z > W.riverEnd) {
+    const lift = riverLift(z);
+    const bed = RIVER_BED + (FORD_BED - RIVER_BED) * fordFactor(z) + lift;
+    h = dist < P.half - BANK_RAMP ? bed : bed + (dist - (P.half - BANK_RAMP)) / BANK_RAMP * (0.18 + lift - bed);
+  } else {
+    h = landAt(x, z);
+  }
+  // The delta's flats: low marsh between the creeks.
+  if (W.delta) {
+    const m = marshAt(x, z);
+    if (m > 0 && h > MARSH_H) h += (MARSH_H + 0.05 * Math.sin(x * 0.13) * Math.sin(z * 0.11) - h) * m;
+  }
+  for (const C of W.creeks) {
+    if (z > C.zs || z < C.box.z0 || x < C.box.x0 || x > C.box.x1) continue;
+    const u = creekOffset(C, riverX, x, z);
+    if (u >= C.half) continue;
+    const inner = C.half - CREEK_RAMP;
+    const bed = u <= inner ? CREEK_BED : CREEK_BED + (u - inner) / CREEK_RAMP * (0.18 - CREEK_BED);
+    if (bed < h) h = bed;
+  }
+  const s = stillDistance(x, z);
+  const B = stillBody;
+  if (B && s < B.rise * 3) {
+    const shelf = B === W.sea ? B.shelfW * (1 - 0.7 * coveAt(B, x)) : B.shelfW;
+    const p = stillProfile(B, s, shelf);
+    if (s < 0) {
+      if (p < h) h = p;
+      // Sandbars off the creek mouths: pale shallows, never dry.
+      if (B === W.sea) for (const M of W.mouths) {
+        const r2 = ((x - M.x) ** 2 + ((z - M.z) * 1.6) ** 2) / 256;
+        if (r2 < 1) h = Math.max(h, STILL_LEVEL - 0.06 - 0.6 * r2);
+      }
+    } else {
+      // Rise over the body's width, or longer below high ground so a hill
+      // never drops to the water steeper than a walkable bank.
+      const rise = Math.max(B.rise, (h - p) / STILL_BANK_SLOPE);
+      if (s < rise) {
+        const v = p + (h - p) * smooth01(s / rise);
+        if (v < h) h = v;
+      }
+    }
+  }
+  return h;
+}

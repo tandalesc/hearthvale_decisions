@@ -14,6 +14,7 @@ import {monthIndex} from '../clock.js';
 import {levelOf} from '../policies.js';
 import {factionOf, isNewcomer} from '../factions.js';
 import {ERA_KEYS, WEALTH, FAITH, SLICE_DIMS} from './kinds.js';
+import {townLooks, districtLooks, looksBand} from '../aesthetics.js';
 
 export const DIMS = Object.keys(SLICE_DIMS);
 
@@ -177,6 +178,22 @@ function recentList(state) {
     .join(',');
 }
 
+// Households only form where a home exists, so homelessness is nearly always 0;
+// what newcomers feel is whether any home stands empty.
+function homesBand(state, I) {
+  if ((I.housingPressure ?? 0) > 0.02) return 'scarce';
+  const used = new Set();
+  for (const h of state.households ?? []) if (h.homeId != null) used.add(h.homeId);
+  let homes = 0, empty = 0;
+  for (const b of state.buildings ?? []) {
+    if (b.type !== 'home' || (b.built ?? 1) < 1) continue;
+    homes++;
+    if (!used.has(b.id)) empty++;
+  }
+  const vacancy = homes ? empty / homes : 0;
+  return vacancy < 0.005 ? 'scarce' : vacancy > 0.05 ? 'plenty' : 'balanced';
+}
+
 function computeTownSnapshot(state) {
   const I = state.indicators ?? {};
   const P = state.pressures ?? {};
@@ -188,9 +205,14 @@ function computeTownSnapshot(state) {
     archetype: state.archetype ?? 'market-town',
     food: b3(I.foodBalance ?? 6, 2, 8, ['low', 'ok', 'plenty']),
     coin: treasury < 0 ? 'debt' : ty < 0.5 ? 'tight' : ty < 3 ? 'ok' : 'rich',
-    wellbeing: b3(I.wellbeing ?? 60, 45, 70, ['poor', 'fair', 'good']),
-    jobs: (I.jobBalance ?? 0) < -0.1 ? 'scarce' : (I.jobBalance ?? 0) > 0.1 ? 'plenty' : 'balanced',
-    homes: (I.housingPressure ?? 0) > 0.25 ? 'scarce' : (I.housingPressure ?? 0) < 0.05 ? 'plenty' : 'balanced',
+    // Bands say how this town compares with the usual run of towns (measured over
+    // 150-year headless runs): the decision model and the fallbacks only see words,
+    // and fixed cut-offs left nearly every town reading 'good' / 'scarce' / 'plenty'.
+    // Wellbeing sits between 75 and 95 in practice (p10 80, p60 89).
+    wellbeing: b3(I.wellbeing ?? 85, 80, 89, ['poor', 'fair', 'good']),
+    // Towns always have more hands than jobs; the band is relative to that (quartiles).
+    jobs: (I.jobBalance ?? 0) < -0.42 ? 'scarce' : (I.jobBalance ?? 0) > -0.2 ? 'plenty' : 'balanced',
+    homes: homesBand(state, I),
     health: b3(P.health ?? 0.4, 0.35, 0.65, ['poor', 'fair', 'good']),
     unrest: b3(P.unrest ?? 0, 0.2, 0.5, ['calm', 'uneasy', 'angry']),
     faith: b3(P.faith ?? 0.2, 0.3, 0.6, ['low', 'mid', 'high']),
@@ -199,6 +221,7 @@ function computeTownSnapshot(state) {
     rules: rulesList(state),
     recent: recentList(state),
     bodies: (state.institutions ?? []).filter((b) => b.status === 'active').map((b) => b.kind).sort().join(','),
+    looks: looksBand(townLooks(state)),
   };
 }
 
@@ -237,6 +260,7 @@ function districtFacts(state, d) {
     crowding: b3(state.indicators?.density ?? 0, 0.35, 0.7, ['loose', 'snug', 'packed']),
     nearRiver: Math.abs(c.x - riverX(c.z)) < 30 ? 'yes' : 'no',
     kin: b3(homes.length, 10, 40, ['few', 'some', 'many']),
+    looks: looksBand(districtLooks(state, d.id)),
   };
 }
 

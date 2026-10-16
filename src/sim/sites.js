@@ -3,11 +3,11 @@
 import { rng } from './rng.js';
 import { decide } from './hooks.js';
 import { policyModifiers } from './policies.js';
-import { riverX, bankDistance, bankSide, heightAt, FORDS, WATER_HALF } from '../terrain.js';
+import { riverX, bankDistance, bankSide, heightAt, FORDS, WATER_HALF, nearestWaterKind, waterKindAt, KIND, riverOpenAt, floodDepthAt, hasRiver } from '../terrain.js';
 import { centrePeakValue, nearestCentre, centreBias, corePull } from './centres.js';
 import {
   CELL, GRID_W, GRID_H, CELLS, ROT_DIR, ORIGIN_X, ORIGIN_Z,
-  cellIndex, cellXZ, cellCenter, terrainGrid, footprints, wearNorm, buildingCells, frontCell, NAV_MAX_SLOPE, NAV_MAX_HEIGHT,
+  cellIndex, cellXZ, cellCenter, cellOf, terrainGrid, footprints, wearNorm, buildingCells, frontCell, NAV_MAX_SLOPE, NAV_MAX_HEIGHT,
 } from './roads.js';
 
 // Lot sizes in cells [frontage, depth] by type and tier (index tier - 1).
@@ -159,14 +159,34 @@ export const OVERHANG = 2;
 export const APRON = 2.2;
 export const FOOTPRINT_MARGIN = 1;
 export const WATERFRONT = new Set(['mill', 'quay', 'warehouse', 'boathouse']);
+// The floodplain (terrain.js floodDepthAt): homes and most buildings keep off
+// ground a great flood covers more than FLOOD_BAR deep, and shun shallower
+// flooding; fields, parks and the trades that need the water do not mind.
+// An embankment protects the ground behind it.
+export const FLOOD_BAR = 0.3;
+export const FLOOD_TOLERANT = new Set(['farm', 'park', 'bridge', 'mill', 'quay', 'warehouse', 'boathouse']);
+
+/** How deep a great flood would stand at (x, z), embankments considered (m). */
+export function floodAt(state, x, z) {
+  const i = cellOf(x, z);
+  const d = i < 0 ? 0 : terrainGrid().flood[i];
+  return d > 0 && isEmbanked(state, x, z) ? 0 : d;
+}
+
+function footprintFlood(state, rect) {
+  let worst = 0;
+  sampleRect(rect, 0, (x, z) => { worst = Math.max(worst, floodAt(state, x, z)); });
+  return worst;
+}
 
 function embankRow(z) { return Math.max(0, Math.min(GRID_H - 1, Math.floor((z - ORIGIN_X) / CELL))); }
 
 // Embanked stretches: state.roads.embanked is one byte per grid row, bit 1
-// for the west bank and bit 2 for the east bank.
+// for the west bank and bit 2 for the east bank. Only the river is embanked:
+// a lake, pond or sea shore in the same row is not.
 export function isEmbanked(state, x, z) {
   const e = state.roads?.embanked;
-  return !!e && (e[embankRow(z)] & (bankSide(x, z) ? 2 : 1)) !== 0;
+  return !!e && (e[embankRow(z)] & (bankSide(x, z) ? 2 : 1)) !== 0 && nearestWaterKind(x, z) === KIND.RIVER;
 }
 
 export function setbackAt(state, x, z) { return isEmbanked(state, x, z) ? EMBANKED_SETBACK : SETBACK; }
@@ -208,9 +228,11 @@ function farFromRiver(rect) {
 export function riverClear(state, rect, type) {
   if (WATER_TYPES.has(type)) {
     // Mills and quays stand right by the water, behind a walkable apron.
+    // Both need the river itself (flowing water), not a lake or the sea.
     const fb = footprintBank(rect, 0);
-    return fb.minBankCore >= APRON && fb.minBankCore <= APRON + 3;
+    return fb.minBankCore >= APRON && fb.minBankCore <= APRON + 3 && nearestWaterKind(fb.nearest.x, fb.nearest.z) === KIND.RIVER;
   }
+  if (!FLOOD_TOLERANT.has(type) && footprintFlood(state, rect) > FLOOD_BAR) return false;
   if (farFromRiver(rect)) return true;
   const fb = footprintBank(rect);
   if (WATERFRONT.has(type)) return fb.minBankCore >= APRON;
@@ -218,7 +240,13 @@ export function riverClear(state, rect, type) {
 }
 
 // Floods reach buildings within 6 units of the water; embankments cut the risk.
+// Version-2 valleys: anything on the floodplain, by how deep a flood stands there.
 export function floodRisk(state, b) {
+  if (terrainGrid().floods) {
+    const d = terrainGrid().flood[cellOf(b.x, b.z)] ?? 0;
+    if (d <= 0) return 0;
+    return Math.min(1, 0.3 + d) * (isEmbanked(state, b.x, b.z) ? 0.3 : 1);
+  }
   const bank = b.bankDistance ?? bankDistance(b.x, b.z);
   if (bank >= 6) return 0;
   return isEmbanked(state, b.x, b.z) ? 0.3 : 1;
@@ -324,6 +352,8 @@ function maxWearNear(state, cx, cz, rad) {
   return best;
 }
 
+const SHORE_VIEW = 30;
+
 // Raw land value at a cell: roads, landmarks and nearness to the centre.
 export function landValueAt(state, cx, cz) {
   const { centroid } = buildingBins(state);
@@ -331,6 +361,9 @@ export function landValueAt(state, cx, cz) {
   let v = 18 + maxTierNear(state, cx, cz, 2) * 6;
   let square = false;
   for (const b of buildingsNear(state, cx, cz, 15)) {
+    // A park nearby is a good address; a derelict next door is not.
+    if (b.type === 'park') v += 10 * Math.max(0, 1 - Math.hypot(b.x - x, b.z - z) / CELL / 15);
+    else if (b.flags?.derelict) v -= 4 * Math.max(0, 1 - Math.hypot(b.x - x, b.z - z) / CELL / 8);
     const bonus = LANDMARKS[b.type];
     if (!bonus) continue;
     const d = Math.hypot(b.x - x, b.z - z) / CELL;
@@ -345,8 +378,16 @@ export function landValueAt(state, cx, cz) {
   if (square) v *= 1.3;
   // A view from the hill.
   v += 6 * prominenceAt({ x, z });
-  // An embanked waterfront is a good address.
-  if (bankDistance(x, z) < 16 && isEmbanked(state, x, z)) v += 8;
+  // An embanked waterfront is a good address; so is a lakeside or seaside one.
+  const bank = bankDistance(x, z);
+  if (bank < 16 && isEmbanked(state, x, z)) v += 8;
+  // Ground the floods reach is cheap.
+  const flood = floodAt(state, x, z);
+  if (flood > 0) v -= 12 * Math.min(1, flood / FLOOD_BAR);
+  if (bank < SHORE_VIEW) {
+    const k = nearestWaterKind(x, z);
+    if (k === KIND.LAKE || k === KIND.SEA) v += 7 * (1 - Math.max(0, bank) / SHORE_VIEW);
+  }
   return Math.max(0, v);
 }
 
@@ -663,12 +704,16 @@ export function lotSlope(lot) {
   return (hi - lo) / (Math.max(lot.w, lot.h) * CELL);
 }
 
-function riverAdjacent(lot, reach = 3) {
+// Any water within reach cells of the lot; riverOnly asks for the river itself.
+function riverAdjacent(lot, reach = 3, riverOnly = false) {
   const { water } = terrainGrid();
   for (let z = lot.cz - reach; z < lot.cz + lot.h + reach; z++)
     for (let x = lot.cx - reach; x < lot.cx + lot.w + reach; x++) {
       const j = cellIndex(x, z);
-      if (j >= 0 && water[j]) return true;
+      if (j < 0 || !water[j]) continue;
+      if (!riverOnly) return true;
+      const c = cellCenter(j);
+      if (waterKindAt(c.x, c.z) === KIND.RIVER) return true;
     }
   return false;
 }
@@ -680,15 +725,39 @@ function riverAdjacent(lot, reach = 3) {
 export const PATH_MULT = [1, 1.3, 2, 4, 8, 8];
 const TRAIL_WEAR = 60;
 const PATH_PENALTY = 1.5;
+const BUSY_PENALTY = 2.5;     // outweighs the best access a path frontage gives (2.0)
+
+// How busy a path is is relative to the town: a dirt path a hamlet uses every
+// day matters to it as much as a city's gravel road. busyRef is the wear of
+// the town's busy ground (the 90th percentile of trodden cells), cached per
+// road version; a covered cell's busyness is log-wear over log of that.
+const BUSY_TRODDEN = 25;      // wear that counts as trodden ground
+const BUSY_FLOOR = 120;       // never call a faint trail busy in a tiny hamlet
+const busyCache = new WeakMap();
+const smoothstep = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+export function busyRef(state) {
+  const r = state.roads;
+  const hit = busyCache.get(r);
+  if (hit && hit.version === r.version) return hit.ref;
+  const vals = [];
+  for (let i = 0; i < r.wear.length; i++) if (r.wear[i] >= BUSY_TRODDEN) vals.push(r.wear[i]);
+  vals.sort((a, b) => a - b);
+  const ref = Math.max(BUSY_FLOOR, vals.length ? vals[Math.floor(vals.length * 0.9)] : 0);
+  busyCache.set(r, { version: r.version, ref });
+  return ref;
+}
 
 export function pathCover(state, lot) {
   const { tier, wear, planned } = state.roads;
-  let extra = 0, organic = 0, plannedExtra = 0, worst = 0, cells = 0;
+  const logRef = Math.log1p(busyRef(state));
+  let extra = 0, organic = 0, plannedExtra = 0, worst = 0, cells = 0, busy = 0;
   for (let z = lot.cz; z < lot.cz + lot.h; z++)
     for (let x = lot.cx; x < lot.cx + lot.w; x++) {
       const j = cellIndex(x, z);
       if (j < 0) continue;
       cells++;
+      if (!(planned[j] & 1)) busy = Math.max(busy, Math.log1p(wear[j]) / logRef);
       const t = tier[j] || (wear[j] >= TRAIL_WEAR ? 1 : 0);
       if (!t) continue;
       const m = PATH_MULT[t] - 1;
@@ -697,7 +766,7 @@ export function pathCover(state, lot) {
       if (t > worst) worst = t;
     }
   const n = Math.max(1, cells);
-  return { mult: 1 + extra / n, worst, organic: organic / n, planned: plannedExtra / n, share: extra / n };
+  return { mult: 1 + extra / n, worst, organic: organic / n, planned: plannedExtra / n, share: extra / n, busy };
 }
 
 // Where several busy paths meet, from era 2, open space is kept: it becomes
@@ -778,7 +847,7 @@ function archetypeBias(state, type, lot, density) {
   let bias = 0;
   if (arch === 'garden') bias += 0.4 * (1 - density);
   if (arch === 'port' && RIVER_LIKES.has(type)) bias += 1.0 * river;
-  if (type === 'mill') bias += 1.5 * river * (state.policies?.['mill-rights'] ? 1 : 0.5);
+  if (type === 'mill') bias += 1.5 * (riverAdjacent(lot, 3, true) ? 1 : 0) * (state.policies?.['mill-rights'] ? 1 : 0.5);
   if ((type === 'warehouse' || type === 'quay') && arch !== 'port') bias += 0.5 * river;
   return bias;
 }
@@ -793,7 +862,7 @@ export function scoreLot(state, lot, need, ctx) {
   const hillWork = HILL_WORKS.has(need.variant) || type === 'quarry';
   if (slope > maxSlopeFor(type, state.era ?? 0, hillWork)) return null;
   const river = riverAdjacent(lot);
-  if (WATER_TYPES.has(type) && !river) return null;
+  if (WATER_TYPES.has(type) && !(river && riverAdjacent(lot, 3, true))) return null;
   const [fx, fz] = cellXZ(lot.front);
   const mx = lot.cx + (lot.w >> 1), mz = lot.cz + (lot.h >> 1);
   const tierNear = maxTierNear(state, fx, fz, 2);
@@ -809,10 +878,14 @@ export function scoreLot(state, lot, need, ctx) {
     slope: Math.min(1, slope / 0.25),
     density,
     river: river ? 1 : 0,
+    flood: Math.min(1, floodAt(state, frontPt.x, frontPt.z) / FLOOD_BAR),
   };
   const cover = pathCover(state, lot);
   terms.path = cover.share;
   terms.pathTier = cover.worst;
+  // Covering one of the town's own busy paths cuts it, whatever its tier.
+  // Open ground (fields, parks) lets people keep walking across it.
+  terms.busyPath = OPEN_TYPES.has(type) ? 0 : smoothstep(0.85, 1.05, cover.busy);
   // Streets read when lots stand a cell back from the path they face.
   const anchorTier = lot.anchor != null ? state.roads.tier[lot.anchor] : 0;
   terms.setback = lot.setback && anchorTier >= 1 ? 1 : 0;
@@ -822,11 +895,14 @@ export function scoreLot(state, lot, need, ctx) {
     - 1.0 * terms.pollution - 0.6 * terms.slope - 0.5 * (density - target) ** 2
     + archetypeBias(state, type, lot, density)
     - PATH_PENALTY * Math.min(4, cover.share)
+    - BUSY_PENALTY * terms.busyPath
     + 0.3 * terms.setback - (anchorTier >= 2 && !lot.setback ? 0.2 : 0)
     - (coversJunction(state, lot) ? 1.0 : 0)
     + hillBias(type, hillWork, slope, terms.prominence = prominenceAt(cellCenter(cellIndex(mx, mz))))
     + (type === 'farm' ? farmEdgeBias(state, terms, mx, mz) : 0)
     + centreBias(state, type, frontPt.x, frontPt.z)
+    // Flood meadows: good grazing and hay, a poor place for a house.
+    + (FLOOD_TOLERANT.has(type) ? (type === 'farm' ? 0.4 : 0) : -3) * terms.flood
     + (need.relocate ? relocationBias(state, need, terms, frontPt) : 0)
     + vacatedBias(state, lot)
     // Across the river land is cheap and open; the pull grows as the near bank fills.
@@ -1135,9 +1211,13 @@ export function lotForBuilding(b) {
 // side where most buildings stand.
 export function floodPoint(state) {
   const { centroid } = buildingBins(state);
-  const rx = riverX(centroid.z);
+  if (!hasRiver()) return { x: centroid.x, z: centroid.z, radius: 24 };
+  // The nearest reach of open river (not where it runs through a lake or the sea).
+  let z = centroid.z;
+  for (let k = 0; k < 400 && !riverOpenAt(z); k++) z = centroid.z + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 4;
+  const rx = riverX(z);
   const side = Math.sign(centroid.x - rx) || -1;
-  return { x: rx + side * (WATER_HALF + 4), z: centroid.z, radius: 24 };
+  return { x: rx + side * (WATER_HALF + 4), z, radius: 24 };
 }
 
 const FLAMMABLE = new Set(['timber', 'thatch']);
@@ -1163,6 +1243,7 @@ const HAMLET_GAP = 1.5;
 // A pleasant spot for the first hamlet: flat, dry ground a short walk from a
 // ford near the origin, never on the bank. Deterministic for a terrain seed.
 export function hamletCentre() {
+  if (!hasRiver()) return drySiteCentre();
   const fords = FORDS.filter(f => Math.abs(f.z) <= 60);
   const pool = fords.length ? fords : [FORDS.reduce((a, b) => (Math.abs(a.z) < Math.abs(b.z) ? a : b))];
   let best = null;
@@ -1172,10 +1253,24 @@ export function hamletCentre() {
         for (const dz of [-24, -16, -8, 0, 8, 16, 24]) {
           const z = f.z + dz;
           const x = riverX(z) + side * (WATER_HALF + d);
-          const score = -4 * groundRange(x, z, 18) - 0.04 * Math.abs(dz) - 0.03 * Math.abs(d - 18) - 0.01 * Math.hypot(x, z);
+          // The first houses stand on the terrace above the flood meadows.
+          const score = -4 * groundRange(x, z, 18) - 0.04 * Math.abs(dz) - 0.03 * Math.abs(d - 18) - 0.01 * Math.hypot(x, z) - 6 * floodDepthAt(x, z);
           if (!best || score > best.score) best = { x, z, side, ford: f, score };
         }
   return best;
+}
+
+// No river: the flattest dry ground near the middle of the valley, on the
+// terrace above any shore and its flood line.
+function drySiteCentre() {
+  let best = null;
+  for (let z = -80; z <= 80; z += 8)
+    for (let x = -80; x <= 80; x += 8) {
+      if (bankDistance(x, z) < 30) continue;
+      const score = -4 * groundRange(x, z, 18) - 0.02 * Math.hypot(x, z) - 6 * floodDepthAt(x, z);
+      if (!best || score > best.score) best = { x, z, side: 1, ford: null, score };
+    }
+  return best ?? { x: 0, z: 0, side: 1, ford: null, score: 0 };
 }
 
 function groundRange(x, z, radius) {
@@ -1197,10 +1292,14 @@ export function hamletLayout(state, { homes = 7, farms = 2, workshop = true } = 
   const centre = hamletCentre();
   const placed = [];
   const towardRiver = centre.side > 0 ? 3 : 1;
+  // Dry ground first: houses go on the floodplain only if nothing else fits.
   const put = (spec, tries) => {
-    for (const t of tries) {
-      const rect = { ...spec, ...t };
-      if (hamletFits(state, rect, placed)) { placed.push(rect); return rect; }
+    for (const dry of [true, false]) {
+      for (const t of tries) {
+        const rect = { ...spec, ...t };
+        if (dry && !FLOOD_TOLERANT.has(rect.type) && footprintFlood(state, rect) > 0) continue;
+        if (hamletFits(state, rect, placed)) { placed.push(rect); return rect; }
+      }
     }
     return null;
   };

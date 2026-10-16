@@ -477,6 +477,9 @@ function clearUnder(state, b) {
       const j = cellIndex(x, z);
       // Water under a deck stays deck; a land cell under a building is no road.
       if (j < 0 || j === door || ((r.planned[j] & 2) && terrainGrid().water[j])) continue;
+      // A towpath under a waterfront building ends there, or paving the
+      // towpaths at the next era would lay setts under its walls again.
+      if (r.planned[j] & 16) r.planned[j] &= ~(16 | 1);
       if (r.tier[j] || r.wear[j]) {
         setTier(state, j, 0);
         r.wear[j] = 0;

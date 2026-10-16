@@ -1,5 +1,6 @@
 // The Rule Book: every rule in force, by category. Rules change only through
 // proposals, so there are no toggles here; just what stands and who set it.
+// showArea(id) opens it filtered to one area (from a body's or a card's link).
 import {esc, h} from '../dom.js';
 import {icon} from '../icons.js';
 import {explainer, EXPLAINERS} from './explainer.js';
@@ -58,7 +59,15 @@ export function createRuleBook(ctx) {
     el,
     update(ruleBook) {
       data = ruleBook ?? [];
+      // An area asked for before its rules arrived falls back to all.
+      if (filter !== 'all' && data.length && !data.some((c) => c.id === filter && c.policies.length)) filter = 'all';
       render();
+    },
+    showArea(id) {
+      filter = id ?? 'all';
+      sig = '';
+      render();
+      el.querySelector(`.rule-cat`)?.scrollIntoView?.({block: 'nearest'});
     },
   };
 }

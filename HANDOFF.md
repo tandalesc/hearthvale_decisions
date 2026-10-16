@@ -1,110 +1,222 @@
 # Hearthvale — handoff (evolving-city rework)
 
-Repo: `github.com/tandalesc/hearthvale_decisions` (private for now). `main` and `evolving-city` point at the same commit. The original game is the first commit (`c1ca36a`, "Baseline").
+Repo: `github.com/tandalesc/hearthvale_decisions` (private for now). The original game is the first commit (`c1ca36a`, "Baseline").
 
-State at handoff: `npm test` passes 223/223, `npm run build` is clean, and the game boots on the real 3D renderer.
+**State at handoff (2026-10-15):**
+- Branch `evolving-city` at `ff15d41`, with a large amount of **uncommitted** work on top: 63 changed files and 22 new ones, listed under "This session" below.
+- `npm test` passes 259/259 and `npx playwright test` passes 51/51. `npm run build` is clean.
+- **First step: commit this working tree.** Nothing from this session is in git yet.
 
 ## What the game is now
 
 The player is the town's deliberative leadership ("System 2"). They never place buildings or roads. They rule on docket cards and shape the Rule Book. Everyone else acts on their own ("System 1"): residents, households, businesses and institutions decide through a local decision model, with local fallback rules when it's unavailable.
 
-- **150 years in about 2.5 hours at 1×.** A tick is 100 ms, a month 5 s, a year 60 s. Six eras: Hamlet, Village, Town, Borough, City, Metropolis. Eras are reached by conditions, with time floors and ceilings.
-- **Composable conditions, not rule chains.** Traits with momentum (agrarian↔industrial, communal↔market, tradition↔innovation, local↔planned) and pressures (river trade, faith, learning, ecology, health, unrest, prestige) build up from rulings and actor behaviour. Everything that unlocks (cards, institutions, events, building styles, archetypes) uses a small condition DSL (`src/sim/conditions.js`).
-- **Institutions emerge and petition to exist** (Agricultural Council, Guild, Exchange, River Authority, School Board, Parish, Health Board, Planning, Union, Watch, Arts Society, ward councils). Each has its own dashboard, docket asks, budget, patience and rivals. They can be delegated to, given standing orders, or dissolved.
-- **Organic roads.** Walking wears a grid (2-unit cells, 384²). Wear upgrades cells from trail to track to road; paving and avenues come only from approved works. Fords, footbridges (built by households), council cart bridges, upgrades by traffic and wear, collapses and rebuilds.
-- **Growth.** Lots follow worn paths, homes upgrade in place across era style packs, terraces merge, and waterfront buildings stand on piles or quays. Bid-rent pressure moves businesses out of expensive centres. Several centres can grow into downtowns with ward councils, and they can merge, federate or stay apart.
-- **Language.** All player-facing text follows the plain, warm house voice (`src/sim/text/voice.js` lints it).
+- **Pace.** A tick is 0.1 sim-seconds and a month is 50 ticks. The game now runs at **half pace** (`PACE = 0.5` in `src/sim/clock.js`, applied in `src/main.js`; `?pace=` overrides it). That makes a month 10 s and a year 2 minutes at 1×.
+  - Walkers move at `WALK_SPEED = 2.8` units per sim-second, so on screen they still look like 1.4 a second.
+  - Leg animation is tied to on-screen speed (`GAIT_SPEED` in `src/sim/render-view.js`).
+  - Walking faster in sim time means less time walking (43% of the day instead of 59%) and needs about 10 points higher. With the new path rules, road growth stays within noise of the old pace, so wear (`WEAR_PER_CELL = 3`) is unchanged.
+- **Composable conditions, not rule chains.** Traits with momentum and pressures build up from rulings and actor behaviour. Everything that unlocks (cards, institutions, events, styles, archetypes) uses the small condition DSL in `src/sim/conditions.js`.
+- **Institutions emerge and petition to exist.** Each has a dashboard, docket asks, budget, patience and rivals, and can be delegated to, given standing orders, or dissolved.
+- **Organic roads.** Walking wears a grid (2-unit cells, 384²) and wear upgrades cells from trail to track to road. Paving and avenues come only from works. Fords, footbridges, cart bridges, upgrades, collapses and rebuilds.
+- **Growth.** Lots follow worn paths, homes upgrade in place across era style packs, there's bid-rent pressure, and there can be several centres.
+- **Language.** All player-facing text follows the house voice (`src/sim/text/voice.js` lints it).
 
-## Decision model (rrh-llm-1)
+## Decision model (rrh-llm-1, Liquid AI d1-3B behind LiteLLM)
 
-- Our Vite plugin `server/system1.js` proxies `POST /api/decisions` to `http://rrh-llm-1:4000/v1/decisions` and `/v1/decisions/batch`. The API key is read from `local.env` on the server only, sent as `x-litellm-api-key`, and never reaches the browser.
-- Request shape: `{groups:[{state, questions:[{kind,id,context,allowed?}]}]}`. Kinds are registered in `src/decision-kinds.js` (23 game kinds from `src/sim/decisions/kinds.js`, plus `routine`).
-- **Two facts about the service, learned the hard way:**
-  1. It now rejects a request that has **no `state`** (413 "state too large"). We always send at least `{}`.
-  2. It batches **up to 64 questions per request**. `MAX_QUESTIONS_PER_REQUEST = 64` on both client and server.
-- The service's state cache uses GPU memory. When it was raised to 4,096 entries, every *new* state started failing (413, or a 500 AcceleratorError) while cached ones still worked. Fixed by restarting the service with a smaller cache.
-- Population decisions use **overlapping slices** (district, trade, wealth band, life stage, …). Each slice's distribution is averaged per person (a linear pool, never a product: `src/decision-pool.js`). Leftover throughput is spent on **refinement** where slices disagree (Jensen–Shannon × group size), and on individual questions for small or high-stakes groups.
-- The client (`src/decision-client.js`) coalesces questions, groups them by state, keeps 1–4 requests in flight (hill-climbing), and backs off on 429/503. Questions that fail resolve to `null`, and local rules take over.
+- `server/system1.js` proxies `POST /api/decisions` to `http://rrh-llm-1:4000/v1/decisions` and `/v1/decisions/batch`. The key comes from `local.env`, is sent server-side only as `x-litellm-api-key`, and never reaches the browser.
+- Request shape: `{groups:[{state, questions:[{kind,id,context,allowed?}]}]}`. Kinds are registered in `src/decision-kinds.js`; the game kinds live in `src/sim/decisions/kinds.js`.
+- **Service facts:**
+  - Always send a `state`, at least `{}`. Without one the service answers 413.
+  - At most 64 questions per request.
+  - The state cache lives in GPU memory, so keep it small.
+- **Question types (new).** A kind has `type: 'choice' | 'score' | 'noul'`.
+  - `score` is an ordered scale with 2–10 levels, lowest first. Answers also carry `score`, the expected level.
+  - `noul` is yes/no, with the "yes" key first.
+  - Every type comes back as `{choice, confidence, probabilities}` over the option keys, so pooling, sampling and fallbacks don't care which type it was.
+  - The service accepts all three, and also `images` (base64 data URIs). Images work (the model clearly reads them), but nothing uses them yet. Latency wasn't measured cleanly because the box was busy.
+- **What changed, and why** (all measured live; the scripts are listed under "Tools" below):
+  - **`migration_wave`** is now a `score` scale (exodus → none → trickle → wave). It contradicts itself less than the old choice did (0.04 vs 0.11 of probability on wave and exodus at once).
+    - The answer is still sampled, not driven by the expected level. The expected level sits around 1.1–1.4 in almost every town, so using it directly would bring migrants every year and never a wave.
+  - **`take_loan`** is now a `score` scale and asks **businesses short of coin**, who are the ones that actually borrow (`enterprises.js` `maybeBorrow`). Before, it asked households with zero savings, every question was identical, and nothing acted on the answer.
+    - The instructions describe money in words, because the model reads banded words far better than raw numbers.
+    - The model still borrows more when already in debt, so `maybeBorrow` has a hard rule: lenders balk at a year of debt.
+  - **`react_to_policy`** stays a `choice`. A scale was no better, and strike/leave aren't on the same scale as grumble/protest.
+  - **Town snapshot bands** (`src/sim/decisions/slices.js`) were recalibrated. Before, nearly every town read wellbeing "good", jobs "scarce" and homes "plenty".
+    - Wellbeing: cut-offs at 80 and 89.
+    - Jobs: relative to the usual surplus of workers (below −0.42 is scarce, above −0.2 is plenty).
+    - Homes: now measured by the share of empty homes. Households only form where a home exists, so homelessness is always 0.
+- Population decisions use overlapping slices with linear pooling (`src/decision-pool.js`) and refinement where slices disagree. The client (`src/decision-client.js`) coalesces, groups by state, and backs off; a failed question falls back to local rules.
 
 ## LLM prose (narrator)
 
-`server/narrator.js` exposes `POST /api/narrate` and streams from `ramblerun/Reasoning-AI`, with `chat_template_kwargs.enable_thinking: false` (without it the model returns empty content); it falls back to Multimodal-AI. It writes inspector notes for people, buildings, households and bodies, card prose ("why now" plus option trade-offs in the asker's persona), year-end chronicle lines, and the end-of-chronicle page.
+`server/narrator.js` streams from `ramblerun/Reasoning-AI` with `enable_thinking: false`. It writes inspector notes, card prose, year-end chronicle lines and the end page. Replies are validated and fall back to template text. Notes are cached by a material-facts key and saved with the game. A note never changes under the reader; a refresh lights up when the facts change.
 
-- The server validates every reply: no invented numbers, names or places, no effect reversals, no officialese. Anything that fails falls back to the template text.
-- Notes are cached by a *material* facts key and saved with the game (`state.notes`).
-- **UI rule:** a note never changes under the reader. A quiet refresh icon lights up when the facts change; only a click regenerates.
+- The narrator's injection filter blocks words like "forget". Game text must avoid them: the card line "They will not forget" was being rejected and is now "They will remember this".
+
+## This session (uncommitted)
+
+**Decisions and balance** (see the section above): question types, `migration_wave` and `take_loan` as scales, the snapshot bands, `monthlyCost` exported from `enterprises.js`.
+
+**Pace and walkers:** `PACE`, walk speed 2.8, `GAIT_SPEED`, and `sim.pace` passed through `src/ui/bridge.js`.
+
+**Paths** (`src/render/paths.js` new, `src/render/roads.js`, `src/sim/roads.js`, `src/sim/reclaim.js` new):
+- Worn paths render from a 4-texel-per-cell distance field as continuous strips. Width follows tier, with round junctions. Bare dirt stays patchy.
+- Towpaths and the waterfront draw as one lane that follows the bank. Paved roads smooth along diagonals.
+- In the sim, side paths merge into busier ones and one-cell gaps close.
+- A derelict building with trodden paths on opposite sides comes down after 4 years (at most 3 a year, never heritage), and the path runs straight through the lot.
+
+**Walker fixes:**
+- `src/navigation.js`: the first and last legs of a route can no longer wade through deep water beside a ford.
+- `people.js` `alongDecks`: walkers join and leave bridges at their ends. **Every leg it adds is checked against walls** (`pushOpen`); it once routed walkers through house fronts beside bridge approaches.
+- Regression tests: `tests/paths.test.js` and `tests/bridge-legs.test.js`.
+
+**Nature** (`src/river.js` new, `src/render/{water,terrain,trees,rivermap,atmosphere,sky,grade}.js`):
+- The river has gravel bars, riffles, white water, boulders and mountain cascades. All of it is render-side; the centre line and saves are unchanged.
+- Five tree species with two levels of detail, seasons and wind.
+- **One shared fog** for every material, in linear light before tone mapping. Distant buildings used to turn into pale ghosts.
+- Water now darkens at night like the land; it used to glow.
+- `rapidsSources()` feeds the audio.
+
+**Audio** (`src/audio/*`, `river.js` and `voices.js` new):
+- Fully synthesised. The river is about 15 dB quieter at a normal view, and there's almost no energy above 4 kHz.
+- Birds, crickets, frogs, an owl, wind, rain and the village murmur all respond to time of day, season, weather, camera and population. Nothing loops.
+- `audio.setWaterSources()` gets the rapids at startup (`src/main.js`).
+
+**Lived-in town** (`src/sim/{landscape,aesthetics,parks,seats}.js` new, `src/render/decor.js` new):
+- **Landscaping is one process:** a care level per lot and per 8-unit block of verge. It runs overgrown → rough → mown → planted → formal, and backwards with neglect.
+- **Looks** (`b.looks`, `I.looks`) feed wellbeing (±6), faction mood, moving house and settling, and an `eyesores` petition grievance. `aestheticComplaints()` returns local, structured evidence (what, where, how bad, how long, how many residents).
+- **Parks** are designated by the Planning Office (the `green-space` template) or by the Green reserves rule. A park on the water becomes a beach.
+- **Decor:** fences, hedges, beds, benches, bins, signposts, wells, stalls, park furniture and beaches. Three draw calls, shown only within about 100 units of the camera.
+- **Seats:** benches are placed by `seats.js`, which the decor and the walkers share. Leisure visitors to parks and gathering places take a free bench seat (new bench pose, action 7) or a lawn spot, one to a seat.
+
+**Buildings** (`src/render/kit/{compose,geometry}.js`):
+- Porches, lean-tos, porticos, bay windows, turrets, market posts and monument bases reach the ground on slopes.
+- Z-fighting flicker (gable ends flush with walls, stacked bases, cornices) is fixed with small real offsets.
+- Regression test: `tests/render-attachments.test.js`.
+
+**UI** (`src/ui/**`), reworked again from owner feedback:
+- **The Council** (`components/council.js`) replaces the docket modal and the right-hand body pages:
+  - A HUD panel over the main area (between the rail or drawer and the dock, above the time strip), not a dialog, so the top bar and time strip stay usable.
+  - The bodies are listed down its left side: Town Council (every request), then each body with its count. The middle holds the cards for that page, with area chips above them. The side holds the rules for the open card's area and the body's page (dashboard, purse, rules, dissolve).
+  - On desktop the dock holds one crest, the Council; **C** or **D** toggles it. On phones it is one sheet tab, with the bodies as a strip of chips.
+  - The town pauses while it is open (Game → "Pause while ruling"). On phones that means while the sheet is raised on the Council tab.
+  - Removed at the owner's request, to come back with an advisors and budgets feature: standing orders, "Let them run their own affairs" (delegation), and the factions column (it duplicated People). The sim still supports delegation and standing orders.
+- **Drawer and Council tile:** with both open, the drawer's grip sits in the gap and one drag moves the shared edge.
+- **Camera:** panels never move it. Scene insets follow only the fixed chrome (top bar, rail, dock, time strip or the phone peek). Request notices don't fly the camera either; "Show me" and Locate still do.
+- **Notice stack** (`components/notices.js`): one stack under the top bar, at the top left beside the rail (full width on phones).
+  - Majors (requests, year ends, new surfaces, moments) linger about 20 s, one per key.
+  - Minors (chronicle happenings) fade in 5–6 s.
+  - Toasts stay top centre.
+- **Chronicle:** loads the latest 60 lines; "Show earlier lines" adds more. Era groups out of view skip rendering (`content-visibility`).
+- **Speed:** pause, plus one button that steps 1× → 3× → 5×. Keys 1/2/3 set 1×, 3× and 5×. 8× is gone.
+- **Rail:** views and the map only; the locate and full-screen tiles are gone (**F** still toggles full screen).
+- **Rule Book:** the listing in the left drawer; **R** toggles it.
+- **Proposal opinion** (`src/sim/opinion.js`): a town-feeling bar on each card with a verdict (Popular, Divisive, Unpopular, Indifferent) and a faction breakdown, weighted by faction size, with no extra model calls. The old For/Against debate strip is gone.
+- **Phone inspector:** a solid card above the peek, sized to its content. It closes when the sheet rises.
+- **Inspector:** one actions row (Locate, Follow, Why?, Refresh).
+- **Settings tabs:** Game, Display, Sound, Accessibility, Decision model.
+
+**Tests hardened.** Several tests assumed facts about the grown fixture towns (a timber bridge exists, a debate formed, cards have unique titles). They now set up what they need.
+- **One threshold was loosened:** "opposite early rulings end in different towns" now needs an industry gap of 0.35, not 0.5. The old code already measured 0.47 on one of its three seeds.
 
 ## Module map (who owns what)
 
 | Area | Files |
 |---|---|
 | Sim core | `src/sim/{index,state,clock,rng,hooks,conditions,pressures,eras,economy,households,enterprises,land,people,serialize,fixtures,render-view,notes}.js` |
-| World | `src/sim/{world,roads,sites,districts,buildings,works,bridges,centres}.js`, `src/navigation*.js`, `src/route-planner.js`, `src/terrain.js` (seeded valleys, fords, hills, mountain ring) |
-| Governance | `src/sim/{governance,policies,institutions,docket,subjects,events,factions,chronicle,view}.js`, `src/sim/decisions/*`, `src/sim/text/voice.js` |
+| World | `src/sim/{world,roads,sites,districts,buildings,works,bridges,centres,reclaim}.js`, `src/navigation*.js`, `src/route-planner.js`, `src/terrain.js`, `src/river.js` (render-side river detail) |
+| Lived-in | `src/sim/{landscape,aesthetics,parks,seats}.js` |
+| Governance | `src/sim/{governance,policies,institutions,docket,subjects,events,factions,chronicle,view,opinion}.js`, `src/sim/decisions/*`, `src/sim/text/voice.js` |
 | Decisions | `server/system1.js`, `src/decision-{kinds,client,pool}.js`, `src/routine-policy.js` |
 | Narrator | `server/narrator.js`, `src/narrator-client.js`, `src/narrative-{schema,prose}.js`, `src/sim/narrative-facts.js` |
-| Renderer | `src/render/**` (Three.js r180). A single ground-height texture drapes everything; instanced kit buildings with era style packs; GPU-animated villagers (20-float rows); water ribbon with reflections on high; quality tiers; reduced-motion support |
-| UI | `src/ui/**` (no framework), `src/main.js`, `src/audio/**`, `src/save-store.js` |
+| Renderer | `src/render/**` (Three.js r180): ground-height texture, path distance field (`paths.js`), shared fog (`atmosphere.js`), instanced kit buildings, decor, GPU villagers, water with river map, quality tiers |
+| UI and audio | `src/ui/**` (no framework), `src/main.js`, `src/audio/**`, `src/save-store.js` |
 
-The sim is deterministic: one seeded RNG, and model answers are applied in key order and logged. Save → restore → continue is byte-identical, and tests check it. Rollover work runs as queued jobs (one per tick) so no tick spikes.
+The sim is deterministic: one seeded RNG, and model answers are applied in key order and logged. Save → restore → continue is byte-identical, and tests check it. New state fields get defaults on load.
 
 ## Saves
 
-The town is saved to **IndexedDB, gzip-compressed** (`src/save-store.js`). `localStorage` filled up on `localhost:5173` and saves failed silently, which made old docket cards keep coming back. An old `localStorage` save is migrated once and deleted. Saving happens 0.4 s after any ruling, every 30 s, when the tab is hidden, on pagehide, and before Vite reloads the page. Only the newest tab writes (BroadcastChannel lock).
+Saved to **IndexedDB, gzip-compressed** (`src/save-store.js`): 0.4 s after a ruling, every 30 s, on hide or pagehide, and before a Vite reload. Only the newest tab writes. Old saves load with this session's changes; landscaping is seeded when an old save loads.
 
 ## Running and checking
 
 ```sh
 npm install
-npm run dev                      # http://127.0.0.1:5173 (?fixture=hamlet|town|city loads a test town, not saved)
-npm test                         # 223 node tests
+npm run dev                      # http://127.0.0.1:5173 (?fixture=hamlet|town|city, ?pace=0.5)
+npm test                         # 259 node tests
 npm run build
+npx playwright test              # 51 browser tests (starts its own server)
 node scripts/boot-check.js       # loads the game and fails on any renderer error
-node scripts/balance.js          # headless balance harness (styles × seeds); runs from a frozen copy of src/
-node scripts/render-check.js     # screenshots + draw-call/frame stats per fixture and tier
-node scripts/benchmark-decisions.js   # live decision throughput (needs LAN access to rrh-llm-1)
-npx playwright test              # browser suite (start the dev server first; run with workers=1)
+node scripts/balance.js --seeds 6 --years 120 --styles frugal,balanced,generous
+node scripts/render-check.js --url http://127.0.0.1:PORT   # screenshots + stats (default port 5199)
+node scripts/benchmark-decisions.js   # live decision throughput (LAN access to rrh-llm-1)
 ```
 
-## Known gaps and judgement calls
+The two wall-clock tests ("150 headless years" and the 3,000-walker p95) fail when the machine is busy, for example with agents or browsers running. Rerun them quiet.
 
-- **Riverbank mismatch, left as is on purpose.** A towpath cell at the water's edge counts as land for navigation while `waterAt` says it's ~0.1 units into the river. The walker test tolerates 0.15.
-- **Treasury hoards late in the game.** A real year-169 save held about 1.9 million coin (+286k a year). Early-game spending was fixed; late-game spending wasn't.
-- **Too many centres in long games.** That same save had 7 towns in the valley, against a target of 2–5.
-- **Bridge load timing.** The first upgrade card comes 15–29 years after a bridge opens (median ~19). Fast-growing towns fill bridges in ~10 years; some bridges never fill because their traffic stays flat.
-- **Late growth plateau.** Balanced towns reach ~4,300 people at year 100 and level off (~4,100 at year 140), short of the 6,000–9,000 design target.
-- **Port archetype** rarely appears; mercantile play usually becomes an Exchange town.
-- **Not measured on a real iPhone.** Frame numbers come from desktop Chrome (Metal) with phone sizes emulated: city at medium is ~3 ms per frame at phone size and ~6–7 ms at desktop size, 50–57 draw calls.
-- **Live-dev hazard.** Agents edited the same tree the owner was playing. Multi-file edits briefly broke the 3D view several times. For future parallel work, edit in a separate worktree and apply finished diffs in one step.
+## Open decisions (owner's call)
 
-## Recent fixes (the end of the session)
+1. **Generous councils and receivership.** Merged tree against the original baseline, 6 seeds, median at year 100:
 
-- **Bridges:**
-  - Capacity is sized per bridge from its own early traffic, so timber wears out over decades.
-  - Upgrade cards come 15–29 years after a bridge opens.
-  - A bridge that collapses closes until it is repaired or rebuilt (`collapseBridge` / `rebuildBridge`).
-- **Duplicate questions:** every card has normalised subjects (`src/sim/subjects.js`). A subject that is open, under way or cooling down is never offered again, whatever its source.
-- **Tick spikes:**
-  - Yearly world work runs one step per tick.
-  - Business founding runs one attempt per tick.
-  - New businesses reuse one site search per type each year, stored in state so replay stays exact.
-- **Decision service:** requests always carry a `state`, and each request holds at most 64 questions.
+   | Style | Population | Years in debt | Receivership years |
+   |---|---|---|---|
+   | frugal | 3656 → 3484 | 2% → 5% | 0 → 3 |
+   | balanced | 4148 → 3618 | 21% → 13% | 6 → 0 |
+   | generous | 4842 → 4052 | 9% → 22% | 3 → 13 |
+
+   The main driver is the new jobs band, through the four offline rules in `effects.js` that read `snap.jobs` (emigrate, leave town, petty theft, wave); those used to fire always. Either keep it as the cost of overspending, or retune those rules.
+2. **Proposals from what people experience.** Proposed design:
+   - Feed `aestheticComplaints()` (and similar evidence) to the narrator model to write the complaint and the proposal.
+   - Build the proposal's effect from existing levers (repair works, a rule, a body budget), validated.
+   - Log the model output so replay stays exact, with a template as the offline fallback.
+
+   Today an upkeep proposal can't appear at all: `institution_draft` only picks from the `TEMPLATES` in `src/sim/institutions.js`, and no template or `docket.applyOption` effect repairs buildings or clears derelicts. The owner said not to add a fixed HOA-style rule.
+3. **Image questions for `choose_site`.** They work through the proxy. Measure latency on a quiet box before building anything.
+
+## Known gaps
+
+- **Riverbank and benches:** benches the decor places along banks and towpaths aren't sittable yet. They come from landscape levels, which `seats.js` doesn't read.
+- **Gravel bars look like land, but the sim treats the whole channel as water.**
+- **Derelict farms** keep blocking walkers with their crops. A derelict home's flag isn't cleared when a family moves back in.
+- **The cached `src/sim/fixtures/city.json`** predates the new path formation. It loads fine; the rules apply from the first month after loading.
+- **Debates' side rows on the opinion bar** freeze when the debate forms. Events have no opinion bar, because factions have no stake in an event's choices.
+- **Older items, still true:**
+  - Treasury hoards late in the game.
+  - Too many centres in long games.
+  - Late-growth plateau (well short of the 6–9k design target).
+  - The Port archetype is rare.
+  - Not measured on a real iPhone. The high tier went 6.3 → 8.3 ms on desktop after the tree upgrade; check it on a quiet machine.
+- **Audio** is first-pass synthesis. Someone should listen to the clips (paths under "Tools").
+
+## Tools and artifacts from this session
+
+Scratch scripts and outputs are in `/private/tmp/claude-501/-Users-shishirtandale-Development-relayer-test-game-20261014/3389b8a2-b3ed-484e-8a28-8ee2c27a0c03/scratchpad/` (temporary; copy anything worth keeping into `scripts/`). Before/after screenshots and audio clips are in its `agents/{paths,nature,livedin,porches,popularity,audio,hud}/` folders.
+
+**Decision-model studies**
+
+| Script | What it does |
+|---|---|
+| `collect-questions.mjs` | grows towns headless and dumps real questions |
+| `ask-migration.mjs`, `analyse-migration.mjs` | choice vs score vs noul, over real states |
+| `compare-kinds.mjs`, `loan-wording.mjs`, `ask-loans.mjs` | `react_to_policy` and `take_loan` studies |
+| `indicators.mjs` | the raw values behind the snapshot bands |
+| `img-probe*.mjs` | image support and latency |
+
+**Sim and walkers**
+
+| Script | What it does |
+|---|---|
+| `walk-impact.mjs` | walk speed and wear comparisons |
+| `walkthrough.mjs` | runs the real game in Chrome and reports walkers inside building footprints (start a dev server first) |
+
+**Agent worktrees** remain under `.claude/worktrees/agent-*`. All their work is merged into the main tree. Remove them with `git worktree remove --force <path>` and delete their `worktree-agent-*` branches once you've checked nothing else is needed.
 
 ## Before making the repo public
 
-1. **Infrastructure names.** The code and docs name `rrh-llm-1:4000` and the `ramblerun/*` models. The decision endpoint answered requests with no key during testing, so either confirm the service is reachable only on the LAN, or make the host configurable-only and scrub the names.
+1. **Infrastructure names.** The code and docs name `rrh-llm-1:4000` and the `ramblerun/*` models. Make the host configurable-only and scrub the names, or confirm the service is reachable only on the LAN; it answered requests without a key during testing.
 2. **A license.** There isn't one yet.
 3. **Secrets.** The API key has never been in any commit (checked across all history).
 
 ## Design documents
 
-`docs/design/` holds the specs that guided this work. Code comments refer to their sections (e.g. "design-systems §6.2").
-
-| File | Contents |
-|---|---|
-| `brief.md` | The owner's original request |
-| `contract.md` | The integration contract. It wins where the specs disagree, but later owner feedback (above) wins over it. |
-| `design-systems.md` | Systems and policy design |
-| `design-systems-addendum.md` | Revisions to the systems design |
-| `design-visual.md` | Art direction, rendering and UI |
-| `design-centres.md` | Multiple centres |
+`docs/design/` holds the specs; code comments cite their sections. `contract.md` wins where specs disagree, and later owner feedback wins over it. `design-visual.md` was updated for the new audio and HUD. The specs are `brief.md`, `contract.md`, `design-systems.md`, `design-systems-addendum.md`, `design-visual.md` and `design-centres.md`.

@@ -1,7 +1,9 @@
 // Inspector for a tapped person or building. The header comes at once from
 // the sim (selectInspect and the narrator's fact sheet); then a short note,
-// written by the narrator model, types in as it streams. "Why?" lists the
-// facts the note used. The stream is aborted when the selection changes.
+// written by the narrator model, types in as it streams. The actions row at
+// the foot holds Follow (people) or Locate (buildings), Why? (the facts the
+// note used) and Refresh (write the note again), on one line. The stream is aborted when the selection
+// changes.
 import {esc, h, setText} from '../dom.js';
 import {icon} from '../icons.js';
 import {enter, reduced} from '../motion.js';
@@ -13,6 +15,7 @@ const TRADES = {
 };
 const TYPE_WORDS = {home: 'Home', farm: 'Farm', workshop: 'Workshop', mill: 'Mill', shop: 'Shop', market: 'Market', inn: 'Inn', chapel: 'Chapel', school: 'School'};
 const CHARS_PER_SECOND = 70;
+const WHY_ID = 'inspector-why';
 
 function capWord(s = '') {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
@@ -40,27 +43,45 @@ function headerOf(model, facts) {
 }
 
 export function createInspector(ctx) {
-  const el = h('aside.inspector.paper', {hidden: true, 'aria-label': 'Selected', 'aria-live': 'polite'});
+  const el = h('aside.inspector.paper', {hidden: true, 'aria-label': 'Selected'});
+  // One actions row at the foot of the popup: every per-thing action in one
+  // place, same style, 44 px targets. Close stays in the corner.
   el.innerHTML = `<header><div><h3></h3><p class="sub"></p></div>
-      <button class="icon-btn locate" aria-label="Centre the view here" title="Centre here">${icon('locate')}</button>
-      <button class="icon-btn close" aria-label="Close">${icon('close')}</button></header>
+      <button class="icon-btn close" aria-label="Close" title="Close (Esc)">${icon('close')}</button></header>
     <div class="chips head-chips"></div>
-    <blockquote class="note" hidden><button class="icon-btn note-stale" type="button" disabled aria-label="Update the note" title="Nothing new yet">${icon('refresh')}</button><p class="note-text"></p><div class="shimmer" aria-hidden="true"><i></i><i></i></div><p class="note-when" hidden></p></blockquote>
-    <details class="why" hidden><summary>Why?</summary><ul></ul></details>
+    <p class="objective" hidden></p>
+    <blockquote class="note" hidden aria-live="polite"><p class="note-text"></p><div class="shimmer" aria-hidden="true"><i></i><i></i></div><p class="note-when" hidden></p></blockquote>
     <dl class="details"></dl>
-    <div class="btn-row actions"><button class="btn btn-secondary follow" hidden>${icon('people')}Follow</button></div>`;
+    <div class="why" id="${WHY_ID}" hidden><h4>Why they say so</h4><ul></ul></div>
+    <div class="inspector-actions" role="toolbar" aria-label="Actions">
+      <button class="btn btn-secondary act-btn" type="button" data-act="locate" hidden>${icon('locate')}<span>Locate</span></button>
+      <button class="btn btn-secondary act-btn" type="button" data-act="follow" hidden>${icon('people')}<span>Follow</span></button>
+      <button class="btn btn-secondary act-btn" type="button" data-act="why" aria-expanded="false" aria-controls="${WHY_ID}" hidden>${icon('info')}<span>Why?</span></button>
+      <button class="btn btn-secondary act-btn" type="button" data-act="refresh" disabled hidden title="Nothing new yet">${icon('refresh')}<span>Refresh</span></button>
+    </div>`;
   const $ = (s) => el.querySelector(s);
+  const act = (name) => el.querySelector(`[data-act="${name}"]`);
   $('.close').addEventListener('click', () => hide());
-  $('.locate').addEventListener('click', () => model?.at && ctx.focusWorld(model.at));
-  $('.follow').addEventListener('click', () => target && ctx.follow?.(target));
-  $('.note-stale').addEventListener('click', () => narrate(true));
+  act('locate').addEventListener('click', () => model?.at && ctx.focusWorld(model.at));
+  act('follow').addEventListener('click', () => target && ctx.follow?.(target));
+  act('why').addEventListener('click', () => {
+    const open = act('why').getAttribute('aria-expanded') !== 'true';
+    setWhyOpen(open);
+    if (open) $('.why').scrollIntoView?.({block: 'nearest'});
+  });
+  act('refresh').addEventListener('click', () => narrate(true));
+
+  function setWhyOpen(open) {
+    act('why').setAttribute('aria-expanded', String(open));
+    $('.why').hidden = !open || act('why').hidden;
+  }
 
   let target = null, model = null, facts = null, key = null, sig = '';
   let controller = null, shown = '', goal = '', typing = 0;
 
   function renderHeader() {
     const head = headerOf(model, facts);
-    const next = JSON.stringify([head, model?.rows]);
+    const next = JSON.stringify([head, model?.rows, model?.objective]);
     if (next === sig) return;
     sig = next;
     setText($('h3'), head.title);
@@ -71,8 +92,15 @@ export function createInspector(ctx) {
     const rows = facts ? [] : (model?.rows ?? []).slice(0, 6);
     $('.details').innerHTML = rows.map((r) => `<dt>${esc(r.label)}</dt><dd>${esc(r.value)}</dd>`).join('');
     $('.details').hidden = !rows.length;
-    $('.locate').hidden = !model?.at;
-    $('.follow').hidden = target?.personId == null || !ctx.canFollow?.();
+    // A person who can be followed gets Follow (it brings the camera along
+    // too); Locate is for buildings and for people the renderer cannot follow.
+    const follow = target?.personId != null && Boolean(ctx.canFollow?.());
+    act('follow').hidden = !follow;
+    // What a person is up to, under the chips: flavour text only.
+    const obj = model?.objective;
+    $('.objective').hidden = !obj?.text;
+    setText($('.objective'), obj?.text ?? '');
+    act('locate').hidden = !model?.at || follow;
   }
 
   // Typewriter: reveal the goal text a few characters per frame.
@@ -108,15 +136,19 @@ export function createInspector(ctx) {
     const n = ctx.narrator;
     if (!n || !facts) {
       $('.note').hidden = true;
-      $('.why').hidden = true;
+      act('why').hidden = true;
+      act('refresh').hidden = true;
+      setWhyOpen(false);
       return;
     }
+    act('refresh').hidden = false;
     const state = ctx.state();
     const peek = n.peekNote ? safePeek(n, state, target) : null;
     if (peek?.facts) facts = peek.facts;
     key = peek?.key ?? noteKey(facts);
     const lines = safeLines(n, facts);
-    $('.why').hidden = !lines.length;
+    act('why').hidden = !lines.length;
+    setWhyOpen(act('why').getAttribute('aria-expanded') === 'true');
     $('.why ul').innerHTML = lines.slice(0, 6).map((l) => `<li>${esc(l)}</li>`).join('');
     $('.note').hidden = false;
     if (peek?.saved && !regenerate) {
@@ -155,13 +187,13 @@ export function createInspector(ctx) {
     w.hidden = !text;
   }
 
-  // The refresh icon sits quietly in the note's corner; it only lights up
-  // when there is something new to say.
+  // Refresh waits, dimmed, until there is something new to say.
   function setStale(on) {
-    const b = $('.note-stale');
+    const b = act('refresh');
     if (b.disabled === !on) return;
     b.disabled = !on;
-    b.title = on ? 'Something has changed. Update the note' : 'Nothing new yet';
+    b.title = on ? 'Something has changed. Write the note again' : 'Nothing new yet';
+    b.setAttribute('aria-label', on ? 'Refresh the note: something has changed' : 'Refresh the note (nothing new yet)');
   }
 
   function noteKey(f) {
@@ -181,28 +213,32 @@ export function createInspector(ctx) {
     typing = 0;
     target = null;
     el.hidden = true;
+    setWhyOpen(false);
     sig = '';
     ctx.onInspectorChange?.(false);
   }
 
+  function show(pick) {
+    const same = target && JSON.stringify(target) === JSON.stringify(pick);
+    target = pick;
+    if (!load(pick)) return hide();
+    if (!same) setWhyOpen(false);
+    renderHeader();
+    const nextKey = noteKey(facts);
+    if (!same || nextKey !== key) {
+      key = nextKey;
+      narrate();
+    }
+    if (el.hidden) {
+      el.hidden = false;
+      enter(el);
+      ctx.onInspectorChange?.(true);
+    }
+  }
+
   return {
     el,
-    show(pick) {
-      const same = target && JSON.stringify(target) === JSON.stringify(pick);
-      target = pick;
-      if (!load(pick)) return hide();
-      renderHeader();
-      const nextKey = noteKey(facts);
-      if (!same || nextKey !== key) {
-        key = nextKey;
-        narrate();
-      }
-      if (el.hidden) {
-        el.hidden = false;
-        enter(el);
-        ctx.onInspectorChange?.(true);
-      }
-    },
+    show,
     // At the panel's 4 Hz: refresh the header only. The note never changes
     // under the reader; a meaningful change offers an "update" link instead.
     refresh() {

@@ -1,5 +1,7 @@
-// Settings (design-visual §8.7): display, sound, play, the town's save, the
-// local decision model's status and pacing, and live performance numbers.
+// Settings (design-visual §8.7) in five ARIA tabs: Game (play and the
+// town's save), Display (and live performance numbers), Sound,
+// Accessibility (motion, text size, keys) and the local Decision model's
+// status and pacing. The last tab opened is remembered.
 import {esc, h, setText} from '../dom.js';
 import {icon} from '../icons.js';
 import {num} from '../format.js';
@@ -24,9 +26,18 @@ function switchCtl(name, on, label) {
   return `<button type="button" class="switch" role="switch" data-switch="${name}" aria-checked="${Boolean(on)}" aria-label="${esc(label)}"></button>`;
 }
 
-function range(name, value, min, max, step) {
-  return `<input type="range" data-range="${name}" min="${min}" max="${max}" step="${step}" value="${value}">`;
+function range(name, value, min, max, step, label) {
+  return `<input type="range" data-range="${name}" min="${min}" max="${max}" step="${step}" value="${value}"${label ? ` aria-label="${esc(label)}"` : ''}>`;
 }
+
+// Tabs group the settings; the last one opened is remembered.
+export const TABS = [
+  {id: 'game', label: 'Game'},
+  {id: 'display', label: 'Display'},
+  {id: 'sound', label: 'Sound'},
+  {id: 'access', label: 'Accessibility'},
+  {id: 'model', label: 'Decision model'},
+];
 
 export function createSettings(ctx) {
   let el = null, timer = null, lastFocus = null;
@@ -35,28 +46,12 @@ export function createSettings(ctx) {
     const p = ctx.prefs.all();
     const d = ctx.decisionSettings();
     el = h('div.settings', {role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'settings-title'});
-    el.innerHTML = `<div class="settings-card paper">
-      <div class="panel-head"><h2 id="settings-title">Settings</h2><button class="icon-btn close" aria-label="Close settings">${icon('close')}</button></div>
-      <div class="settings-body">
-        <fieldset><legend>Display</legend>
-          ${field('Detail', 'Auto picks what this device can draw smoothly.', seg('quality', p.quality, [['auto', 'Auto'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']]))}
-          ${field('Day and night', 'Seasonal follows the year. Slow gives a full day each minute.', seg('dayCycle', p.dayCycle, [['seasonal', 'Seasonal'], ['slow', 'Slow'], ['off', 'Off']]))}
-          ${field('Theme', null, seg('theme', p.theme, [['auto', 'Auto'], ['light', 'Light'], ['night', 'Night']]))}
-          ${field('Motion', 'Reduced turns off slides and camera moves.', seg('motion', p.motion, [['full', 'Full'], ['reduced', 'Reduced']]))}
-          ${field('Text size', null, seg('textSize', p.textSize, [['normal', 'Normal'], ['large', 'Large']]))}
-          ${field('Clean view', 'Hide everything but the town. Press H, or tap, to bring it back.', `<button class="btn btn-secondary" data-act="clean">${icon('eye-off')}Hide the interface</button>`)}
-          ${isIOS() && !standalone() ? '<p class="ios-tip">For full screen, tap Share → Add to Home Screen.</p>' : ''}
-        </fieldset>
-        <fieldset><legend>Sound</legend>
-          ${field('Sound', null, switchCtl('sound', !p.muted, 'Sound on'))}
-          ${field('Volume', null, range('master', p.master, 0, 1, 0.05))}
-          ${field('Town and nature', null, range('ambience', p.ambience, 0, 1, 0.05))}
-          ${field('Interface', null, range('ui', p.ui, 0, 1, 0.05))}
-        </fieldset>
+    const tab = TABS.some((t) => t.id === p.settingsTab) ? p.settingsTab : TABS[0].id;
+    const panels = {
+      game: `
         <fieldset><legend>Play</legend>
-          ${field('Title cards', 'Full-screen cards for a new age, a new body or a disaster. They pause the town.', seg('moments', p.moments, [['fast', 'At 3× and 8×'], ['always', 'Always'], ['never', 'Never']]))}
-          ${field('Pause for new requests', 'At 3× and 8×, pause when a new session of requests opens.', switchCtl('pauseOnSession', p.pauseOnSession, 'Pause for new requests'))}
-          ${field('People who walk', 'More is livelier but heavier on this device.', `<span style="display:flex;gap:10px;align-items:center">${range('individualCap', ctx.getIndividualCap(), 300, 5000, 100)}<b class="cap-val" style="font:500 13px var(--font-mono);min-width:44px;text-align:right">${num(ctx.getIndividualCap())}</b></span>`)}
+          ${field('Title cards', 'Full-screen cards for a new age, a new body or a disaster. They pause the town.', seg('moments', p.moments, [['fast', 'At 3× and 5×'], ['always', 'Always'], ['never', 'Never']]))}
+          ${field('People who walk', 'More is livelier but heavier on this device.', `<span style="display:flex;gap:10px;align-items:center">${range('individualCap', ctx.getIndividualCap(), 300, 5000, 100, 'People who walk')}<b class="cap-val" style="font:500 13px var(--font-mono);min-width:44px;text-align:right">${num(ctx.getIndividualCap())}</b></span>`)}
         </fieldset>
         <fieldset><legend>Your town</legend>
           <p style="margin:0 0 8px;font-size:var(--fs-13);color:var(--ink-2)">The town saves itself every 30 seconds on this device. Export a copy to keep it safe or move it.</p>
@@ -68,32 +63,88 @@ export function createSettings(ctx) {
             <label class="btn btn-secondary">${icon('upload')}Import<input type="file" accept="application/json" class="sr-only" data-act="import"></label>
             <button class="btn btn-ghost btn-danger" data-act="new">Start a new town</button>
           </div>
+        </fieldset>`,
+      display: `
+        <fieldset><legend>Display</legend>
+          ${field('Detail', 'Auto picks what this device can draw smoothly.', seg('quality', p.quality, [['auto', 'Auto'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']]))}
+          ${field('Shadows of people', 'Soft shadows follow the sun smoothly. Full draws true shapes but costs more in a busy town.', seg('peopleShadows', p.peopleShadows, [['blob', 'Soft'], ['full', 'Full']]))}
+          ${field('Battery saver', saverHint(ctx.power?.()), seg('batterySaver', p.batterySaver, [['off', 'Off'], ['battery', 'On battery'], ['always', 'Always']]))}
+          ${field('Day and night', 'Seasonal follows the year. Slow gives a full day each minute.', seg('dayCycle', p.dayCycle, [['seasonal', 'Seasonal'], ['slow', 'Slow'], ['off', 'Off']]))}
+          ${field('Theme', null, seg('theme', p.theme, [['auto', 'Auto'], ['light', 'Light'], ['night', 'Night']]))}
+          ${field('Clean view', 'Hide everything but the town. Press H, or tap, to bring it back.', `<button class="btn btn-secondary" data-act="clean">${icon('eye-off')}Hide the interface</button>`)}
+          ${isIOS() && !standalone() ? '<p class="ios-tip">For full screen, tap Share → Add to Home Screen.</p>' : ''}
         </fieldset>
+        <fieldset><legend>Performance</legend><div class="stat-grid perf-stats"></div></fieldset>`,
+      sound: `
+        <fieldset><legend>Sound</legend>
+          ${field('Sound', null, switchCtl('sound', !p.muted, 'Sound on'))}
+          ${field('Volume', null, range('master', p.master, 0, 1, 0.05, 'Volume'))}
+          ${field('Town and nature', null, range('ambience', p.ambience, 0, 1, 0.05, 'Town and nature'))}
+          ${field('Interface', null, range('ui', p.ui, 0, 1, 0.05, 'Interface sounds'))}
+        </fieldset>`,
+      access: `
+        <fieldset><legend>Reading and motion</legend>
+          ${field('Motion', 'Reduced turns off slides and camera moves.', seg('motion', p.motion, [['full', 'Full'], ['reduced', 'Reduced']]))}
+          ${field('Text size', null, seg('textSize', p.textSize, [['normal', 'Normal'], ['large', 'Large']]))}
+        </fieldset>
+        <fieldset><legend>Keys</legend>
+          <div class="keys"><kbd>Space</kbd><span>Pause or resume</span><kbd>1</kbd><span>Normal speed</span><kbd>2</kbd><span>Three times</span><kbd>3</kbd><span>Five times</span><kbd>C</kbd><span>Open or close the Council</span><kbd>R</kbd><span>Open or close the Rule Book</span><kbd>F</kbd><span>Full screen</span><kbd>H</kbd><span>Hide or show the interface</span><kbd>Esc</kbd><span>Close panels, cards and notices</span><kbd>← →</kbd><span>Move between these tabs</span></div>
+        </fieldset>`,
+      model: `
         <fieldset><legend>Decision model</legend>
           ${field('Use the local model', 'Townsfolk ask it about their everyday choices. Your rulings stay with you.', switchCtl('model', ctx.modelEnabled(), 'Use the local decision model'))}
-          ${field('Pacing', 'Automatic keeps the service busy.', `<select data-decision="mode"><option value="auto" ${d.mode === 'auto' ? 'selected' : ''}>Automatic</option><option value="manual" ${d.mode === 'manual' ? 'selected' : ''}>Manual ceiling</option></select>`)}
-          ${field('Most questions a second', 'Used in manual pacing. 1 to 5,000.', `<input type="number" min="1" max="5000" step="1" data-decision="cap" value="${d.cap}">`)}
+          ${field('Pacing', 'Automatic keeps the service busy.', `<select data-decision="mode" aria-label="Pacing"><option value="auto" ${d.mode === 'auto' ? 'selected' : ''}>Automatic</option><option value="manual" ${d.mode === 'manual' ? 'selected' : ''}>Manual ceiling</option></select>`)}
+          ${field('Most questions a second', 'Used in manual pacing. 1 to 5,000.', `<input type="number" min="1" max="5000" step="1" data-decision="cap" value="${d.cap}" aria-label="Most questions a second">`)}
           <div class="status-box" role="status">
             <div class="status-line"><span class="status-dot"></span><span class="status-title">Checking…</span></div>
             <div class="status-text" style="margin-top:4px">Asking the local decision service.</div>
             <div class="stat-grid decision-stats"></div>
             <div class="btn-row" style="margin-top:10px"><button class="btn btn-secondary" data-act="check">${icon('refresh')}Check again</button></div>
           </div>
-        </fieldset>
-        <fieldset><legend>Performance</legend><div class="stat-grid perf-stats"></div></fieldset>
-        <fieldset><legend>Keys</legend>
-          <div class="keys"><kbd>Space</kbd><span>Pause or resume</span><kbd>1</kbd><span>Normal speed</span><kbd>2</kbd><span>Three times</span><kbd>3</kbd><span>Eight times</span><kbd>C</kbd><span>Tuck the docket away, or bring it back</span><kbd>F</kbd><span>Full screen</span><kbd>H</kbd><span>Hide or show the interface</span><kbd>Esc</kbd><span>Close panels</span></div>
-        </fieldset>
+        </fieldset>`,
+    };
+    el.innerHTML = `<div class="settings-card paper">
+      <div class="panel-head"><h2 id="settings-title">Settings</h2><button class="icon-btn close" aria-label="Close settings">${icon('close')}</button></div>
+      <div class="settings-tabs" role="tablist" aria-label="Settings sections">${TABS.map((t) => `<button type="button" role="tab" id="set-tab-${t.id}" data-tab="${t.id}" aria-controls="set-panel-${t.id}" aria-selected="${t.id === tab}" tabindex="${t.id === tab ? 0 : -1}">${esc(t.label)}</button>`).join('')}</div>
+      <div class="settings-body">
+        ${TABS.map((t) => `<section class="settings-panel" role="tabpanel" id="set-panel-${t.id}" data-panel="${t.id}" aria-labelledby="set-tab-${t.id}" tabindex="0"${t.id === tab ? '' : ' hidden'}>${panels[t.id]}</section>`).join('')}
       </div>
     </div>`;
     wire();
     return el;
   }
 
+  function selectTab(id, focus) {
+    if (!el || !TABS.some((t) => t.id === id)) return;
+    for (const b of el.querySelectorAll('[role="tab"]')) {
+      const on = b.dataset.tab === id;
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+      if (on && focus) b.focus();
+      if (on) b.scrollIntoView?.({block: 'nearest', inline: 'nearest'});
+    }
+    for (const panel of el.querySelectorAll('[role="tabpanel"]')) panel.hidden = panel.dataset.panel !== id;
+    el.querySelector('.settings-body').scrollTop = 0;
+    ctx.prefs.set('settingsTab', id);
+  }
+
   function wire() {
     el.querySelector('.close').addEventListener('click', close);
+    const tablist = el.querySelector('[role="tablist"]');
+    // Arrow keys move along the tabs and open each one (automatic activation).
+    tablist.addEventListener('keydown', (e) => {
+      const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+      const i = tabs.indexOf(document.activeElement);
+      if (i < 0) return;
+      const to = {ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1}[e.key];
+      if (to == null) return;
+      e.preventDefault();
+      selectTab(tabs[(to + tabs.length) % tabs.length].dataset.tab, true);
+    });
     el.addEventListener('click', (e) => {
       if (e.target === el) return close();
+      const tabBtn = e.target.closest('[role="tab"]');
+      if (tabBtn) return selectTab(tabBtn.dataset.tab);
       const opt = e.target.closest('.seg[data-pref] button');
       if (opt) {
         const group = opt.parentElement;
@@ -204,6 +255,7 @@ export function createSettings(ctx) {
       ['Frames a second', fmt(w.fps, 0)], ['Frame time', Number.isFinite(w.frameMs) ? `${w.frameMs.toFixed(1)} ms` : '–'],
       ['Sim step', Number.isFinite(ctx.simMs()) ? `${ctx.simMs().toFixed(2)} ms` : '–'], ['Detail', w.tier ?? '–'],
       ['Draw calls', fmt(w.drawCalls, 0)], ['Triangles', fmt(w.triangles, 0)],
+      ['Battery saver', w.saving == null ? '–' : w.saving ? 'Saving' : 'Not saving'], ['Screen', w.refreshHz ? `${w.refreshHz} Hz` : '–'],
     ];
     el.querySelector('.perf-stats').innerHTML = perf.map(([k, v]) => `<div><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('');
   }
@@ -215,7 +267,7 @@ export function createSettings(ctx) {
     refreshStatus();
     refreshStats();
     timer = setInterval(refreshStats, 500);
-    requestAnimationFrame(() => el?.querySelector('.close').focus());
+    requestAnimationFrame(() => el?.querySelector('[role="tab"][aria-selected="true"]')?.focus());
   }
 
   function close() {
@@ -226,7 +278,14 @@ export function createSettings(ctx) {
     lastFocus?.focus?.({preventScroll: true});
   }
 
-  return {open, close, get isOpen() { return Boolean(el); }};
+  return {open, close, selectTab, get isOpen() { return Boolean(el); }};
+}
+
+// Where the browser can't report the battery (Safari, Firefox), say so:
+// 'On battery' then never engages.
+function saverHint(power) {
+  const what = 'While you watch, the town draws 30 frames a second and a little softer. Moving the view stays smooth.';
+  return power && !power.batteryKnown ? `${what} This browser can't tell when you're unplugged, so choose Always to save power.` : what;
 }
 
 function fmt(v, digits) {

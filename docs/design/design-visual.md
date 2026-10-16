@@ -351,12 +351,18 @@ Shadows for people: the single mesh can cast on high tier (one extra draw into t
 
 Auto-detection: start at Medium, measure the rolling median of `requestAnimationFrame` deltas while rendering a fixed camera for 3 s after load; drop to Low if > 18 ms, raise to High if < 9 ms and desktop. Re-evaluate after any big population jump (era change). Persist to `localStorage`, user override in Settings.
 
-### 4.8 Battery
+### 4.8 Battery and frame pacing
 
-- `renderer.setAnimationLoop` only while the simulation is running **and** the tab is visible. Paused → render on demand (`controls` change, UI hover over the scene, every 1 s for the ambient smoke). `visibilitychange` → stop loop; the sim worker continues at a reduced tick (or is paused by setting).
-- Idle cap: if no input for 20 s and sim speed is 1×, cap to 30 Hz (skip every other frame; `uTime` still advances so animation doesn't look choppy, just lower rate).
-- Never run at 120 Hz unless the user sets "Smooth (120 Hz)" in Settings.
-- Phone: when `navigator.getBattery` reports discharging < 20 %, force Low tier and 30 Hz with a quiet toast.
+Code: `src/render/pacing.js` (pure rules, tested in `tests/render-pacing.test.js`), applied by `wantFrame` / `frameDue` in `src/render/index.js` and the loop in `src/main.js`.
+
+- **One decision per animation frame.** The loop asks `world.frameDue(time, dt)` first (it runs the camera and decides). On frames that won't draw, it skips the sim step and view sync; the real seconds owed (at most 0.25 s) go to the sim on the next drawn frame. The sim's fixed 0.1 s tick makes the outcome the same, and walkers need no interpolation: each row carries `t0`, velocity and its waypoint arrival time, so `rowDt` places every walker at the drawn frame's own time. `app.update` still runs every frame (it throttles itself).
+- **Caps land on whole refreshes.** The refresh rate is measured from frame deltas (median of 90, snapped to 60/90/120/144…). A cap draws every n-th refresh, n = ⌈refresh / fps⌉, with the threshold half a refresh early so timestamp jitter never slips a frame: 30 fps is every 2nd refresh at 60 Hz, every 4th at 120 Hz, every 3rd at 90 Hz. Caps that aren't whole refreshes (45 on 60 Hz) judder, so none are offered.
+- **Full rate** (`tier.maxFps`, 60) whenever the sim runs, with no idle cap. Input, camera tweens and follow always draw.
+- **Paused** with no input for 2 s: once a second, for the ambient smoke.
+- **Tab hidden:** the browser stops animation frames, so the town pauses, audio suspends and the game saves. **Window visible but unfocused:** no change (watching on a second screen is real use).
+- **Battery saver** (Settings → Display: Off / On battery / Always; default Off). While saving: 30 fps when you're watching, back to full rate while you move the view and for 1 s after; pixel ratio at most 1.25 (half a phone's pixel work at 3× density on Medium); in Auto detail, one tier lower (High → Medium drops the reflection, post pass and soft shadows), and the auto tuner waits. A manual Detail choice is kept apart from the pixel cap. 'On battery' needs the Battery API (Chrome and Edge). Safari and Firefox report nothing, so there it never engages and the Settings hint says to choose Always. iOS Low Power Mode already holds Safari to 30 Hz; the meter then measures 30 Hz and draws every frame.
+- **Low battery** (unplugged below 20 %, where it can be read) always saves, even with the setting Off, and forces Low in Auto detail. When saving starts by itself (On battery, or low battery), a quiet toast says so; choosing Always shows none.
+- Never run above 60 Hz unless the user sets "Smooth (120 Hz)" in Settings (not built yet).
 
 ---
 
@@ -553,20 +559,23 @@ Each metric is a 1-line row: label, current value, a 60-point sparkline (inline 
 
 ### 8.5 Chronicle / timeline
 
-Bottom-left feed shows the last 3 entries (fade older). A full **Chronicle** view (left rail icon) is a vertical timeline grouped by era, each era a heading with a tiny coloured swatch strip (era palette), entries as single lines with year + text, decisions marked with a seal icon. On phone it's a tab in the sheet.
+The feed shows the last 3 entries (fade older) at the bottom right of the open scene, above the time strip and beside the binder (or the dock when the binder is tucked away); where an open inspector or drawer leaves no room, it fades out. The inspector keeps the bottom left. A full **Chronicle** view (left rail icon) is a vertical timeline grouped by era, each era a heading with a tiny coloured swatch strip (era palette), entries as single lines with year + text, decisions marked with a seal icon. On phone it's a tab in the sheet.
 
 ### 8.6 Notifications
 
 Three levels, never more than one toast visible:
 - **Chronicle line** (passive, feed only): "Harvest came in well."
 - **Nudge** (pill near the tab strip, auto-dismiss 6 s): "Council has 2 new proposals" — tapping focuses the docket.
-- **Moment** (modal title card): era transitions, institution founding, disasters. Title cards: full-screen paper tint 60 %, era name in Fraunces 44 px with a thin rule, a 1-line subtitle, "Continue" button; scene behind does a 2 s slow dolly. Also used at year-end night beat ("Year 12 ends") with the three biggest changes listed. Holds the sim paused until dismissed; on phone the card is a sheet at 92 %.
+Every toast, banner and nudge has a close button (44 px target) and can be swiped sideways on touch; its timer waits while it is hovered or focused, and Esc puts notices away when nothing else is open. Toasts and banners drop from the top centre of the scene.
+- **Moment** (modal title card): era transitions, institution founding, disasters. It only tells, so Continue, a close button, Esc or a click on the backdrop (ignored for its first 0.7 s) dismiss it; "Skip the other cards" clears a queue. Its words stay in the Chronicle. Title cards: full-screen paper tint 60 %, era name in Fraunces 44 px with a thin rule, a 1-line subtitle, "Continue" button; scene behind does a 2 s slow dolly. Also used at year-end night beat ("Year 12 ends") with the three biggest changes listed. Holds the sim paused until dismissed; on phone the card is a sheet at 92 %.
 
 Cadence guard: the UI queues nudges and shows at most one per 20 s of real time; the docket count badge is the always-on signal.
 
 ### 8.7 Time controls & settings
 
-Time strip: pause / 1× / 3× / 8× as segmented control; a thin **era progress bar** (year within era) with the next era name; a season glyph. Keyboard: space pause, 1/2/3 speeds, `C` council, `Esc` closes sheets. Settings (gear): quality tier (Auto/Low/Med/High), day cycle, motion (Full/Reduced), sound (master, ambience, UI), language size (Normal/Large = 1.15× root font), save/export/import, model status.
+Time strip: pause / 1× / 3× / 8× as segmented control; a thin **era progress bar** (year within era) with the next era name; a season glyph. Keyboard: space pause, 1/2/3 speeds, `C` council, `Esc` closes sheets. Settings (gear): quality tier (Auto/Low/Med/High), Battery saver (Off/On battery/Always, §4.8), day cycle, motion (Full/Reduced), sound (master, ambience, UI), language size (Normal/Large = 1.15× root font), save/export/import, model status. Settings are grouped in ARIA tabs (Game, Display, Sound, Accessibility, Decision model; arrow keys move between them) and the last tab is remembered.
+
+**The docket** is a large modal (about 90 % of the screen on desk and tablet, the town dimmed around it; a full-screen sheet on phones). It opens from the dock's top crest, the phone strip's Docket item, petitioner chips and nudges (at the new card), a body's request titles, or `D`, and closes with Esc, `D`, its close button or a click on the backdrop. Focus stays inside it and returns where it was. The town pauses while it is open (Settings → Game → Pause while ruling) and goes on at its old speed after. It holds every waiting card in the docket's order, drawn and ruled exactly as before (one open card, the rest folded; a pager on phones), an index to filter by area or by the body that asks, the rules in force in the open card's area (with a link to the Rule Book drawer), and how the factions feel. The binder now holds the bodies' pages only (the Council gets one once it has a dashboard or the purse); each page lists its requests by title, and a title opens the docket at that card. The Rule Book stays a drawer listing; `R` opens or closes it, and a body's "Rule Book" link opens it.
 
 ### 8.8 Motion
 
@@ -609,13 +618,17 @@ Inline SVG, 24×24 viewBox, 1.75 px stroke, round caps/joins, `currentColor`. On
 
 ## 9. Sound — procedural WebAudio
 
-One `AudioContext` created on first user gesture. Master gain → compressor (threshold −18 dB, ratio 3). Buses: `ambience`, `ui`. All sources are synthesised; no audio files. CPU: ≤ 1 % on iPhone (a handful of oscillators and one noise buffer).
+One `AudioContext` created on first user gesture. All sources are synthesised from three shared noise loops (white, pink, brown); no audio files. Buses: `ambience` (→ highpass 55 Hz → "air" lowpass that snow and height pull down), `ui`, and `space`, a cheap darkened ping-pong echo that distant event voices send into. Master → one soft-knee peak compressor. Ambience fades in over 4 s on first start. Measured cost in an offline render: ~1.7–2 % of one core (beds whose level is zero are disconnected so the audio thread stops pulling them).
 
-- **Wind:** 2 s looped white-noise `AudioBuffer` → `BiquadFilter` lowpass 400 Hz with `frequency` LFO (0.07 Hz, ±150) and gain LFO (0.05 Hz). Level follows `uWind`.
-- **River:** same noise buffer → bandpass 900 Hz, Q 0.7, second bandpass 2.4 kHz at −10 dB; gain = `1 / (1 + distance(camTarget, nearest river point) / 25)`; stereo pan by sign of `camTarget.x − riverX(z)`.
-- **Birds (day):** every 3–9 s a chirp: oscillator sine 2.8–4.2 kHz with a 60 ms frequency sweep down 400 Hz, 2–4 repeats at 110 ms, envelope attack 5 ms / release 80 ms, random pan. Density × season (spring 1.5×, winter 0.3×).
-- **Crickets (night):** oscillator square 4.3 kHz through bandpass, gated by a 28 Hz LFO, gain 0.08, fades in with `uGrade.night`.
-- **Market bustle:** 4 s brown-noise loop (noise through lowpass 250 Hz + bandpass 1.1 kHz mix) with gain = `smoothstep(20, 400, population) * 0.25` + event boost (festival +0.2). Add a hammer tick (short filtered noise burst, 90 ms) at 0.5 Hz while construction is in the shadow frustum, max 2 at once.
+Code: `src/audio/ambience.js` (scene factors, beds, scheduling), `river.js`, `voices.js` (event synths), `bus.js`. `audio.update(env)` runs at the UI refresh rate (~4 Hz); with `env.world` it reads the camera (listener position, zoom, right vector for panning), the grade's time of day (`grade.current.phase`, `night`) and the eased rain and snow.
+
+- **Wind:** pink noise under a lowpass; random gusts (new target every 2.5–9 s, random time constant) move level and cutoff together. Louder with weather wind, camera height, snow and rain.
+- **Leaves:** a soft rustle band (~0.8–5 kHz) whose level follows the gusts and the season's foliage (bare in winter, drier in autumn), with a fast random wobble.
+- **River:** a low wash heard across the valley plus, near the water, a gurgle (three narrow bands whose levels hop at random) and scattered rising-pitch bubbles. Level falls with distance from the bank and camera height; pans toward the water's side; fords babble more; spring runs fuller. `audio.setWaterSources([{x, z, intensity, radius}])` adds a brighter rush near rapids or weirs.
+- **Birds (day):** six perches; each bird keeps one motif (warbler, thrush, tit, sparrow, wren, wood pigeon, cuckoo in spring) and sings it with small variations in bouts, then rests. Dawn chorus at sunrise; fewer in rain, snow, winter and the town core.
+- **Night and evening:** five crickets chirping in bouts on warm evenings (pitch and period per cricket, faster when warmer); frogs near water in spring and summer; an occasional tawny owl.
+- **Village:** a murmur (two formant bands with syllable-rate wobble) that grows with population and nearness to a centre and pans toward it; a low street hum from the City era; mallets on building sites, an axe in early eras, a dog now and then, livestock bells in rural eras, a horse and cart in busier towns. Rain adds a dark hush and drips.
+- All events are scheduled up to 0.6 s ahead with random gaps (never a fixed beat). Nothing is tuned above ~4 kHz, so there is no hiss.
 - **Church/clock bell (era 2+/5+):** triangle wave 440 Hz + partials at 2.4× and 3.9× decaying over 2.5 s, plays at year end (bell count = era).
 - **UI:** paper slide (filtered noise, 140 ms, highpass 1.2 kHz, fade) on card enter; **decision chime**: two sines (660 → 880 Hz, 90 ms apart, release 400 ms) at −14 dB; tab tick (3 ms click); **era fanfare**: three stacked triangle notes (C4-G4-C5 + minor 3rd on hard eras), 1.6 s, with the bell.
 - Mute toggle in the time strip; levels in Settings; everything respects `document.hidden` (suspend context).

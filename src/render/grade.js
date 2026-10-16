@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {TOD_KEYS, YEAR_TO_PHASE, SUN_AZIMUTH_DEG, MOON_RISE, MOON_SPAN, MOON_AZ0_DEG, MOON_AZ1_DEG, piecewise} from '../daylight.js';
 
 // Season and time-of-day grading (design-visual §1.2, contract §0.6).
 //
@@ -19,41 +20,23 @@ const SEASON_NOON = [
 
 // Time-of-day presets. 'noon' means "use the season palette".
 const TOD = {
-  night: { sun: hex('#9fb4e0'), sky: hex('#5f6f99'), ground: hex('#3a3e46'), fog: hex('#2e3744'), tint: [0.78, 0.82, 0.96], exposure: 0.8, zenith: hex('#0e1526'), horizon: hex('#2d3a54'), sunI: 0.7, hemiI: 1.5, elevation: 42, night: 1 },
+  night: { sun: hex('#9fb4e0'), sky: hex('#5f6f99'), ground: hex('#3a3e46'), fog: hex('#2e3744'), tint: [0.78, 0.82, 0.96], exposure: 0.8, zenith: hex('#0e1526'), horizon: hex('#2d3a54'), sunI: 0.95, hemiI: 1.35, elevation: 42, night: 1 },
   dawn: { sun: hex('#ffcfa0'), sky: hex('#e2e6f6'), ground: hex('#5f5f48'), fog: hex('#d8cfc4'), tint: [1.02, 0.97, 0.95], exposure: 0.88, zenith: hex('#7f9cc8'), horizon: hex('#f3d2b4'), sunI: 2.0, hemiI: 1.2, elevation: 16, night: 0.15 },
   golden: { sun: hex('#ffc98a'), sky: hex('#ffd8c0'), ground: hex('#6a5a3c'), fog: hex('#e4c4a6'), tint: [1.08, 0.96, 0.86], exposure: 0.9, zenith: hex('#87a2c6'), horizon: hex('#f5cc9c'), sunI: 2.5, hemiI: 1.25, elevation: 24, night: 0 },
   dusk: { sun: hex('#ffa77e'), sky: hex('#9a9cbc'), ground: hex('#55504a'), fog: hex('#a9a3b2'), tint: [0.95, 0.9, 0.96], exposure: 0.86, zenith: hex('#46527f'), horizon: hex('#e8a487'), sunI: 1.6, hemiI: 1.15, elevation: 11, night: 0.5 },
 };
 
-// Phase keyframes (0 = midnight). The list wraps at 1.
-const TOD_KEYS = [
-  [0.0, 'night'], [0.19, 'night'], [0.26, 'dawn'], [0.36, 'noon'],
-  [0.6, 'noon'], [0.69, 'golden'], [0.77, 'dusk'], [0.845, 'night'], [1.0, 'night'],
-];
-
-// Seasonal mode: the year carries the day. Spring morning -> summer noon ->
-// autumn golden -> winter dusk -> a short night beat at year end -> dawn.
-const YEAR_TO_PHASE = [
-  [0.0, 0.24], [0.06, 0.34], [0.25, 0.44], [0.5, 0.56], [0.7, 0.665],
-  [0.84, 0.705], [0.91, 0.765], [0.94, 0.86], [0.975, 1.12], [1.0, 1.24],
-];
-
-const SUN_AZIMUTH = THREE.MathUtils.degToRad(215);
+// Phase keyframes, the seasonal year -> phase mapping, the sun's bearing and the
+// moon's path at night live in ../daylight.js, shared with the sim (so "sunset" and
+// "face the sun" there agree with the light drawn here).
+const SUN_AZIMUTH = THREE.MathUtils.degToRad(SUN_AZIMUTH_DEG);
+const MOON_AZ0 = THREE.MathUtils.degToRad(MOON_AZ0_DEG);
+const MOON_AZ1 = THREE.MathUtils.degToRad(MOON_AZ1_DEG);
+const scratchMoon = new THREE.Vector3();
 
 const smooth = (t) => t * t * (3 - 2 * t);
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const ramp = (a, b, x) => clamp01((x - a) / (b - a));
-
-function piecewise(keys, x) {
-  for (let i = 1; i < keys.length; i++) {
-    if (x <= keys[i][0]) {
-      const [x0, y0] = keys[i - 1];
-      const [x1, y1] = keys[i];
-      return y0 + (y1 - y0) * smooth((x - x0) / (x1 - x0 || 1));
-    }
-  }
-  return keys[keys.length - 1][1];
-}
 
 // A grade "frame": all the values we blend. Kept as plain objects with
 // preallocated colours so per-frame work allocates nothing.
@@ -201,6 +184,7 @@ export function createGrade() {
     else if (mode === 'slow') phase = (((time - dayStart) / 60) + 0.45) % 1; // one day per real minute
     else phase = piecewise(YEAR_TO_PHASE, yearT);
     gradeAt(target, yearT, phase);
+    current.phase = phase % 1; // time of day for the ambience (0 midnight, 0.5 noon)
     if (mode === 'off') target.night = 0;
 
     // Weather: rain greys the light and pulls the fog in; snow weather adds cover.
@@ -232,11 +216,21 @@ export function createGrade() {
     u.uYearT.value = yearT;
     const el = THREE.MathUtils.degToRad(current.elevation);
     u.uSunDir.value.set(Math.cos(el) * Math.sin(SUN_AZIMUTH), Math.sin(el), Math.cos(el) * Math.cos(SUN_AZIMUTH));
+    const moonly = THREE.MathUtils.smoothstep(current.night, 0.3, 0.9);
+    if (moonly > 0) {
+      const m = clamp01((((current.phase - MOON_RISE) % 1) + 1) % 1 / MOON_SPAN);
+      const az = MOON_AZ0 + (MOON_AZ1 - MOON_AZ0) * m;
+      const mel = THREE.MathUtils.degToRad(14 + 38 * Math.sin(Math.PI * m));
+      scratchMoon.set(Math.cos(mel) * Math.sin(az), Math.sin(mel), Math.cos(mel) * Math.cos(az));
+      u.uSunDir.value.lerp(scratchMoon, moonly).normalize();
+    }
     u.uSunColor.value.copy(current.sun);
     u.uSkyZenith.value.copy(current.zenith);
     u.uSkyHorizon.value.copy(current.horizon);
     u.uSkyGround.value.copy(current.ground);
-    u.uFogTint.value.copy(current.fog);
+    // The atmosphere colour leans toward the horizon so far land, far towns
+    // and the sky's horizon band all fade to the same air.
+    u.uFogTint.value.copy(current.fog).lerp(current.horizon, 0.3);
     u.uTint.value.copy(current.tint);
     u.uSnow.value = current.snow;
     u.uAutumn.value = current.autumn;
@@ -256,7 +250,7 @@ export function createGrade() {
     sun.color.copy(current.sun);
     sun.intensity = current.sunI;
     if (scene.fog) {
-      scene.fog.color.copy(current.fog);
+      scene.fog.color.copy(uniforms.uFogTint.value);
       scene.fog.near = current.fogNear;
       scene.fog.far = current.fogFar;
     }

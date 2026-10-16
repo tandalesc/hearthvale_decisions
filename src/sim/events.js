@@ -13,10 +13,11 @@ import {holds, makeCtx} from './conditions.js';
 import {rng, rngInt} from './rng.js';
 import {monthIndex} from './clock.js';
 import {setTag, touchBuilding} from './state.js';
-import {riverX, heightAt, waterAt, terrainSeed} from '../terrain.js';
+import {riverX, heightAt, waterAt, terrainKey, hasRiver} from '../terrain.js';
 import {policyModifiers, levelOf, costScale} from './policies.js';
 import {fill, coin} from './text/voice.js';
 import {addChronicle} from './chronicle.js';
+import {nudgeMood} from './factions.js';
 import {addCard, makeCard, applyEffects} from './docket.js';
 import * as bodies from './institutions.js';
 import {killShare, immigrate} from './households.js';
@@ -43,7 +44,8 @@ export const EVENTS = {
     titleCard: true,
     lapse: 'households',
     when: ['and', SPRING, ['or', ['lte', 'P.ecology', 0.8], ['not', ['has', 'policy', 'riverbank-protect']]]],
-    chance: (s, m) => 0.02 * m.get('floodChance') * (levelOf(s, 'riverbank-protect') ? 0.5 : 1) * (1.6 - s.pressures.ecology),
+    // No river, no river floods.
+    chance: (s, m) => (hasRiver() ? 1 : 0) * 0.02 * m.get('floodChance') * (levelOf(s, 'riverbank-protect') ? 0.5 : 1) * (1.6 - s.pressures.ecology),
     cooldown: 4,
     why: 'The river has burst its banks. Homes by the water stand knee-deep.',
     effects: [
@@ -470,7 +472,7 @@ function timberCluster(state) {
 const hillCache = new Map();
 export function highPoint(state, radius = 90) {
   const c = townCentre(state);
-  const key = `${terrainSeed?.() ?? 0}:${Math.round(c.x / 8)}:${Math.round(c.z / 8)}`;
+  const key = `${terrainKey()}:${Math.round(c.x / 8)}:${Math.round(c.z / 8)}`;
   if (hillCache.has(key)) return hillCache.get(key);
   let best = {x: c.x, z: c.z, h: -Infinity};
   for (let dz = -radius; dz <= radius; dz += 6) {
@@ -731,7 +733,7 @@ function applyEventOp(state, record, e) {
   if (e.patience) bodies.notePatience(state, e.patience.body, e.patience.amount);
   if (e.mood) {
     for (const f of state.factions) {
-      if (f.trades?.some((t) => e.mood.trades.includes(t))) f.mood = clamp01(f.mood + e.mood.amount);
+      if (f.trades?.some((t) => e.mood.trades.includes(t))) nudgeMood(f, clamp01(f.mood + e.mood.amount), 'events');
     }
   }
   if (e.cash) {
@@ -836,7 +838,7 @@ function offerTemplate(state, templateId) {
 function concedeGrievance(state) {
   const angry = [...state.factions].sort((a, b) => a.mood - b.mood)[0];
   if (!angry) return;
-  angry.mood = clamp01(angry.mood + 0.2);
+  nudgeMood(angry, clamp01(angry.mood + 0.2), 'rulings');
   if (angry.trades?.includes('labour')) {
     const before = levelOf(state, 'wage-floor');
     applyEffects(state, {id: 'riot', templateId: 'event:riot', cost: 0, data: {}}, {key: 'concede', effects: [{policy: 'wage-floor', level: before + 1}]});

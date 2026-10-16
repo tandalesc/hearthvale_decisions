@@ -6,6 +6,8 @@
 //
 // Each kind:
 //   id            snake_case, unique
+//   type          'choice' (default) | 'score' (criteria are a scale, lowest first)
+//                 | 'noul' (yes/no, "yes" key first); see src/decision-kinds.js
 //   criteria      option key -> short label (fixed; a question may narrow with `allowed`)
 //   context       per-question fields (slice descriptors plus the actor's own facts)
 //   state         which shared snapshot the question carries: SNAPSHOTS[kind.share]
@@ -35,7 +37,8 @@ export const BODY_KINDS = ['moot', 'agri-council', 'trades-guild', 'exchange', '
 export const CATEGORIES = ['land', 'labour', 'trade', 'tax', 'food', 'health', 'education', 'faith',
   'environment', 'infrastructure', 'civic', 'event'];
 export const MOODS = ['angry', 'uneasy', 'content', 'glad'];
-export const GRIEVANCES = ['housing', 'food', 'wages', 'roads', 'flood', 'health', 'faith', 'schooling', 'tolls', 'crime', 'none'];
+export const GRIEVANCES = ['housing', 'food', 'wages', 'roads', 'flood', 'health', 'faith', 'schooling', 'tolls', 'crime', 'eyesores', 'none'];
+export const LOOKS = ['shabby', 'plain', 'pleasant'];
 
 // Slice dimensions: how a population is cut. Values are what goes in context.
 export const SLICE_DIMS = {
@@ -86,6 +89,7 @@ const TOWN = {
   rules: text(480),   // sorted active rule ids, 'tithe 2' when level > 1, comma separated
   recent: text(120),  // tags of the last three years, sorted, at most four
   bodies: text(240),  // sorted active body ids
+  looks: oneOf(LOOKS, true),  // how the streets look (aesthetics.js); a district snapshot gives its own
 };
 
 // District-sliced questions carry a district snapshot; the same kind's other
@@ -282,10 +286,12 @@ export const KINDS = [
     instructions: (c) => `A builder looks for a site for a ${c.need}. A: ${c.a}.${c.b ? ` B: ${c.b}.` : ''}${c.c ? ` C: ${c.c}.` : ''}${c.d ? ` D: ${c.d}.` : ''} Which suits best?`,
   },
   {
-    id: 'migration_wave', share: 'town', slices: [], weights: {}, cadence: 12,
-    criteria: {none: 'Few people come or go.', trickle: 'A trickle of newcomers.', wave: 'A wave of newcomers.', exodus_pull: 'People are drawn away.'},
+    // A scale, lowest first: the model rates net migration instead of picking
+    // freely, which keeps it from backing exodus and wave at once.
+    id: 'migration_wave', type: 'score', share: 'town', slices: [], weights: {}, cadence: 12,
+    criteria: {exodus_pull: 'People are drawn away.', none: 'Few people come or go.', trickle: 'A trickle of newcomers.', wave: 'A wave of newcomers.'},
     context: {prestige: oneOf(['low', 'mid', 'high']), recent: text(60), neighbours: oneOf(['quiet', 'troubled'])},
-    instructions: (c) => `The wider world looks at Hearthvale. Its name is ${c.prestige}. Lately: ${c.recent || 'nothing much'}. Neighbouring towns are ${c.neighbours}. Who comes this year?`,
+    instructions: (c) => `The wider world looks at Hearthvale. Its name is ${c.prestige}. Lately: ${c.recent || 'nothing much'}. Neighbouring towns are ${c.neighbours}. How many people move here this year?`,
   },
   {
     id: 'merchant_speculate', share: 'district', slices: ['district'], weights: {district: 1}, cadence: 12,
@@ -327,10 +333,21 @@ export const KINDS = [
       `The land is worth ${c.valueRatio.replace('_', ' ')} next to what it earns.${c.yearsFarmed !== undefined ? ` They have farmed it ${c.yearsFarmed} years.` : ''} ${OWN}`,
   },
   {
-    id: 'take_loan', share: 'town', slices: [], weights: {}, cadence: 24,
-    criteria: {borrow_small: 'Borrow a little.', borrow_large: 'Borrow a lot.', sell_up: 'Sell up and start over.', hold: 'Hold on and wait.'},
-    context: {who: oneOf(['household', 'enterprise']), cash: num(-1e9, 1e9), monthlyCost: num(0, 1e9), debt: num(0, 1e9), rate: oneOf(['low', 'mid', 'high'])},
-    instructions: (c) => `A ${c.who} is short of coin. Cash ${Math.round(c.cash)}, costs ${Math.round(c.monthlyCost)} a month, debts ${Math.round(c.debt)}. Interest is ${c.rate}. What does it do? ${OWN}`,
+    // A scale of how hard they lean on credit, lowest first. The model reads
+    // money in words far better than raw numbers, so the instructions band them.
+    id: 'take_loan', type: 'score', share: 'town', slices: [], weights: {}, cadence: 24,
+    criteria: {sell_up: 'Sell up and start over.', hold: 'Hold on and wait.', borrow_small: 'Borrow a little.', borrow_large: 'Borrow a lot.'},
+    context: {who: oneOf(['household', 'enterprise']), cash: num(-1e9, 1e9), monthlyCost: num(0, 1e9), debt: num(0, 1e9), rate: oneOf(['low', 'mid', 'high']),
+      losing: int(0, 10, true)},
+    instructions: (c) => {
+      const cost = Math.max(1, c.monthlyCost);
+      const coin = c.cash <= 0 ? 'Its coin is gone and bills are due' : c.cash < 2 * cost ? 'It has a month or two of costs left' : 'It has some coin put by';
+      const years = c.debt / (12 * cost);
+      const owes = c.debt <= 0 ? 'It owes nothing.' : years < 1 ? 'It owes less than a year of costs.' : `It already owes ${years < 2 ? 'over a year' : `${Math.min(20, Math.floor(years))} years`} of costs.`;
+      const rate = {low: 'cheap', mid: 'fairly priced', high: 'dear'}[c.rate];
+      const trade = c.losing >= 2 ? ` Trade has been poor for ${c.losing} years.` : c.losing === 1 ? ' Trade was poor last year.' : '';
+      return `A ${c.who === 'enterprise' ? 'business' : 'household'} is short of coin. ${coin}. ${owes} Borrowing is ${rate}.${trade} What does the owner do? ${OWN}`;
+    },
   },
 ];
 

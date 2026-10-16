@@ -666,7 +666,6 @@ function bodyFacts(state, body) {
       status: ['petition', 'active', 'waning', 'dissolved', 'suspended'].includes(body.status) ? body.status : 'active',
       power: band3(body.power ?? 0.5),
       patience: band3(body.patience ?? 0.5),
-      delegated: body.delegated ? true : undefined,
     },
   };
   const rulings = bodyRulings(state, body.id, 4);
@@ -939,7 +938,6 @@ function effectRows(state, card, option) {
   if (!rows.length) {
     if (option.key === 'not_now') rows.push({act: 'wait', what: 'they ask again later'});
     else if (/^refuse/.test(option.key)) rows.push({act: 'displease', what: `the ${body}`});
-    else if (option.key === 'delegate') rows.push({act: 'delegate', what: `the ${body}`});
     else if (option.key === 'negotiate') rows.push({act: 'negotiate'});
     else rows.push({act: 'nothing'});
   }

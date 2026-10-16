@@ -3,18 +3,21 @@
 export const TIERS = {
   low: {
     name: 'low', pixelRatio: 1.25, shadowMapSize: 1024, shadowType: 'pcf', shadowRadius: 1,
-    peopleCast: false, water: 'low', reflection: false, cloudShadow: false, post: false,
+    water: 'low', reflection: false, cloudShadow: false, post: false,
     particles: 0.25, terrainDetail: 1, maxFps: 60,
+    ao: 'baked',
   },
   medium: {
     name: 'medium', pixelRatio: 1.75, shadowMapSize: 2048, shadowType: 'pcf', shadowRadius: 1,
-    peopleCast: false, water: 'medium', reflection: false, cloudShadow: false, post: false,
+    water: 'medium', reflection: false, cloudShadow: false, post: false,
     particles: 0.6, terrainDetail: 1, maxFps: 60,
+    ao: 'baked',
   },
   high: {
     name: 'high', pixelRatio: 1.75, shadowMapSize: 2048, shadowType: 'pcfsoft', shadowRadius: 3,
-    peopleCast: true, water: 'high', reflection: true, cloudShadow: true, post: true,
+    water: 'high', reflection: true, cloudShadow: true, post: true,
     particles: 1, terrainDetail: 1, maxFps: 60,
+    ao: 'ssao', // screen-space AO in the post pass (ssao.js); 'baked' = ground field only (occlusion.js)
   },
 };
 

@@ -2,7 +2,7 @@
 // Messages in:  {type: 'grid', grid (with terrainSeed)} | {type: 'route', id, key, from, to}
 // Messages out: {id, key, cells: Int32Array | null, crossings: number[]}
 import { RouteScheduler } from './navigation.js';
-import { setTerrainSeed, terrainSeed } from './terrain.js';
+import { useTerrain } from './terrain.js';
 
 const scheduler = new RouteScheduler({ maxCache: 2048 });
 let running = false;
@@ -15,7 +15,7 @@ function pump() {
 
 self.onmessage = ({ data }) => {
   if (data.type === 'grid') {
-    if ((data.grid.terrainSeed ?? null) !== terrainSeed()) setTerrainSeed(data.grid.terrainSeed ?? null);
+    useTerrain(data.grid.terrainSeed ?? null, data.grid.terrainVersion ?? 1, data.grid.terrainArchetype ?? null);
     scheduler.setGrid(data.grid);
     return;
   }

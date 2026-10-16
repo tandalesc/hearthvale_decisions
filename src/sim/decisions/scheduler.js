@@ -18,16 +18,19 @@ import {monthIndex} from '../clock.js';
 import {byId} from '../state.js';
 import {rng, sampleDist} from '../rng.js';
 import {POLICIES, levelOf} from '../policies.js';
-import {moodBand, factionById, splitFaction, rootFaction} from '../factions.js';
+import {moodBand, factionById, splitFaction, rootFaction, nudgeMood} from '../factions.js';
 import {addChronicle} from '../chronicle.js';
+import {foldReaction} from '../approval.js';
 import * as bodies from '../institutions.js';
 import {pool, disagreement} from '../../decision-pool.js';
 import {KIND_BY_ID, KINDS} from './kinds.js';
+import {factionShabby, LOOKS_CARE} from '../aesthetics.js';
 import {EFFECTS, fallbackFor, normalise, applySweepDeltas} from './effects.js';
 import {
   buildSlices, sliceValues, combinations, comboKey, memberships, townSnapshot, districtSnapshot,
   proposalSnapshot, bodySnapshot, districtIdByName, centreIdByName, safe, updateBands,
 } from './slices.js';
+import {monthlyCost} from '../enterprises.js';
 
 export const ANSWER_LOG_CAP = 2000;
 const SWEEP_DEADLINE_TICKS = 40;
@@ -167,11 +170,20 @@ export function cardAdded(state, card) {
   if (!['proposal', 'demand', 'debate', 'petition'].includes(card.kind)) return;
   const kind = card.data?.forms ? 'institution_form_support' : 'faction_stance';
   // Stances show at once (fallback); the model's view replaces them when it lands.
+  Object.assign(card.stances, localStances(state, card));
+  g(state).asks.push({kind, meta: {cardId: card.id}});
+}
+
+// The factions' local (fallback) stances on a card, asking no one: what
+// cardAdded shows at once. A body reads them before paying from its budget.
+export function localStances(state, card) {
+  const kind = card.data?.forms ? 'institution_form_support' : 'faction_stance';
+  const out = {};
   for (const q of buildQuestions(state, kind, {cardId: card.id, card})) {
     const p = fallbackFor(kind, q.context, q.snapshot, state, q.allowed);
-    card.stances[q.subject.faction] = {stance: argmax(p), p: round2(p[argmax(p)]), probs: roundAll(p), source: 'local'};
+    out[q.subject.faction] = {stance: argmax(p), p: round2(p[argmax(p)]), probs: roundAll(p), source: 'local'};
   }
-  g(state).asks.push({kind, meta: {cardId: card.id}});
+  return out;
 }
 
 export function policyChanged(state, policyId, change, card) {
@@ -376,9 +388,11 @@ function buildQuestions(state, kind, meta) {
           snapshot: townSnapshot(state), allowed: null, priority: PRIORITY.sweep}));
     }
     case 'take_loan': {
-      const short = state.households.filter((h) => (h.savings ?? 0) < (h.rent ?? 0)).slice(0, 20);
-      return short.map((h) => ({key: qkey(kind, m, `h${h.id}`), subject: {householdId: h.id}, priority: PRIORITY.sweep,
-        context: {who: 'household', cash: Math.round(h.savings ?? 0), monthlyCost: Math.round(Math.max(0, h.rent ?? 0)), debt: Math.round(h.debt ?? 0), rate: 'mid'},
+      // Enterprises short of coin: they are the ones who borrow (enterprises.js maybeBorrow).
+      const short = state.enterprises.filter((e) => !e.public && (e.cash ?? 0) < monthlyCost(state, e)).slice(0, 20);
+      return short.map((e) => ({key: qkey(kind, m, `e${e.id}`), subject: {enterpriseId: e.id}, priority: PRIORITY.sweep,
+        context: {who: 'enterprise', cash: clampN(Math.round(e.cash ?? 0)), monthlyCost: Math.round(Math.max(0, monthlyCost(state, e))),
+          debt: clampN(Math.round(e.debt ?? 0)), rate: 'mid', losing: Math.min(10, e.lossYears ?? 0)},
         snapshot: townSnapshot(state), allowed: null}));
     }
     default:
@@ -441,7 +455,19 @@ const FACTION_GRIEVANCE = {
 function grievanceOf(state, f) {
   const health = (state.pressures.health ?? 0.4) < 0.3 ? 'health' : null;
   const g0 = FACTION_GRIEVANCE[f.parent ?? f.id]?.(state);
-  return g0 && g0 !== 'none' ? g0 : health ?? 'none';
+  // Streets gone badly to seed outrank the milder complaints (not hunger,
+  // homes, pay, floods, sickness or crime).
+  if (eyesoresFor(state, f, 2.5) && !['food', 'housing', 'wages', 'flood', 'crime'].includes(g0) && !health) return 'eyesores';
+  return g0 && g0 !== 'none' ? g0 : health ?? (eyesoresFor(state, f) ? 'eyesores' : 'none');
+}
+
+// Shabby streets are a complaint once the town is a town and enough of a
+// group lives by them: sooner for those who mind looks most (aesthetics.js
+// keeps the share of each faction whose own street is shabby).
+function eyesoresFor(state, f, factor = 1) {
+  if ((state.era ?? 0) < 2) return false;
+  const care = LOOKS_CARE[f.parent ?? f.id] ?? 0.08;
+  return factionShabby(state, f.id) >= (care >= 0.15 ? 0.1 : 0.2) * factor;
 }
 
 function factionHasBody(state, f) {
@@ -573,17 +599,20 @@ function applyInbox(state, rt) {
   if (!rt.inbox.length) return;
   const batch = rt.inbox.splice(0).sort((a, b) => (a.q.key < b.q.key ? -1 : a.q.key > b.q.key ? 1 : 0));
   const log = state.answerLog;
+  // Tables an answer grew: trimmed once after the batch, not per answer.
+  const grown = new Map();
   for (const item of batch) {
     const sweep = item.sweepId != null ? sweepById(state, item.sweepId) : null;
     const choice = sampleDist(item.probs, rng(state));
     log.push({key: item.q.key, kind: sweep?.kind ?? item.kind, month: monthIndex(state.time), choice, probs: roundAll(item.probs), src: item.src});
-    if (log.length > ANSWER_LOG_CAP) log.splice(0, log.length - ANSWER_LOG_CAP);
     if (sweep && !sweep.answers[item.q.key]) {
       sweep.answers[item.q.key] = {key: item.q.key, subject: item.q.subject, context: item.q.context, probs: item.probs, choice, src: item.src};
       sweep.answered++;
     }
-    else if (item.extra) storeExtra(state, item, choice);
+    else if (item.extra) storeExtra(state, item, grown);
   }
+  if (log.length > ANSWER_LOG_CAP) log.splice(0, log.length - ANSWER_LOG_CAP);
+  for (const [table, cap] of grown) pruneTable(table, cap);
 }
 
 // Finish the oldest sweep whose answers are all in (or that waited too long
@@ -637,7 +666,10 @@ function finishSweep(state, rt, sweep) {
     applySweepDeltas(state, sweep.kind, pooledShares);
     // Disagreement feeds I.tension, the torn op and refinement (online only).
     if (GAME_TORN_KINDS.has(sweep.kind) || rt.bus) measureDisagreement(state, sweep.kind, store, kind);
-    if (sweep.kind === 'react_to_policy') watchSplits(state);
+    if (sweep.kind === 'react_to_policy') {
+      watchSplits(state);
+      foldReaction(state, answers, sweep.meta, pooledShares);
+    }
   } else if (kind.slices[0] === 'faction') {
     const n = answers.length || 1;
     const avg = {};
@@ -888,7 +920,7 @@ function farmDistribution(state, subject) {
 
 function districtLine(state, id) {
   const s = districtSnapshot(state, id);
-  return safe(`${s.districtName ?? 'a quarter'}, ${s.character ?? 'old-town'}, rent ${s.rent ?? 'mid'}, ${s.roads ?? 'paths'}, ${s.crowding ?? 'snug'}`, 80);
+  return safe(`${s.districtName ?? 'a quarter'}, ${s.character ?? 'old-town'}, rent ${s.rent ?? 'mid'}, ${s.roads ?? 'paths'}, ${s.crowding ?? 'snug'}, ${s.looks ?? 'plain'}`, 80);
 }
 
 const timeOfDayOf = (state) => ['morning', 'midday', 'evening'][Math.min(2, Math.floor(((state.time.tick % 50) / 50) * 3))];
@@ -947,12 +979,12 @@ function askExtra(state, rt, bus, kindId, subjectKey, context, snap, allowed, pr
 // One level of history, so notes can say "more of them think of leaving".
 const withPrev = (old, next) => (old ? {...next, prev: {probs: old.probs, month: old.month}} : next);
 
-function storeExtra(state, item) {
+function storeExtra(state, item, grown) {
   const gov = g(state);
   const month = monthIndex(state.time);
   const table = item.refine ? (gov.refined[item.kind] ??= {}) : (gov.individual[item.kind] ??= {});
   table[item.subjectKey] = withPrev(table[item.subjectKey], {probs: roundAll(item.probs), month, src: 'model'});
-  pruneTable(table, item.refine ? 400 : 5000);
+  grown.set(table, item.refine ? 400 : 5000);
   if (item.refine && item.kind === 'react_to_policy') refinedReaction(state, item.subjectKey, item.probs);
   runtimeOf(state).pooled.clear();
 }
@@ -965,14 +997,31 @@ function refinedReaction(state, comboKeyStr, probs) {
   const row = state.disagreement?.react_to_policy?.[comboKeyStr];
   const share = row ? row.n / Math.max(1, buildSlices(state).people) : 0.05;
   const push = ((probs.support ?? 0) * 0.2 - (probs.grumble ?? 0) * 0.08 - ((probs.protest ?? 0) + (probs.strike ?? 0) + (probs.leave ?? 0)) * 0.2) * share;
-  for (const f of state.factions) if (f.trades?.includes(parts.trade)) f.mood = Math.max(0, Math.min(1, f.mood + push));
+  for (const f of state.factions) if (f.trades?.includes(parts.trade)) nudgeMood(f, Math.max(0, Math.min(1, f.mood + push)), 'reactions');
 }
 
+// Keep the newest `cap` rows: drop the oldest by (month, key). A full table
+// is usually over by a few rows, so those are picked in one pass instead of
+// sorting every key.
 function pruneTable(table, cap) {
   const keys = Object.keys(table);
-  if (keys.length <= cap) return;
-  keys.sort((a, b) => table[a].month - table[b].month || (a < b ? -1 : 1));
-  for (const k of keys.slice(0, keys.length - cap)) delete table[k];
+  const extra = keys.length - cap;
+  if (extra <= 0) return;
+  const older = (a, b) => table[a].month - table[b].month || (a < b ? -1 : 1);
+  if (extra > 64) {
+    keys.sort(older);
+    for (let i = 0; i < extra; i++) delete table[keys[i]];
+    return;
+  }
+  const drop = []; // the `extra` oldest so far, oldest first
+  for (const k of keys) {
+    if (drop.length === extra && older(k, drop[extra - 1]) >= 0) continue;
+    let i = Math.min(drop.length, extra - 1);
+    while (i > 0 && older(k, drop[i - 1]) < 0) i--;
+    drop.splice(i, 0, k);
+    if (drop.length > extra) drop.pop();
+  }
+  for (const k of drop) delete table[k];
 }
 
 // ---------------------------------------------------------------------------

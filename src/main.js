@@ -9,6 +9,7 @@ import {loadNarrator, loadRenderer, loadSim} from './ui/bridge.js';
 import {createApp} from './ui/app.js';
 import {createPrefs} from './ui/prefs.js';
 import {createAudio} from './audio/index.js';
+import {rapidsSources} from './river.js';
 import {createSaveStore} from './save-store.js';
 
 const SAVE_KEY = 'hearthvale-save';
@@ -69,6 +70,8 @@ async function boot() {
     } catch { /* storage blocked */ }
     state = seed ? sim.createState(seed) : sim.createState();
   }
+  // The town's terrain seed is set now: riffles and cascades get their own water sound.
+  audio.setWaterSources(rapidsSources());
 
   // ---------- decisions ----------
   let modelEnabled = store.get(MODEL_KEY) !== 'false';
@@ -110,12 +113,12 @@ async function boot() {
   };
   let world;
   try {
-    world = renderer.createWorld(makeCanvas(), {quality: prefs.get('quality')});
+    world = renderer.createWorld(makeCanvas(), {quality: prefs.get('quality'), batterySaver: prefs.get('batterySaver')});
   } catch (err) {
     // A canvas keeps its first context type, so the fallback gets a new one.
     console.error('[hearthvale] renderer failed; using the simple map', err);
     const {createWorld} = await import('./ui/dev/stub-world.js');
-    world = createWorld(makeCanvas(), {quality: prefs.get('quality')});
+    world = createWorld(makeCanvas(), {quality: prefs.get('quality'), batterySaver: prefs.get('batterySaver')});
     renderer.kind = 'stub-fallback';
   }
   // The in-game Motion setting also calms the 3D world (weather, birds, sway).
@@ -123,10 +126,12 @@ async function boot() {
   applyWorldMotion();
   prefs.onChange(applyWorldMotion);
   // 20 floats per walker: the extra slots carry waypoint arrival times so the
-  // villager shader stops at the waypoint instead of overshooting at 3×/8×.
+  // villager shader stops at the waypoint instead of overshooting at 3×/5×.
   let view = sim.createRenderView ? sim.createRenderView(state, {rowFloats: 20}) : null;
 
   // ---------- speed ----------
+  // Sim seconds per real second at 1x (sim/clock.js PACE). Try others with ?pace=.
+  const PACE = Number(params.get('pace')) > 0 ? Number(params.get('pace')) : sim.pace ?? 1;
   let speed = params.get('paused') === '1' ? 0 : 1;
   let lastSpeed = 1;
   world.setSimSpeed?.(speed);
@@ -269,29 +274,44 @@ async function boot() {
   let last = performance.now();
   const services = {decisions, routes, now: 0};
   let worldErrors = 0, simErrors = 0;
+  // Real seconds not yet given to the sim: on frames the world will not draw
+  // (Battery saver, 60 Hz cap on a 120 Hz screen, paused) the sim waits and
+  // catches up on the next drawn frame. Its fixed 0.1 s tick makes the
+  // outcome the same, and walkers are extrapolated to each drawn frame.
+  let simOwed = 0;
   function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.1);
     last = now;
     services.now = now;
-    if (speed > 0) {
+    simOwed = speed > 0 ? Math.min(simOwed + dt, 0.25) : 0;
+    let draw = true;
+    try {
+      draw = world.frameDue?.(now / 1000, dt) ?? true;
+    } catch (err) {
+      if (worldErrors++ === 0) console.error('[hearthvale] render failed', err);
+    }
+    if (draw && speed > 0) {
       const t0 = performance.now();
       try {
         routes?.tick?.(state);
-        sim.stepTick(state, dt * speed, services);
+        sim.stepTick(state, simOwed * speed * PACE, services);
         simErrors = 0;
       } catch (err) {
         if (simErrors++ === 0) console.error('[hearthvale] sim step failed', err);
       }
       simMs = simMs * 0.9 + (performance.now() - t0) * 0.1;
     }
-    try {
-      view?.sync(state, {now: now / 1000, speed});
-      world.update(view, now / 1000, dt);
-      worldErrors = 0;
-    } catch (err) {
-      if (worldErrors++ === 0) console.error('[hearthvale] render failed', err);
-      if (worldErrors === 30) swapToStubWorld();
+    if (draw) {
+      simOwed = 0;
+      try {
+        view?.sync(state, {now: now / 1000, speed: speed * PACE});
+        world.update(view, now / 1000, dt);
+        worldErrors = 0;
+      } catch (err) {
+        if (worldErrors++ === 0) console.error('[hearthvale] render failed', err);
+        if (worldErrors === 30) swapToStubWorld();
+      }
     }
     app.update(state, now, view);
     if (now - lastSave > AUTOSAVE_MS) {
@@ -310,7 +330,7 @@ async function boot() {
   async function swapToStubWorld() {
     const {createWorld} = await import('./ui/dev/stub-world.js');
     try { world.dispose?.(); } catch { /* already broken */ }
-    world = createWorld(makeCanvas(), {quality: prefs.get('quality')});
+    world = createWorld(makeCanvas(), {quality: prefs.get('quality'), batterySaver: prefs.get('batterySaver')});
     renderer.kind = 'stub-fallback';
     window.hearthvale.world = world;
     app.setWorld(world);

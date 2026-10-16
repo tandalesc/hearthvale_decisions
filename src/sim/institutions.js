@@ -4,7 +4,7 @@
 // A body record in state.institutions:
 //   {id, kind, name, foundedYear, status: 'active'|'waning'|'dissolved',
 //    budgetShare, power, patience, metrics: {metricId: number[]}, lastProposalMonth,
-//    delegated, delegateCap, standingOrders: [], accepted, refused, expired,
+//    accepted, refused, expired, budget (budgets.js),
 //    waningSince, declineSince, asker: {name, role}, funds, spentThisYear, report: []}
 //
 // Bodies petition to form through docket cards; the player rules. Drafting goes
@@ -16,15 +16,16 @@ import {monthIndex} from './clock.js';
 import {riverX} from '../terrain.js';
 import {setTag} from './state.js';
 import {delta} from './pressures.js';
-import {POLICIES, CATEGORY_ERA, levelOf, canAdopt, againstGrain, upkeepFor, costScale, fiscalBase, detectTensions} from './policies.js';
+import {POLICIES, CATEGORY_ERA, levelOf, canAdopt, againstGrain, upkeepFor, costScale, detectTensions} from './policies.js';
 import {fill, count, coin, LINES} from './text/voice.js';
 import {addChronicle} from './chronicle.js';
-import {factionGroup} from './factions.js';
+import {factionGroup, nudgeMood} from './factions.js';
 import {addCard, cardsFrom, makeCard} from './docket.js';
 import {candidateWorks as worldCandidates, bridgeCandidates as worldBridges} from './works.js';
 import * as worksApi from './works.js';
-import {payBuilders} from './economy.js';
+import {payBuilders, purseBase} from './economy.js';
 import {templateSubjects, subjectBlocked, subjectInFlight} from './subjects.js';
+import {townLooks} from './aesthetics.js';
 
 const has = (id) => ['has', 'institution', id];
 
@@ -77,6 +78,12 @@ export function refreshWorks(state) {
 }
 
 export const draftsWorks = (body) => (INSTITUTIONS[body?.kind]?.templates ?? []).some((t) => TEMPLATES[t]?.work && TEMPLATES[t].work !== 'bridge-basic');
+
+// Every cached candidate, fetching nothing (budget drafting at season open).
+export function cachedWorks(state) {
+  const table = worksTable(state);
+  return neededKinds(state).flatMap((kind) => table.kinds[kind]?.list ?? []);
+}
 
 // Every cached candidate; a needed kind never fetched is fetched now.
 export function candidateWorks(state) {
@@ -261,7 +268,7 @@ export const INSTITUTIONS = {
     },
     explainer: 'The surveyors work here. They see where people walk and plan the streets.',
     metrics: ['roads', 'traffic', 'density', 'housing'],
-    templates: ['pave-lane', 'square', 'widen', 'ring-road', 'grid', 'bridge', 'bridge-upgrade', 'redevelop-centre', 'turnpike'],
+    templates: ['pave-lane', 'square', 'widen', 'ring-road', 'grid', 'bridge', 'bridge-upgrade', 'redevelop-centre', 'turnpike', 'green-space'],
   },
   union: {
     name: "Workers' Union", icon: 'fist', axis: {market: -1},
@@ -334,7 +341,7 @@ export const INSTITUTIONS = {
     },
     explainer: 'The players and musicians meet here. They bring fairs, plays and music.',
     metrics: ['prestige', 'fairs', 'theatres', 'avgWealth'],
-    templates: ['fair', 'theatre', 'carnival'],
+    templates: ['fair', 'theatre', 'carnival', 'green-space'],
   },
 };
 
@@ -621,6 +628,18 @@ export const TEMPLATES = {
       {key: 'do', label: 'Build in timber', tradeoff: 'Cheap. It will need replacing in sixty years.', effects: [{work: true, variant: 'timber'}, {deltas: {riverTrade: 0.03}}]},
       {key: 'stone', label: 'Build in stone', tradeoff: 'Three times the cost. It lasts and looks fine.', effects: [{work: true, variant: 'stone'}, {deltas: {prestige: 0.02, riverTrade: 0.04}}]},
       {key: 'ferry', label: 'License a ferry', tradeoff: 'No cost. Slower, and the ferryman takes a fee.', effects: [{work: true, variant: 'ferry'}, {deltas: {riverTrade: 0.01}}]},
+    ],
+  },
+  // A natural spot people already walk out to, kept green for good (parks.js).
+  // Keener when the streets look shabby and the town is filling up.
+  'green-space': {
+    title: 'Keep a green space', category: 'land', work: 'park',
+    helps: ['gentry', 'clerical', 'labour'], hurts: [],
+    why: 'People walk out to {place} on rest days. It should stay green.',
+    when: ['and', ['era', 1], ['gte', 'I.pop', 150]],
+    need: (s) => 0.18 + 0.35 * ramp(0.6 - townLooks(s), 0, 0.3) + 0.25 * ramp(ind(s, 'density'), 0.3, 0.7) + 0.1 * ramp(pr(s, 'prestige'), 0.1, 0.5),
+    options: [
+      {key: 'do', label: 'Make it a park', tradeoff: 'It costs {cost}. Nobody may build there. People will walk there.', effects: [{work: true}, {deltas: {ecology: 0.01}}]},
     ],
   },
   quay: {
@@ -1031,7 +1050,7 @@ export function createBody(state, kind, budgetShare = 0.06) {
   return {
     id: kind, kind, name: bodyName(state, kind), foundedYear: state.time.year, status: 'active',
     budgetShare, power: 0.4, patience: 1, metrics: {}, lastProposalMonth: monthIndex(state.time),
-    delegated: false, delegateCap: 0, standingOrders: [], accepted: 0, refused: 0, expired: 0,
+    accepted: 0, refused: 0, expired: 0,
     waningSince: null, declineSince: null, asker: askerFor(state, kind), funds: 0, spentThisYear: 0,
     report: [], nextDraftMonth: monthIndex(state.time) + 3,
   };
@@ -1063,7 +1082,12 @@ export function initGovernance(state) {
   return state;
 }
 
+// Delegation and standing orders are retired (yearly budgets and advisers took
+// their place): an old save's fields are dropped on restore.
+const RETIRED = ['delegated', 'delegateCap', 'standingOrders'];
+
 function normaliseBody(state, body) {
+  for (const k of RETIRED) delete body[k];
   const fresh = createBody(state, body.kind, body.budgetShare ?? 0);
   for (const [k, v] of Object.entries(fresh)) if (body[k] === undefined) body[k] = v;
   body.name = bodyName(state, body.kind, body);
@@ -1075,7 +1099,7 @@ export const activeBodies = (state) => state.institutions.filter((b) => b.status
 export const liveBodies = (state) => state.institutions.filter((b) => b.status === 'active' || b.status === 'waning');
 
 // ---------------------------------------------------------------------------
-// Power, support, delegation
+// Power and support
 // ---------------------------------------------------------------------------
 
 // Share of households in the body's constituency (0..1).
@@ -1117,53 +1141,6 @@ export function computePower(state, body) {
   return Math.max(0, Math.min(1, 0.3 + 0.4 * record + 0.3 * supportShare(state, body.kind) + guild));
 }
 
-export const canDelegate = (state, body) =>
-  body.kind !== 'moot' && body.status === 'active' && ((state.era ?? 0) >= 3 || (body.accepted >= 4 && body.refused === 0));
-
-export function setDelegated(state, bodyId, on, cap = 0) {
-  const body = bodyOf(state, bodyId);
-  if (!body || (on && !canDelegate(state, body))) return false;
-  if (!!body.delegated === !!on && body.delegateCap === cap) return true;
-  body.delegated = !!on;
-  body.delegateCap = Math.max(0, Math.round(cap || 0));
-  addChronicle(state, fill(on ? LINES.delegated : LINES.undelegated, {name: `The ${body.name}`}), 'decision', {body: body.id});
-  return true;
-}
-
-// Standing orders: {id?, match: {category?, templateId?, policy?}, action: 'approve'|'refuse', maxCost?}
-export function setStandingOrder(state, bodyId, order) {
-  const body = bodyOf(state, bodyId);
-  if (!body || !order) return false;
-  if (!(state.era >= 3 || body.delegated)) return false;
-  body.standingOrders ??= [];
-  const id = order.id ?? `so${body.standingOrders.length + 1}`;
-  const at = body.standingOrders.findIndex((o) => o.id === id);
-  if (order.remove) {
-    if (at >= 0) body.standingOrders.splice(at, 1);
-    return true;
-  }
-  const clean = {id, match: {...(order.match ?? {})}, action: order.action === 'refuse' ? 'refuse' : 'approve',
-    maxCost: Number.isFinite(order.maxCost) ? order.maxCost : null};
-  if (at >= 0) body.standingOrders[at] = clean;
-  else body.standingOrders.push(clean);
-  return true;
-}
-
-// Which standing order (if any) settles this card.
-export function standingOrderFor(state, card) {
-  for (const body of [bodyOf(state, card.from), bodyOf(state, 'moot')]) {
-    for (const o of body?.standingOrders ?? []) {
-      const m = o.match ?? {};
-      if (m.category && m.category !== card.category) continue;
-      if (m.templateId && m.templateId !== card.templateId) continue;
-      if (m.policy && m.policy !== card.data?.policy) continue;
-      if (o.action === 'approve' && o.maxCost != null && (card.cost ?? 0) > o.maxCost) continue;
-      return o;
-    }
-  }
-  return null;
-}
-
 export function dissolveBody(state, bodyId) {
   const body = bodyOf(state, bodyId);
   if (!body || body.kind === 'moot' || body.status === 'dissolved') return false;
@@ -1174,7 +1151,6 @@ export function dissolveBody(state, bodyId) {
 
 function endBody(state, body, line) {
   body.status = 'dissolved';
-  body.delegated = false;
   body.dissolvedYear = state.time.year;
   setTag(state, `dissolved:${body.kind}`);
   state.docket = state.docket.filter((c) => c.from !== body.id || c.kind === 'report');
@@ -1208,7 +1184,7 @@ function canPetition(state, kind) {
 export function petitionCard(state, kind) {
   const def = INSTITUTIONS[kind];
   const name = bodyName(state, kind);
-  const tax = fiscalBase(state);
+  const tax = purseBase(state.economy?.lastYear ?? {});
   const purse = (share) => coin(Math.round(tax * share));
   return makeCard(state, {
     kind: 'petition', from: 'moot', templateId: `form:${kind}`, category: 'civic',
@@ -1231,7 +1207,8 @@ export function petitionCard(state, kind) {
 export const PURSE_CAP = 0.25;
 
 export function balancePurses(state) {
-  const live = state.institutions.filter((b) => b.status === 'active' && b.kind !== 'moot');
+  // Bodies on a yearly budget (budgets.js) have no purse share.
+  const live = state.institutions.filter((b) => b.status === 'active' && b.kind !== 'moot' && b.budget?.mode !== 'annual');
   const granted = live.reduce((n, b) => n + (b.grantShare ?? b.budgetShare ?? 0), 0);
   // A full chest lets the bodies spend more (up to 35% of tax together).
   const cap = PURSE_CAP + 0.1 * ramp(ind(state, 'treasuryYears'), 4, 8);
@@ -1263,13 +1240,13 @@ export function refuseBody(state, kind) {
   setTag(state, `refused:${kind}`);
   if (String(kind).startsWith('ward:')) {
     const cid = Number(kind.split(':')[1]);
-    for (const f of state.factions) if (f.centreId === cid) f.mood = Math.max(0, f.mood - 0.1);
+    for (const f of state.factions) if (f.centreId === cid) nudgeMood(f, Math.max(0, f.mood - 0.1), 'rulings');
     delta(state, 'unrest', 0.02, `refused:${kind}`);
     addChronicle(state, fill(LINES.bodyRefused, {name: `a council for ${centreName(state, cid)}`}), 'decision', {body: kind});
     return;
   }
   delta(state, 'unrest', 0.03, `refused:${kind}`);
-  for (const f of factionGroup(state, INSTITUTIONS[kind]?.faction)) f.mood = Math.max(0, f.mood - 0.15);
+  for (const f of factionGroup(state, INSTITUTIONS[kind]?.faction)) nudgeMood(f, Math.max(0, f.mood - 0.15), 'rulings');
   addChronicle(state, fill(LINES.bodyRefused, {name: `the ${bodyName(state, kind)}`}), 'decision', {body: kind});
 }
 
@@ -1338,7 +1315,7 @@ export function eligibleTemplates(state, body, opts = {}) {
     let work = null;
     if (t.work) {
       const pool = t.work === 'bridge-basic' ? basicBridges(state) : t.work === 'bridge-upgrade' ? bridgeUpgrades(state)
-        : (candidates ??= candidateWorks(state)).filter((w) => w.kind === t.work);
+        : (candidates ??= opts.cachedOnly ? cachedWorks(state) : candidateWorks(state)).filter((w) => w.kind === t.work);
       work = pool.find((w) => (!t.workFilter || t.workFilter(w)) && !blocked(state, tid, w.id, w));
       if (!work) continue;
     } else if (blocked(state, tid, null)) {
@@ -1775,7 +1752,7 @@ function detailsFor(state, body, cost) {
   const rows = [];
   if (cost) rows.push({label: 'Cost', value: coin(cost)});
   rows.push({label: 'Town coin', value: coin(state.treasury ?? 0)});
-  if (body.kind !== 'moot') rows.push({label: `${body.name} purse`, value: coin(body.funds ?? 0)});
+  if (body.kind !== 'moot') rows.push({label: body.budget?.mode === 'annual' ? `${body.name} budget left` : `${body.name} purse`, value: coin(body.funds ?? 0)});
   return rows.slice(0, 4);
 }
 
@@ -1850,8 +1827,9 @@ export function institutionsYearly(state) {
       body.patience = Math.min(1, body.patience + 0.1);
       // The economy pays each purse in; a body spends part of it on its own
       // work every year (clerks, tools, small repairs), so coin keeps moving.
-      const running = Math.round((body.funds ?? 0) * RUNNING_SHARE);
-      const spent = running > 0 ? payBuilders(state, `body:${body.id}`, running, 'bodies') : 0;
+      // (A body on a yearly budget pays its running line monthly instead.)
+      const running = body.budget?.mode === 'annual' ? 0 : Math.round((body.funds ?? 0) * RUNNING_SHARE);
+      const spent = running > 0 ? payBuilders(state, `body:${body.id}`, running, 'body-running') : 0;
       body.spentThisYear = spent;
       budgets += spent;
       byBody[body.id] = spent;
@@ -1867,7 +1845,7 @@ export function institutionsYearly(state) {
     } else if (body.status === 'waning' && year - body.waningSince >= 5) {
       endBody(state, body, LINES.bodyDissolved);
     }
-    if (body.delegated && body.report?.length) {
+    if (body.budget?.mode === 'annual' && body.report?.length) {
       addCard(state, reportCard(state, body));
       body.report = [];
     }
@@ -1879,7 +1857,6 @@ export function startWaning(state, body) {
   if (body.status !== 'active' || body.kind === 'moot') return;
   body.status = 'waning';
   body.waningSince = state.time.year;
-  body.delegated = false;
   body.pleaded = false;
   addChronicle(state, fill(LINES.bodyWaning, {name: `The ${body.name}`}), 'line', {body: body.id});
   invalidateCtx(state);
@@ -1973,7 +1950,7 @@ function wardPetitionCard(state, c) {
   const def = INSTITUTIONS.ward;
   const vars = {centre: c.name};
   const name = `${c.name} Ward Council`;
-  const purse = (share) => coin(Math.round(fiscalBase(state) * share));
+  const purse = (share) => coin(Math.round(purseBase(state.economy?.lastYear ?? {}) * share));
   return makeCard(state, {
     kind: 'petition', from: 'moot', templateId: `form:ward:${c.id}`, category: 'civic',
     title: fill(def.petition.title, vars), why: fill(def.petition.why, vars),

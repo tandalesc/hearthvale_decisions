@@ -37,8 +37,10 @@ export function createLights({ renderer, scene, grade }) {
   let dirty = true;
   let lastShadowTime = -1;
   let animatingUntil = 0;
+  let followingUntil = 0; // walkers casting: refresh at frame rate (animInterval)
   let minInterval = 0.25;
   let turnInterval = 0;
+  let animInterval = 0;
   // Longest shadow that matters (a tall building at a low sun), in metres.
   const SHADOW_REACH = 20;
 
@@ -64,6 +66,9 @@ export function createLights({ renderer, scene, grade }) {
     // While the sun turns, refresh as soon as shadows would move half a texel:
     // every frame on medium/high, at most 10 Hz on low.
     turnInterval = q.name === 'low' ? 0.1 : 0;
+    // Moving casters (walkers in 'full' people shadows): every drawn frame on
+    // high, 30 Hz below (a hair early so frame-time jitter never skips one).
+    animInterval = q.name === 'high' ? 0 : 1 / 30 - 0.004;
     dirty = true;
   }
 
@@ -72,9 +77,14 @@ export function createLights({ renderer, scene, grade }) {
     dirty = true;
   }
 
-  /** Keep the shadow map refreshing for a while (animated casters on screen). */
-  function animateFor(seconds, now) {
-    animatingUntil = Math.max(animatingUntil, now + seconds);
+  /**
+   * Keep the shadow map refreshing for a while (animated casters on screen):
+   * at most every minInterval, or at frame rate (animInterval) with `follow`
+   * for walkers, whose shadows must keep up with them.
+   */
+  function animateFor(seconds, now, { follow = false } = {}) {
+    if (follow) followingUntil = Math.max(followingUntil, now + seconds);
+    else animatingUntil = Math.max(animatingUntil, now + seconds);
   }
 
   /**
@@ -109,7 +119,8 @@ export function createLights({ renderer, scene, grade }) {
 
     const since = time - lastShadowTime;
     const animating = time < animatingUntil;
-    const due = (turned && since >= turnInterval) || ((dirty || animating) && since >= minInterval);
+    const following = time < followingUntil;
+    const due = (turned && since >= turnInterval) || (following && since >= animInterval) || ((dirty || animating) && since >= minInterval);
     if (!due) return;
 
     radius = r;

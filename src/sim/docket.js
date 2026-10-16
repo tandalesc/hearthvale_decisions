@@ -15,8 +15,10 @@ import {setTag} from './state.js';
 import {delta} from './pressures.js';
 import {invalidateCtx} from './conditions.js';
 import {POLICIES, TRAITS, ONE_OFF_TRAIT_SCALE, adoptPolicy, levelOf, costScale, fiscalBase} from './policies.js';
+import {nudgeMood} from './factions.js';
 import {fill, coin, LINES} from './text/voice.js';
 import {addChronicle} from './chronicle.js';
+const chronicle = addChronicle;
 import * as bodies from './institutions.js';
 import * as events from './events.js';
 import {startWork as startWorldWork, executeWork} from './works.js';
@@ -24,12 +26,14 @@ import {pay, payBuilders, takeLoan as economyLoan} from './economy.js';
 import {requestBuilding as worldRequestBuilding} from './buildings.js';
 import {cardAdded, policyChanged, negotiationRequested} from './decisions/scheduler.js';
 import {deriveSubjects, subjectsOf, subjectOpen, subjectInFlight, subjectCooling} from './subjects.js';
+import * as budgets from './budgets.js';
+import * as advisers from './advisors.js';
 
 export const SESSION_CAP = [1, 1, 2, 2, 2, 3];
 export const YEAR_CAP = [2, 3, 3, 4, 4, 4];   // design-systems §9.1
 export const CARD_LIFE_MONTHS = 24;
 const URGENT = new Set(['event', 'demand']);
-const BUTTONS = {not_now: 'Not now', refuse: 'Refuse', delegate: 'Let them decide'};
+const BUTTONS = {not_now: 'Not now', refuse: 'Refuse'};
 
 // ---------------------------------------------------------------------------
 // Making and adding cards
@@ -52,16 +56,12 @@ export function makeCard(state, fields) {
   return card;
 }
 
-// Proposals get Not now / Refuse (and Let them decide for funded bodies).
-// Demands lose Refuse and gain Negotiate.
+// Proposals get Not now / Refuse. Demands lose Refuse and gain Negotiate.
+// (Bodies spend their own money through their budgets, not "Let them decide".)
 function finishOptions(state, card) {
   const options = card.options.map((o) => ({cost: 0, effects: [], ...o}));
   const keys = new Set(options.map((o) => o.key));
-  const body = bodies.bodyOf(state, card.from);
   if (card.kind === 'proposal') {
-    if (body && body.kind !== 'moot' && (body.funds ?? 0) >= (card.cost ?? 0) && !keys.has('delegate')) {
-      options.push({key: 'delegate', label: BUTTONS.delegate, tradeoff: `The ${body.name} chooses and pays from its own purse.`, cost: 0, effects: []});
-    }
     if (!keys.has('not_now')) options.push({key: 'not_now', label: BUTTONS.not_now, tradeoff: 'They will ask again later.', cost: 0, effects: []});
     if (!keys.has('refuse')) options.push({key: 'refuse', label: BUTTONS.refuse, tradeoff: 'They will not like it.', cost: 0, effects: []});
   }
@@ -79,26 +79,33 @@ export const cardsFrom = (state, bodyId) => state.docket.filter((c) => c.from ==
 export const surfacedCards = (state) => state.docket.filter((c) => c.surfacedMonth != null);
 export const queuedCards = (state) => state.docket.filter((c) => c.surfacedMonth == null);
 
-// Add a card: standing orders and delegation may settle it at once; a rival's
-// live proposal turns it into a debate; urgent cards surface immediately.
+// Add a card: a body may pay for it from its budget (budgets.budgetCovers); a
+// rival's live proposal turns it into a debate; urgent cards and budgets
+// surface immediately; the area's adviser stages its answer (advisors.js),
+// and a card it will answer surfaces at once so you can overrule it.
 export function addCard(state, card) {
   if (!card) return null;
   const body = bodies.bodyOf(state, card.from);
 
   if (card.kind === 'proposal' || card.kind === 'demand') {
-    const order = bodies.standingOrderFor(state, card);
-    if (order) {
-      settleByOrder(state, card, order);
-      return null;
-    }
-    if (body?.delegated && (card.cost ?? 0) <= Math.min(body.funds ?? 0, body.delegateCap || Infinity)) {
-      selfResolve(state, body, card);
+    const cover = budgets.budgetCovers(state, body, card);
+    if (cover?.topUp) return addCard(state, budgets.topUpCard(state, body, card, cover));
+    if (cover) {
+      settleFromBudget(state, body, card, cover);
       return null;
     }
   }
 
   // Whoever drafted it, the same question is never on the docket twice.
   if (card.kind !== 'report' && card.kind !== 'event' && card.subjects?.some((s) => subjectOpen(state, s))) return null;
+  // An event comes round regardless; a plan still waiting in the queue that
+  // asks the same thing is overtaken and leaves quietly.
+  if (card.kind === 'event') {
+    const asks = new Set((card.subjects ?? []).filter((s) => !s.startsWith('event:')));
+    for (const c of [...state.docket]) {
+      if (c.surfacedMonth == null && c.kind !== 'event' && c.kind !== 'report' && !c.negotiating && subjectsOf(c).some((s) => asks.has(s))) removeCard(state, c);
+    }
+  }
 
   if (card.kind === 'proposal' && body && !card.data?.batch) {
     const rival = rivalCard(state, body);
@@ -107,14 +114,23 @@ export function addCard(state, card) {
       const debate = mergeDebate(state, rival, card);
       state.docket.splice(state.docket.indexOf(rival), 1, debate);
       cardAdded(state, debate);
+      if (advisers.adviseCard(state, debate) && debate.surfacedMonth == null) surface(state, debate);
       return debate;
     }
   }
 
   if (card.kind === 'demand' && body?.kind === 'moot') card.kind = 'proposal';
+  // An emergency (a bridge falls) supersedes an open plan on the same subject
+  // (its upgrade): the question is asked once, as the emergency.
+  if (card.kind === 'event' && card.subjects?.length) {
+    const subs = new Set(card.subjects);
+    state.docket = state.docket.filter((c) => c.kind === 'event' || c.kind === 'report' || !subjectsOf(c).some((s) => subs.has(s)));
+  }
   state.docket.push(card);
-  if (URGENT.has(card.kind) || card.salient) surface(state, card);
+  if (URGENT.has(card.kind) || card.salient || card.kind === 'budget') surface(state, card);
   cardAdded(state, card);
+  // Budgets are advised once the whole season is on the table (budgets.openSeason).
+  if (card.kind !== 'budget' && advisers.adviseCard(state, card) && card.surfacedMonth == null) surface(state, card);
   return card;
 }
 
@@ -153,7 +169,7 @@ export function mergeDebate(state, a, b) {
   const nameA = bodies.bodyOf(state, a.from)?.name ?? a.from;
   const nameB = bodies.bodyOf(state, b.from)?.name ?? b.from;
   const pick = (card, prefix) => {
-    const main = card.options.find((o) => !['not_now', 'refuse', 'delegate'].includes(o.key));
+    const main = card.options.find((o) => !['not_now', 'refuse'].includes(o.key));
     return {key: prefix, label: `Back the ${prefix === 'a' ? nameA : nameB}: ${card.title.toLowerCase()}`,
       tradeoff: main.tradeoff, cost: main.cost ?? 0, upkeep: main.upkeep, effects: main.effects, side: card.from};
   };
@@ -180,7 +196,7 @@ const stripCard = (c) => ({id: c.id, from: c.from, kind: c.kind, templateId: c.t
 // A body with two good templates asks "Which first?" in one card.
 export function batchCards(state, first, second) {
   const take = (card) => {
-    const o = card.options.find((x) => !['not_now', 'refuse', 'delegate'].includes(x.key));
+    const o = card.options.find((x) => !['not_now', 'refuse'].includes(x.key));
     return {...o, key: `${card === first ? 'x' : 'y'}_${o.key}`, label: card.title, sub: card.templateId};
   };
   return makeCard(state, {
@@ -209,7 +225,7 @@ function surface(state, card) {
   card.expiresMonth = m + (card.kind === 'report' ? 12 : CARD_LIFE_MONTHS);
 }
 
-const PRIORITY = {event: 0, demand: 1, petition: 2, debate: 3, proposal: 4, report: 5};
+const PRIORITY = {event: 0, demand: 1, petition: 2, debate: 3, proposal: 4, budget: 4, report: 5};
 
 // Every quarter: surface queued cards, up to the caps.
 export function docketQuarterly(state) {
@@ -243,6 +259,8 @@ export function docketQuarterly(state) {
 export function docketMonthly(state) {
   const m = monthIndex(state.time);
   pruneStale(state);
+  // Advisers' answers whose review window has passed are applied, in docket order.
+  advisers.applyDue(state, {rule, answerBudget});
   for (const card of [...state.docket]) {
     if (card.expiresMonth == null || m < card.expiresMonth) continue;
     expire(state, card);
@@ -290,6 +308,12 @@ function expire(state, card) {
     }
     case 'report':
       return;
+    case 'budget': {
+      // Unanswered at the year's turn: last year's figure.
+      const outcome = budgets.settleBudget(state, card, 'same', {lapsed: true, record: (c, ch, out) => record(state, c, ch, out)});
+      record(state, card, null, outcome);
+      break;
+    }
     case 'debate':
       for (const side of card.data.sides ?? []) bodies.notePatience(state, side, -0.05);
       record(state, card, null, 'expired');
@@ -299,8 +323,15 @@ function expire(state, card) {
       bodies.notePatience(state, card.from, -0.05);
       if (body) body.expired = (body.expired ?? 0) + 1;
       record(state, card, null, 'expired');
-      addChronicle(state, fill(LINES.cardExpired, {title: card.title.toLowerCase()}), 'line', {card: card.id});
+      addChronicle(state, fill(LINES.cardExpired, {title: askOf(card)}), 'line', {card: card.id});
   }
+}
+
+// What a card asks, for lines and reasons: a "Which first?" card by its two plans.
+export function askOf(card) {
+  const batch = card.data?.batch;
+  if (batch?.length === 2) return `${batch[0].title.toLowerCase()} or ${batch[1].title.toLowerCase()}`;
+  return card.title.toLowerCase();
 }
 
 const removeCard = (state, card) => {
@@ -308,7 +339,7 @@ const removeCard = (state, card) => {
   if (at >= 0) state.docket.splice(at, 1);
 };
 
-function record(state, card, choice, outcome) {
+function record(state, card, choice, outcome, extra = {}) {
   const label = card.options?.find((o) => o.key === choice)?.label ?? null;
   // A decided debate records each side (won or lost) on its own; "Which first?"
   // records the chosen plan as done and the other as deferred.
@@ -330,38 +361,76 @@ function record(state, card, choice, outcome) {
     ...(card.data?.workId ? {place: card.data.workId} : {}),
     ...(card.data?.demand != null ? {demand: card.data.demand} : {}),
     ...(card.data?.mood != null ? {mood: card.data.mood} : {}),
+    ...(card.data?.batch || /\?$/.test(card.title ?? '') ? {ask: askOf(card)} : {}),
+    ...(card.kind === 'budget' ? budgetRecord(state, card) : {}),
+    ...extra,
     subjects,
   });
   if (state.cardHistory.length > 3000) state.cardHistory.splice(0, 500);
+}
+
+// A budget answer's figures (asked, granted) in the history.
+function budgetRecord(state, card) {
+  const next = bodies.bodyOf(state, card.from)?.budget?.next;
+  return {asked: Math.round(next?.asked ?? budgets.askOf(card.data.budget)), granted: Math.round(next?.granted ?? 0), budgetYear: card.data.budget.year};
 }
 
 // ---------------------------------------------------------------------------
 // Rulings
 // ---------------------------------------------------------------------------
 
-// Player action. Returns {ok, outcome} or {ok: false, reason}.
-export function rule(state, cardId, optionKey) {
+// Player action (opts.adviser: an adviser applies its staged answer).
+// Returns {ok, outcome} or {ok: false, reason}.
+export function rule(state, cardId, optionKey, opts = {}) {
   const card = state.docket.find((c) => c.id === cardId);
   if (!card) return {ok: false, reason: 'no-card'};
   if (card.kind === 'report') {
     removeCard(state, card);
+    advisers.noteRuling(state, card, 'ok', {byAdviser: !!opts.adviser});
     return {ok: true, outcome: 'noted'};
   }
   const option = card.options.find((o) => o.key === optionKey);
   if (!option) return {ok: false, reason: 'no-option'};
-  if ((option.cost ?? 0) > 0 && optionKey !== 'delegate' && (state.treasury ?? 0) < option.cost) {
+  if ((option.cost ?? 0) > 0 && (state.treasury ?? 0) < option.cost) {
     return {ok: false, reason: 'no-coin'};
   }
   removeCard(state, card);
   const body = bodies.bodyOf(state, card.from);
-  const outcome = settle(state, card, option, body);
-  record(state, card, optionKey, outcome);
+  const adviser = opts.adviser ? advisers.adviserById(state, opts.adviser) : null;
+  const patience = body?.patience;
+  const outcome = settle(state, card, option, body, adviser);
+  // A tactful adviser softens a refusal: the body loses 30% less patience.
+  if (adviser?.temper === 'Tactful' && body && body.patience < patience && body.status === 'active') body.patience += 0.3 * (patience - body.patience);
+  const note = advisers.noteRuling(state, card, optionKey, {byAdviser: !!adviser});
+  record(state, card, optionKey, outcome, note ? {advisedBy: note.adviserId, ...(note.changed ? {overruled: true} : {})} : {});
+  // A top-up you turned down: the plan itself comes to you as an ordinary card.
+  if (card.data?.topUp && (outcome === 'deferred' || outcome === 'refused') && card.data.plan) {
+    addCard(state, {...card.data.plan, data: {...card.data.plan.data, escalated: true}});
+  }
   invalidateCtx(state);
   return {ok: true, outcome};
 }
 
-function settle(state, card, option, body) {
+// A budget answered with a trim to fit (budgets.trimAllToFit): factor of the ask.
+// opts.adviser: an adviser applies its staged answer.
+export function answerBudget(state, cardId, choice, {factor = null, adviser = null} = {}) {
+  const card = state.docket.find((c) => c.id === cardId && c.kind === 'budget');
+  if (!card) return {ok: false, reason: 'no-card'};
+  if (factor == null) return rule(state, cardId, choice, {adviser});
+  removeCard(state, card);
+  const outcome = budgets.settleBudget(state, card, 'trim', {factor, record: (c, ch, out) => record(state, c, ch, out)});
+  const note = advisers.noteRuling(state, card, 'trim', {byAdviser: !!adviser});
+  record(state, card, 'trim', outcome, note ? {advisedBy: note.adviserId, ...(note.changed ? {overruled: true} : {})} : {});
+  invalidateCtx(state);
+  return {ok: true, outcome};
+}
+
+function settle(state, card, option, body, adviser = null) {
   const key = option.key;
+  if (card.kind === 'budget') return budgets.settleBudget(state, card, key, {record: (c, ch, out) => record(state, c, ch, out)});
+  // An adviser's answer reads as theirs in the chronicle, and its rules are enacted by them.
+  const by = adviser ? `adviser:${adviser.id}` : 'player';
+  const addChronicle = (state, text, ...rest) => chronicle(state, adviser ? text.replace(/^You /, `${adviser.name} `) : text, ...rest);
   if (key === 'not_now') {
     if (card.data?.forms) {
       state.governance.petitionWait[card.data.forms] = monthIndex(state.time) + 36;
@@ -370,7 +439,7 @@ function settle(state, card, option, body) {
     } else {
       bodies.notePatience(state, card.from, -0.05);
     }
-    addChronicle(state, fill(LINES.cardDeferred, {title: card.title.toLowerCase()}), 'decision', {card: card.id});
+    addChronicle(state, fill(LINES.cardDeferred, {title: askOf(card)}), 'decision', {card: card.id});
     return 'deferred';
   }
   if (key === 'refuse_anyway') {
@@ -405,10 +474,6 @@ function settle(state, card, option, body) {
     addChronicle(state, `You backed neither side: ${card.title.toLowerCase()}.`, 'decision', {card: card.id});
     return 'refused';
   }
-  if (key === 'delegate' && body) {
-    selfResolve(state, body, card, {fromPlayer: true});
-    return 'delegated';
-  }
 
   // An accepted option.
   if (card.kind === 'debate') {
@@ -418,13 +483,13 @@ function settle(state, card, option, body) {
     if (winner) winner.accepted++;
     bodies.notePatience(state, loserId, -0.08);
     for (const sub of card.data.cards ?? []) record(state, sub, sub.from === option.side ? 'do' : 'refuse', sub.from === option.side ? 'won' : 'lost');
-    applyEffects(state, card, option);
+    applyEffects(state, card, option, {by});
     addChronicle(state, fill(LINES.debateWon, {winner: `The ${winner?.name ?? 'one side'}`, loser: `The ${loser?.name ?? 'other side'}`}), 'decision', {card: card.id});
     return 'accepted';
   }
   if (body && body.kind !== 'moot' && card.kind !== 'event') body.accepted++;
   if (body && card.kind !== 'event') bodies.notePatience(state, body.id, 0.03);
-  applyEffects(state, card, option);
+  applyEffects(state, card, option, {by});
   moodShift(state, card.helps, 0.04);
   moodShift(state, card.hurts, -0.04);
   if (card.data?.faction) {
@@ -442,48 +507,31 @@ const lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 function moodShift(state, trades, amount) {
   if (!trades?.length) return;
   for (const f of state.factions) {
-    if (f.trades?.some((t) => trades.includes(t))) f.mood = Math.max(0, Math.min(1, f.mood + amount));
+    if (f.trades?.some((t) => trades.includes(t))) nudgeMood(f, Math.max(0, Math.min(1, f.mood + amount)), 'rulings');
   }
 }
 
-// A delegated body (or "Let them decide") picks its own preferred option and
-// pays from its purse when it can.
-export function selfResolve(state, body, card, {fromPlayer = false} = {}) {
-  const choices = card.options.filter((o) => !['not_now', 'refuse', 'delegate', 'negotiate'].includes(o.key));
-  const affordable = choices.filter((o) => (o.cost ?? 0) <= (body.funds ?? 0));
-  const option = affordable[0] ?? null;
-  if (!option) {
-    body.report.push(`It could not afford ${card.title.toLowerCase()}.`);
-    return null;
-  }
-  body.spentThisYear = (body.spentThisYear ?? 0) + (option.cost ?? 0);
-  body.accepted++;
+// A body pays for a plan in its budget (or a small thing) from its own purse.
+function settleFromBudget(state, body, card, {option, line}) {
   applyEffects(state, card, {...option, payer: `body:${body.id}`}, {by: body.id});
-  const text = `${capital(option.label.toLowerCase())}.`;
-  if (fromPlayer) {
-    addChronicle(state, `You let the ${body.name} decide. It chose to ${lowerFirst(option.label)}.`, 'decision', {card: card.id});
-  } else {
-    body.report.push(text);
-    record(state, card, option.key, 'delegated');
-  }
-  return option;
+  body.accepted++;
+  budgets.noteBudgetSpend(state, body, line, option.cost ?? 0);
+  const what = budgets.planTitle(card, option).toLowerCase();
+  body.report.push(`It began: ${what}.`);
+  record(state, card, option.key, 'budget');
+  addChronicle(state, `The ${body.name} began: ${what}.`, 'line', {card: card.id, budget: body.id});
 }
 
-function settleByOrder(state, card, order) {
-  const body = bodies.bodyOf(state, card.from);
-  if (order.action === 'refuse') {
-    record(state, card, 'refuse', 'standing-order');
-    if (body) body.report?.push(`It dropped ${card.title.toLowerCase()} as you ordered.`);
-    return;
+// A body's own requests still waiting on you whose plans its new budget
+// approved: they go ahead from the grant (not small things: those you were asked).
+export function settleOpenFromBudget(state, body) {
+  for (const card of [...state.docket]) {
+    if (card.from !== body.id || card.kind !== 'proposal' || card.negotiating) continue;
+    const cover = budgets.budgetCovers(state, body, card);
+    if (!cover?.line || cover.topUp) continue;
+    removeCard(state, card);
+    settleFromBudget(state, body, card, cover);
   }
-  const option = card.options.find((o) => !['not_now', 'refuse', 'delegate', 'negotiate'].includes(o.key));
-  if (!option || (option.cost ?? 0) > (state.treasury ?? 0)) return;
-  applyEffects(state, card, option);
-  if (body) {
-    body.accepted++;
-    body.report?.push(`${capital(option.label.toLowerCase())}, by your standing order.`);
-  }
-  record(state, card, option.key, 'standing-order');
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +566,15 @@ export function applyEffects(state, card, option, {by = 'player'} = {}) {
     if (e.refuseBody) bodies.refuseBody(state, e.refuseBody);
     if (e.wait) state.governance.petitionWait[card.data?.forms] = monthIndex(state.time) + e.wait;
     if (e.revive) bodies.reviveBody(state, e.revive);
-    if (e.budget && !e.form) {
+    if (e.topUp && card.data?.topUp) {
+      // The chest tops the body's purse up; its plan then goes ahead from it.
+      const t = card.data.topUp;
+      const body = bodies.bodyOf(state, t.body);
+      if (body && pay(state, 'treasury', `body:${body.id}`, t.amount, 'budget-topup') > 0 && card.data.plan) addCard(state, card.data.plan);
+    }
+    if (e.budget && !e.form && budgets.isAnnual(bodies.bodyOf(state, card.from))) {
+      budgets.raiseGrant(state, bodies.bodyOf(state, card.from), e.budget);
+    } else if (e.budget && !e.form) {
       const body = bodies.bodyOf(state, card.from);
       if (body) {
         body.grantShare = Math.min(0.25, (body.grantShare ?? body.budgetShare ?? 0) + e.budget);
@@ -613,7 +669,7 @@ export function applyNegotiation(state, cardId, choice) {
     // The body settles for a promise and a small grant; nothing is enacted.
     removeCard(state, card);
     const grant = Math.round(Math.max(card.cost ?? 0, 0.05 * fiscalBase(state)) / 2);
-    if (body && grant > 0) pay(state, 'treasury', `body:${body.id}`, grant, 'bodies');
+    if (body && grant > 0) pay(state, 'treasury', `body:${body.id}`, grant, 'body-grant');
     bodies.notePatience(state, card.from, 0.1);
     record(state, card, 'negotiate', 'compromise');
     addChronicle(state, `The ${body?.name ?? 'body'} took a grant of ${coin(grant)} instead.`, 'decision', {card: card.id});

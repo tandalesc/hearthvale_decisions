@@ -134,8 +134,15 @@ function createClouds(grade) {
       const g = puff.clone();
       const s = 6 + hashId(c * 10 + i, 15) * 7;
       g.scale(s * 1.3, s * 0.55, s);
-      g.translate(cx + (i - n / 2) * 7 + hashId(c * 10 + i, 16) * 4, cy + hashId(c * 10 + i, 17) * 3, cz + (hashId(c * 10 + i, 18) - 0.5) * 8);
-      parts.push(g.index ? g.toNonIndexed() : g);
+      const px = cx + (i - n / 2) * 7 + hashId(c * 10 + i, 16) * 4, py = cy + hashId(c * 10 + i, 17) * 3, pz = cz + (hashId(c * 10 + i, 18) - 0.5) * 8;
+      g.translate(px, py, pz);
+      const flat = g.index ? g.toNonIndexed() : g;
+      // Each vertex knows its puff's centre and size, so a puff fades as a whole.
+      const k = flat.attributes.position.count;
+      const puffAttr = new Float32Array(k * 4);
+      for (let v = 0; v < k; v++) puffAttr.set([px, py, pz, s * 1.3], v * 4);
+      flat.setAttribute('aPuff', new THREE.BufferAttribute(puffAttr, 4));
+      parts.push(flat);
     }
   }
   const merged = mergeSimple(parts);
@@ -145,10 +152,15 @@ function createClouds(grade) {
   // rises past them, so a zoomed-out top-down view never looks through fog.
   patchMaterial(material, grade, {
     key: 'clouds',
-    vertexHead: 'varying vec3 vCloudW;\n',
-    vertexEnd: 'vCloudW = (modelMatrix * vec4(transformed, 1.0)).xyz;\n',
-    fragmentHead: 'varying vec3 vCloudW;\nuniform vec3 uCloudTarget;\n',
+    vertexHead: 'attribute vec4 aPuff;\nvarying vec3 vCloudW;\nvarying float vPuffFade;\n',
+    // A whole puff fades as the camera comes within a few of its own sizes, so
+    // the near plane never slices a puff that is still visible.
+    vertexEnd: 'vCloudW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvec3 puffW = (modelMatrix * vec4(aPuff.xyz, 1.0)).xyz;\nvPuffFade = smoothstep(aPuff.w * 1.2, aPuff.w * 3.5, distance(puffW, cameraPosition));\n',
     uniforms: { uCloudTarget: cloudTarget },
+    // Sky light scattered through the cloud: undersides stay soft and pale
+    // rather than turning to grey stone now that clouds share the haze.
+    fragmentHead: 'varying vec3 vCloudW;\nvarying float vPuffFade;\nuniform vec3 uCloudTarget;\nuniform vec3 uSkyHorizon;\n',
+    fragmentEmissive: 'totalEmissiveRadiance += diffuseColor.rgb * uSkyHorizon * 0.55;',
     fragmentEnd: `
       // Fly-through: a cloud dissolves as the camera nears it (puffs are
       // ~10 m, so fade from 10 to 45 m) instead of filling the screen.
@@ -163,7 +175,7 @@ function createClouds(grade) {
       float inFront = 1.0 - smoothstep(targetD * 0.85, targetD, camD);
       // Seen from above, clouds become thin veils rather than a white floor.
       float above = mix(0.3, 1.0, smoothstep(-10.0, 30.0, vCloudW.y - cameraPosition.y));
-      gl_FragColor.a *= nearFade * above * (1.0 - 0.9 * aligned * inFront);
+      gl_FragColor.a *= nearFade * vPuffFade * above * (1.0 - 0.9 * aligned * inFront);
     `,
   });
   const mesh = new THREE.Mesh(merged, material);

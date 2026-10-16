@@ -117,6 +117,7 @@ export function chronicleYearFacts(state, year = state.time.year - 1) {
     archetype: state.archetype,
     people: {start: at('pop', Math.max(0, year - 1)), end: at('pop', year) ?? state.indicators?.pop ?? null},
     wellbeing: at('wellbeing', year),
+    approval: (state.approval?.history ?? []).find((h) => h.y === year)?.all ?? null,
     entries: entries.map((e) => ({month: e.month ?? 0, kind: e.kind, text: e.text, refs: e.refs ?? null})),
     rulings: (state.cardHistory ?? []).filter((h) => h.year === year)
       .map((h) => ({title: h.title, from: h.from, kind: h.kind, choice: h.choice, label: h.label ?? null, outcome: h.outcome, stances: h.stances ?? {}})),

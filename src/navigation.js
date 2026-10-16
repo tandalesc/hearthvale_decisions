@@ -4,7 +4,7 @@
 // water: Uint8Array}` built by src/sim/roads.js (navGrid).
 //
 // water codes: 0 land, 1 deep water, 2 ford, 3 bridge.
-import { riverX } from './terrain.js';
+import { riverX, WATER_HALF, hasRiver } from './terrain.js';
 
 const SQRT2 = Math.SQRT2;
 const DIRS = [
@@ -508,9 +508,16 @@ export function followField(field, from) {
 // ---------------------------------------------------------------- crossings
 
 function sideOfRiver(grid, i) {
+  if (!hasRiver()) return 1;
   const cx = i % grid.W, cz = (i - cx) / grid.W;
   const x = grid.ox + (cx + 0.5) * grid.cell, z = grid.oz + (cz + 0.5) * grid.cell;
   return Math.sign(x - riverX(z));
+}
+
+function onRiver(grid, i) {
+  const cx = i % grid.W, cz = (i - cx) / grid.W;
+  const x = grid.ox + (cx + 0.5) * grid.cell, z = grid.oz + (cz + 0.5) * grid.cell;
+  return Math.abs(x - riverX(z)) < WATER_HALF + grid.cell;
 }
 
 // Bands (8 cell rows each) where this route shows crossing demand: any ford
@@ -529,7 +536,8 @@ export function crossingsFor(grid, cells, from, to) {
     if (w && !inWater) {
       const row = Math.floor(i / W);
       if (crossRow < 0) crossRow = row;
-      if (w === 2) bands.push(Math.floor(row / BAND_CELLS));
+      // River fords only: wading a delta's creek is no call for a bridge.
+      if (w === 2 && onRiver(grid, i)) bands.push(Math.floor(row / BAND_CELLS));
     }
     inWater = w !== 0;
   }
@@ -542,19 +550,350 @@ export function crossingsFor(grid, cells, from, to) {
 // ---------------------------------------------------------------- routes to waypoints
 
 // Converts a cell path into a flat [x, z, ...] waypoint list that starts at
-// `start` and ends at `goal`, keeping only the cells where direction changes.
+// `start` and ends at `goal`. A pure function of the grid and the cells.
+//
+// Between the ends the path is walked three ways, by the kind of cell:
+//  - path cells (grid.nodeX finite, from path-nodes.js): their relaxed nodes,
+//    the centreline the renderer draws, along its links (a diagonal step the
+//    drawn path takes by a corner cell goes by that cell's node), dropping
+//    nodes that turn the line by less than NODE_TURN from the last one kept
+//    and junction nodes (the walk turns from arm to arm across a junction),
+//    and walking each remaining corner as a short curve (CORNER_CUT); none of
+//    that beside water, and nodes by a bridge deck are kept as they are;
+//  - open ground: pulled straight. From each kept point the walk goes to the
+//    farthest of the next LOOKAHEAD cells it can reach in a straight line that
+//    crosses only passable dry cells no dearer than the dearest open cell it
+//    skips, so a shortcut never crosses worse ground, never cuts across grass
+//    where the path keeps to a road, and stops at the first road node;
+//  - water (fords and bridge decks): cell centres, never skipped or smoothed,
+//    kept where the crossing starts, ends or turns (as alongDecks expects).
+// Any leg between kept points that is not clear (legOk: legClear's test, and
+// no water but the path's own) falls back to cell centres.
+//
+// The first and last legs: `start` is where the walker stands when the route
+// arrives (it may have been planned from a neighbouring open cell, or served
+// from the cache), and `goal` is any point in the last cell. Those two legs are
+// walked cell by cell; one that would leave walkable ground (cut through deep
+// water beside a ford, or the corner of a wall) goes by the end cell's centre
+// instead, and a goal in deep water is not entered at all.
+export const LOOKAHEAD = 24;
+export const NODE_TURN = 6;   // degrees
+// A shortcut may cross cells this much dearer than the dearest it skips: the
+// grain of the slope term in cell costs (0.03 is a grade of 0.1), well below the
+// step between tiers (grass 1.2, trail 0.95), so it never trades a path for grass.
+export const COST_SLACK = 0.03;
+const COS_TURN = Math.cos(NODE_TURN * Math.PI / 180);
+// A path corner turning more than CORNER_TURN degrees is cut CORNER_CUT units
+// back along each leg (never more than a third of the shorter one).
+export const CORNER_TURN = 15;
+export const CORNER_CUT = 0.9;
+const COS_ROUND = Math.cos(CORNER_TURN * Math.PI / 180);
+const OPEN = 0, PATH = 1, WATER = 2;
+// Per-call scratch (the function is not re-entrant), grown as routes grow.
+let kindBuf = new Uint8Array(256), pxBuf = new Float64Array(256), pzBuf = new Float64Array(256), wetBuf = new Uint8Array(256);
+
 export function cellsToWaypoints(grid, cells, start, goal) {
-  const { W, ox, oz, cell } = grid;
-  const out = [start.x, start.z];
-  for (let k = 1; k < cells.length - 1; k++) {
-    const a = cells[k - 1], b = cells[k], c = cells[k + 1];
-    const dx1 = (b % W) - (a % W), dz1 = Math.floor(b / W) - Math.floor(a / W);
-    const dx2 = (c % W) - (b % W), dz2 = Math.floor(c / W) - Math.floor(b / W);
-    if (dx1 === dx2 && dz1 === dz2) continue;
-    out.push(ox + (b % W + 0.5) * cell, oz + (Math.floor(b / W) + 0.5) * cell);
+  const { W, ox, oz, cell, cost } = grid;
+  const water = grid.water, nodeX = grid.nodeX, nodeZ = grid.nodeZ, links = grid.nodeLinks;
+  cells = alongLinks(grid, cells);
+  const n = cells.length;
+  const first = cells[0], last = cells[n - 1];
+  const cxOf = i => ox + (i % W + 0.5) * cell, czOf = i => oz + (Math.floor(i / W) + 0.5) * cell;
+
+  // Kind and point per cell; the ends stand for start and goal.
+  if (kindBuf.length < n) {
+    const size = Math.max(n, kindBuf.length * 2);
+    kindBuf = new Uint8Array(size); pxBuf = new Float64Array(size); pzBuf = new Float64Array(size); wetBuf = new Uint8Array(size);
   }
-  out.push(goal.x, goal.z);
+  const kind = kindBuf, px = pxBuf, pz = pzBuf;
+  // Water about cell k (waterNear), worked out once: 0 not yet, else 1 + its bits.
+  wetBuf.fill(0, 0, n);
+  const wet = (k) => (wetBuf[k] || (wetBuf[k] = 1 + waterNear(grid, cells[k]))) - 1;
+  for (let k = 0; k < n; k++) {
+    const i = cells[k];
+    kind[k] = water && water[i] ? WATER : nodeX && nodeX[i] === nodeX[i] ? PATH : OPEN;
+    if (kind[k] === PATH) { px[k] = nodeX[i]; pz[k] = nodeZ[i]; }
+    else { px[k] = cxOf(i); pz[k] = czOf(i); }
+  }
+  px[0] = start.x; pz[0] = start.z;
+  if (n > 1) { px[n - 1] = goal.x; pz[n - 1] = goal.z; }
+
+  // Kept interior points: cell index along the path, position, at its centre?,
+  // and is the leg into it from the point before known to be clear?
+  const kk = [], kx = [], kz = [], kc = [], kv = [];
+  let a = 0, ax = start.x, az = start.z;
+  const keep = (k, checked) => {
+    let x = px[k], z = pz[k], clear = true;
+    if (!checked && !legOk(grid, cells, a, k, ax, az, x, z, Infinity)) { x = cxOf(cells[k]); z = czOf(cells[k]); clear = false; }
+    kk.push(k); kx.push(x); kz.push(z); kc.push(x === cxOf(cells[k]) && z === czOf(cells[k])); kv.push(clear && kk.length > 1);
+    a = k; ax = x; az = z;
+  };
+  let k = 1;
+  while (k < n - 1) {
+    const t = kind[k];
+    if (t === WATER) {
+      if (kind[k - 1] !== WATER || kind[k + 1] !== WATER || turnsAt(W, cells, k)) keep(k, false);
+      k++;
+      continue;
+    }
+    if (t === PATH) {
+      // Drop a node that hardly turns the line, or a junction's (the walk turns
+      // from arm to arm across it, not out to its meeting point and back), if
+      // the straightened leg is clear.
+      if (kind[k + 1] === PATH && k + 1 < n - 1 && k + 1 - a <= LOOKAHEAD &&
+          (straightOn(ax, az, px[k], pz[k], px[k + 1], pz[k + 1]) || (links && junction(links[cells[k]]) && !(wet(k) & WET))) &&
+          !(wet(k) & DECK) &&
+          legOk(grid, cells, a, k + 1, ax, az, px[k + 1], pz[k + 1], Infinity)) { k++; continue; }
+      keep(k, k - 1 !== a);
+      k++;
+      continue;
+    }
+    // Open ground: the farthest point a straight leg reaches over no worse ground.
+    let best = k, dearest = cost[cells[k]];
+    for (let j = k + 1; j <= n - 1 && j - a <= LOOKAHEAD; j++) {
+      if (kind[j - 1] !== OPEN) break;
+      if (cost[cells[j - 1]] > dearest) dearest = cost[cells[j - 1]];
+      if (!legOk(grid, cells, a, j, ax, az, px[j], pz[j], dearest)) break;
+      best = j;
+    }
+    if (best === n - 1) break;
+    keep(best, best > k);
+    k = best + 1;
+  }
+
+  const pts = { kk, kx, kz, kc, kv };
+  repair(grid, cells, pts);
+  // First leg: from where the walker stands to the first kept point (or the goal).
+  if (n > 1 && !legOk(grid, cells, 0, kk.length ? kk[0] : n - 1, start.x, start.z, kk.length ? kx[0] : goal.x, kk.length ? kz[0] : goal.z, Infinity)) {
+    kk.unshift(0); kx.unshift(cxOf(first)); kz.unshift(czOf(first)); kc.unshift(true); kv.unshift(false);
+    if (kv.length > 1) kv[1] = false;
+    repair(grid, cells, pts);
+  }
+
+  // Last leg: from the last kept point (or the start) to the goal.
+  let lx0 = kk.length ? kx[kk.length - 1] : start.x, lz0 = kk.length ? kz[kk.length - 1] : start.z;
+  let tail = false;
+  if (deepAt(grid, last) || (n > 1 && !legClear(grid, lx0, lz0, goal.x, goal.z, first, last))) {
+    const lx = cxOf(last), lz = czOf(last);
+    if (lx0 !== lx || lz0 !== lz) {
+      kk.push(n - 1); kx.push(lx); kz.push(lz); kc.push(true); kv.push(false);
+      repair(grid, cells, pts);
+    }
+    tail = !deepAt(grid, last) && legClear(grid, lx, lz, goal.x, goal.z, first, last);
+  } else {
+    tail = true;
+  }
+
+  const out = [start.x, start.z];
+  for (let q = 0; q < kk.length; q++) {
+    const x = kx[q], z = kz[q];
+    if (x === out[out.length - 2] && z === out[out.length - 1]) continue;
+    // A corner on a path is walked as a short curve: from CORNER_CUT back along
+    // the leg in, by the midpoint of the curve that bends round the node, to
+    // CORNER_CUT along the leg out, where those legs are clear.
+    const k = kk[q], nxq = q + 1 < kk.length ? kx[q + 1] : tail ? goal.x : NaN, nzq = q + 1 < kk.length ? kz[q + 1] : tail ? goal.z : NaN;
+    if (kind[k] === PATH && k > 0 && k < n - 1 && nxq === nxq && !wet(k)) {
+      const px0 = out[out.length - 2], pz0 = out[out.length - 1];
+      const la = Math.hypot(x - px0, z - pz0), lb = Math.hypot(nxq - x, nzq - z);
+      if (la > 1e-6 && lb > 1e-6 && !straightOn(px0, pz0, x, z, nxq, nzq, COS_ROUND)) {
+        const c = Math.min(CORNER_CUT, 0.35 * Math.min(la, lb));
+        const qx = x + (px0 - x) * c / la, qz = z + (pz0 - z) * c / la, rx = x + (nxq - x) * c / lb, rz = z + (nzq - z) * c / lb;
+        const k0 = q > 0 ? kk[q - 1] : 0, k1 = q + 1 < kk.length ? kk[q + 1] : n - 1;
+        const mx = 0.25 * qx + 0.5 * x + 0.25 * rx, mz = 0.25 * qz + 0.5 * z + 0.25 * rz;
+        // (In to q and r on are parts of legs already found clear.)
+        if (legOk(grid, cells, k0, k1, qx, qz, mx, mz, Infinity) && legOk(grid, cells, k0, k1, mx, mz, rx, rz, Infinity)) {
+          out.push(qx, qz, mx, mz, rx, rz);
+          continue;
+        }
+      }
+    }
+    out.push(x, z);
+  }
+  if (tail) out.push(goal.x, goal.z);
   return out;
+}
+
+// The search may step diagonally between two path cells that the drawn path
+// (path-nodes.js links) joins through the cell at their corner. Such a step
+// goes by that corner cell, so the walk follows the drawn links; elsewhere the
+// cells are returned as they are.
+function alongLinks(grid, cells) {
+  const links = grid.nodeLinks;
+  if (!links) return cells;
+  const { W, cost, water } = grid;
+  let out = null;
+  for (let k = 1; k < cells.length; k++) {
+    const a = cells[k - 1], b = cells[k];
+    const dx = (b % W) - (a % W), dz = Math.floor(b / W) - Math.floor(a / W);
+    let corner = -1;
+    if (dx && dz && links[a] && links[b] && !(water && (water[a] || water[b]))) {
+      const d = linkDir(dx, dz);
+      if (!(links[a] & (1 << d))) {
+        for (const c of [a + dx, a + dz * W]) {
+          const dc = linkDir(c % W - a % W, Math.floor(c / W) - Math.floor(a / W));
+          const db = linkDir(b % W - c % W, Math.floor(b / W) - Math.floor(c / W));
+          if (!(links[a] & (1 << dc)) || !(links[c] & (1 << db)) || !(cost[c] < Infinity) || (water && water[c])) continue;
+          // Only a corner node near the step (a towpath-lane node can sit cells away).
+          if (offChord(grid, a, b, c) > grid.cell * 0.5) continue;
+          corner = c;
+          break;
+        }
+      }
+    }
+    if (corner >= 0 && !out) out = Array.from(cells.subarray ? cells.subarray(0, k) : cells.slice(0, k));
+    if (out) { if (corner >= 0) out.push(corner); out.push(b); }
+  }
+  return out ?? cells;
+}
+// Water about cell i: WET for any water in the cells beside it, DECK for a
+// bridge deck within DECK_KEEP cells. By a deck the walk keeps its path nodes
+// as they are (not dropped, not rounded) for alongDecks to line up on; beside
+// any water it cuts no corner and no junction (a shore cell can be partly wet).
+const DECK_KEEP = 2;
+const WET = 1, DECK = 2;
+function waterNear(grid, i) {
+  const { W, H, water } = grid;
+  if (!water) return 0;
+  const x = i % W, z = (i - x) / W;
+  let bits = 0;
+  for (let dz = -DECK_KEEP; dz <= DECK_KEEP; dz++) {
+    const zz = z + dz;
+    if (zz < 0 || zz >= H) continue;
+    for (let dx = -DECK_KEEP; dx <= DECK_KEEP; dx++) {
+      const xx = x + dx;
+      if (xx < 0 || xx >= W) continue;
+      const w = water[zz * W + xx];
+      if (!w) continue;
+      if (w === 3) bits |= DECK;
+      if (dx >= -1 && dx <= 1 && dz >= -1 && dz <= 1) bits |= WET;
+    }
+  }
+  return bits;
+}
+
+// Distance of c's node from the segment between a's and b's nodes.
+function offChord(grid, a, b, c) {
+  const { nodeX, nodeZ } = grid;
+  const ax = nodeX[a], az = nodeZ[a], dx = nodeX[b] - ax, dz = nodeZ[b] - az;
+  const L = dx * dx + dz * dz;
+  let t = L > 0 ? ((nodeX[c] - ax) * dx + (nodeZ[c] - az) * dz) / L : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.hypot(nodeX[c] - ax - dx * t, nodeZ[c] - az - dz * t);
+}
+
+// Three or more links: a junction (or a knot) of the path graph.
+function junction(mask) { return popcount8(mask) >= 3; }
+function popcount8(m) { let n = 0; for (; m; m &= m - 1) n++; return n; }
+// path-nodes.js link bit for the step (dx, dz): LINK_DX/LINK_DZ order.
+function linkDir(dx, dz) { return (dz + 1) * 3 + (dx + 1) - (dz > 0 || (dz === 0 && dx > 0) ? 1 : 0); }
+
+// Does the cell path change direction at k?
+function turnsAt(W, cells, k) {
+  const a = cells[k - 1], b = cells[k], c = cells[k + 1];
+  return (b % W) - (a % W) !== (c % W) - (b % W) ||
+    Math.floor(b / W) - Math.floor(a / W) !== Math.floor(c / W) - Math.floor(b / W);
+}
+
+// Does a -> b -> c turn by less than NODE_TURN at b? (Coincident points count as straight.)
+function straightOn(ax, az, bx, bz, cx, cz, cosLimit = COS_TURN) {
+  const ux = bx - ax, uz = bz - az, vx = cx - bx, vz = cz - bz;
+  const lu = Math.hypot(ux, uz), lv = Math.hypot(vx, vz);
+  if (lu < 1e-6 || lv < 1e-6) return true;
+  return (ux * vx + uz * vz) >= cosLimit * lu * lv;
+}
+
+// Every leg between kept points must be clear (legOk); one that is not
+// goes back to the cell centres along the path between its two ends, and its
+// ends move to their own centres (which can unsettle the leg before, so that
+// is checked again). Centre to centre along consecutive path cells is always
+// clear: the search never steps diagonally past a blocked corner.
+function repair(grid, cells, pts) {
+  const { kk, kx, kz, kc, kv } = pts;
+  const { W, ox, oz, cell } = grid;
+  const cxOf = i => ox + (i % W + 0.5) * cell, czOf = i => oz + (Math.floor(i / W) + 0.5) * cell;
+  let q = 1;
+  while (q < kk.length) {
+    const k0 = kk[q - 1], k1 = kk[q];
+    if (kv[q] || legOk(grid, cells, k0, k1, kx[q - 1], kz[q - 1], kx[q], kz[q], Infinity)) { kv[q] = true; q++; continue; }
+    if (kc[q - 1] && kc[q] && k1 - k0 <= 1) { kv[q] = true; q++; continue; }   // nothing left to fall back to
+    const moved = !kc[q - 1];
+    if (moved) kv[q - 1] = false;
+    kx[q - 1] = cxOf(cells[k0]); kz[q - 1] = czOf(cells[k0]); kc[q - 1] = true;
+    kx[q] = cxOf(cells[k1]); kz[q] = czOf(cells[k1]); kc[q] = true;
+    const gap = [], gx = [], gz = [], gc = [], gv = [];
+    for (let k = k0 + 1; k < k1; k++) { gap.push(k); gx.push(cxOf(cells[k])); gz.push(czOf(cells[k])); gc.push(true); gv.push(false); }
+    kk.splice(q, 0, ...gap); kx.splice(q, 0, ...gx); kz.splice(q, 0, ...gz); kc.splice(q, 0, ...gc); kv.splice(q, 0, ...gv);
+    q = moved && q > 1 ? q - 1 : q;
+  }
+}
+
+// Is the straight leg a -> b, between path cells k0 and k1, fit to walk? Every
+// cell it passes through (legClear's traversal, plus the other side cell where
+// it goes exactly through a corner) must be passable, and unless it is one of
+// the path's own cells from k0 to k1, dry and no dearer than `dearest` (give or
+// take COST_SLACK), so a shortcut over open ground never crosses worse ground
+// or water. The path's end cells are treated as legClear treats them.
+function legOk(grid, cells, k0, k1, ax, az, bx, bz, dearest) {
+  const { W, ox, oz, cell } = grid;
+  const limit = dearest + COST_SLACK;
+  const ok = cellOk;
+  let x = Math.floor((ax - ox) / cell), z = Math.floor((az - oz) / cell);
+  const ex = Math.floor((bx - ox) / cell), ez = Math.floor((bz - oz) / cell);
+  const dx = bx - ax, dz = bz - az;
+  const sx = dx > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
+  const tdx = dx !== 0 ? Math.abs(cell / dx) : Infinity, tdz = dz !== 0 ? Math.abs(cell / dz) : Infinity;
+  let tx = dx !== 0 ? (((sx > 0 ? x + 1 : x) * cell + ox) - ax) / dx : Infinity;
+  let tz = dz !== 0 ? (((sz > 0 ? z + 1 : z) * cell + oz) - az) / dz : Infinity;
+  const n = Math.abs(ex - x) + Math.abs(ez - z);
+  for (let k = 0; ; k++) {
+    if (!ok(grid, cells, k0, k1, limit, x, z)) return false;
+    if (k >= n) return true;
+    if (tx < tz) {
+      if (tz - tx < 1e-9 && !ok(grid, cells, k0, k1, limit, x, z + sz)) return false;
+      x += sx; tx += tdx;
+    } else {
+      if (tx - tz < 1e-9 && !ok(grid, cells, k0, k1, limit, x + sx, z)) return false;
+      z += sz; tz += tdz;
+    }
+  }
+}
+
+function cellOk(grid, cells, k0, k1, limit, x, z) {
+  const { W, H, cost, water } = grid;
+  if (x < 0 || z < 0 || x >= W || z >= H) return false;
+  const i = z * W + x;
+  if (i === cells[0] || i === cells[cells.length - 1]) return !deepAt(grid, i);
+  const c = cost[i];
+  if (!(c < Infinity)) return false;
+  if (!(water && water[i]) && c <= limit) return true;
+  for (let k = k0; k <= k1; k++) if (cells[k] === i) return true;
+  return false;
+}
+
+// Deep water (not a ford, not a deck): never a place to stand.
+function deepAt(grid, i) { return grid.water ? grid.water[i] === 1 : false; }
+
+// Does the straight leg a -> b stay on walkable cells? Every cell the segment
+// passes through (a grid traversal, so no cell is skipped) must be passable;
+// the path's own end cells may be impassable (a door inside a footprint),
+// unless they are deep water.
+function legClear(grid, ax, az, bx, bz, okA, okB) {
+  const { W, H, ox, oz, cell, cost } = grid;
+  let x = Math.floor((ax - ox) / cell), z = Math.floor((az - oz) / cell);
+  const ex = Math.floor((bx - ox) / cell), ez = Math.floor((bz - oz) / cell);
+  const dx = bx - ax, dz = bz - az;
+  const sx = dx > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
+  const tdx = dx !== 0 ? Math.abs(cell / dx) : Infinity, tdz = dz !== 0 ? Math.abs(cell / dz) : Infinity;
+  let tx = dx !== 0 ? (((sx > 0 ? x + 1 : x) * cell + ox) - ax) / dx : Infinity;
+  let tz = dz !== 0 ? (((sz > 0 ? z + 1 : z) * cell + oz) - az) / dz : Infinity;
+  const n = Math.abs(ex - x) + Math.abs(ez - z);
+  for (let k = 0; ; k++) {
+    if (x < 0 || z < 0 || x >= W || z >= H) return false;
+    const i = z * W + x;
+    if (!(i === okA || i === okB ? !deepAt(grid, i) : Number.isFinite(cost[i]))) return false;
+    if (k >= n) return true;
+    if (tx < tz) { x += sx; tx += tdx; } else { z += sz; tz += tdz; }
+  }
 }
 
 // ---------------------------------------------------------------- scheduler

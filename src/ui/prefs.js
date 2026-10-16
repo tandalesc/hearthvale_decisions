@@ -6,13 +6,16 @@ const SEEN_KEY = 'hearthvale-ui-seen';
 
 export const DEFAULT_PREFS = {
   quality: 'auto',          // auto | low | medium | high
+  batterySaver: 'off',      // off | battery (when unplugged) | always
   dayCycle: 'seasonal',     // seasonal | slow | off
+  peopleShadows: 'blob',    // blob: soft sun-aware blobs | full: walkers also cast real shadows
   motion: 'full',           // full | reduced
   theme: 'auto',            // auto | light | night
   textSize: 'normal',       // normal | large
   master: 0.8, ambience: 0.6, ui: 0.7, muted: false,
-  moments: 'fast',          // fast: blocking title cards at 3× and 8× only | always | never
-  pauseOnSession: true,     // pause at 3×/8× when a new session of cards opens
+  moments: 'fast',          // fast: blocking title cards at 3× and 5× only | always | never
+  settingsTab: 'game',      // the Settings tab opened last
+  approvalTab: 'faction',   // the People view's Approval breakdown shown last
   binderWidth: null,        // px, the panel's dragged width; null is the layout default
   drawerWidth: null,        // px, the left drawer's dragged width
 };

@@ -2,6 +2,9 @@
 // The year starts in early spring: months 0-2 spring, 3-5 summer, 6-8 autumn, 9-11 winter.
 
 export const TICK_SECONDS = 0.1;
+// Sim seconds per real second at 1x (src/main.js; ?pace= overrides it there):
+// 0.5 makes a year last two minutes at 1x.
+export const PACE = 0.5;
 export const TICKS_PER_MONTH = 50;
 export const MONTHS_PER_YEAR = 12;
 export const TICKS_PER_YEAR = TICKS_PER_MONTH * MONTHS_PER_YEAR;

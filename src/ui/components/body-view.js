@@ -1,14 +1,15 @@
-// One binder tab per body (design-visual §8.2): its docket, a dashboard of
-// up to six sparklines, its rules, and delegation once that unlocks.
+// One body's page in the Council (design-visual §8.2), beside its cards: a
+// dashboard of up to six sparklines, its rules, and the way to dissolve it.
+// The Council's head names the body; this view's own head shows only where
+// the page stands alone.
 import {esc, h, setText} from '../dom.js';
 import {icon} from '../icons.js';
-import {num, pct, short, theName} from '../format.js';
+import {pct, short, theName} from '../format.js';
 import {sparkline} from './sparkline.js';
-import {createDocket} from './docket.js';
 import {explainer, EXPLAINERS} from './explainer.js';
 import {budgetSection} from './late-surfaces.js';
+import {bodyBudgetSection} from './budget.js';
 
-const CAPS = [400, 800, 1500, 3000];
 
 function metricValue(m) {
   const v = m.value ?? m.series?.[m.series.length - 1];
@@ -29,50 +30,15 @@ export function createBodyView(ctx, bodyId) {
   const el = h('div.view.body-view', {'data-body': bodyId});
   const head = h('header.view-head');
   const notes = h('div.notes');
-  const docketSec = h('section.section.docket-sec');
-  docketSec.innerHTML = '<div class="section-head"><h3>Needs your ruling</h3><span class="count"></span></div>';
-  const docket = createDocket(ctx, bodyId === 'moot'
-    ? {empty: ['Nothing waits for you.', 'The town gets on with its day. New requests come each season.']}
-    : {empty: ['Nothing from this body just now.', 'It will bring you its plans when they are ready.']});
-  docketSec.append(docket.el);
   const dash = h('section.section.dash');
   const rules = h('section.section.body-rules');
-  const deleg = h('section.section.delegation');
   const budget = budgetSection();
-  const orders = h('section.section.orders');
+  // A body on a yearly budget: its grant, spending and plans.
+  const own = bodyBudgetSection();
   const future = h('section.section.future');
-  el.append(head, notes, docketSec, dash, budget.el, rules, deleg, orders, future);
+  el.append(head, notes, dash, own.el, budget.el, rules, future);
 
-  let headSig = '', dashSig = '', rulesSig = '', delegSig = '', notesSig = '', ordersSig = '', futureSig = '';
-
-  // Standing orders settle common requests without asking: "Always approve
-  // street works up to 400 coin", "Always refuse a new tithe".
-  function renderOrders(body, unlocks, categories) {
-    const show = unlocks.standingOrders && categories?.length;
-    orders.hidden = !show;
-    if (!show) return;
-    const list = body.standingOrders ?? [];
-    const sig = JSON.stringify([list, categories.map((c) => c.id)]);
-    if (sig === ordersSig) return;
-    ordersSig = sig;
-    const catName = (id) => categories.find((c) => c.id === id)?.name ?? 'all';
-    const words = (o) => `${o.action === 'refuse' ? 'Always refuse' : 'Always approve'} ${o.match?.category ? `${catName(o.match.category).toLowerCase()} requests` : 'its requests'}${o.action !== 'refuse' && Number.isFinite(o.maxCost) ? ` up to ${num(o.maxCost)} coin` : ''}.`;
-    orders.innerHTML = `<div class="section-head"><h3>Standing orders</h3><span class="count">${list.length || ''}</span></div>
-      <p class="section-note">Settle common requests without asking you each time.</p>
-      ${list.map((o) => `<div class="order" data-order="${esc(o.id)}"><span>${esc(words(o))}</span><button class="icon-btn" data-remove="${esc(o.id)}" aria-label="Remove this order">${icon('close')}</button></div>`).join('')}
-      <div class="order-form">
-        <select data-f="action" aria-label="Approve or refuse"><option value="approve">Always approve</option><option value="refuse">Always refuse</option></select>
-        <select data-f="category" aria-label="Which requests">${categories.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select>
-        <select data-f="cap" aria-label="Up to what cost"><option value="">at any cost</option>${[200, 400, 800, 1500].map((c) => `<option value="${c}">up to ${num(c)} coin</option>`).join('')}</select>
-        <button class="btn btn-secondary" data-add>Add order</button>
-      </div>`;
-    orders.querySelector('[data-add]').addEventListener('click', () => {
-      const f = (k) => orders.querySelector(`[data-f="${k}"]`).value;
-      const cap = Number(f('cap'));
-      ctx.setStandingOrder(bodyId, {match: {category: f('category')}, action: f('action'), ...(cap ? {maxCost: cap} : {})});
-    });
-    orders.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', () => ctx.setStandingOrder(bodyId, {id: b.dataset.remove, remove: true})));
-  }
+  let headSig = '', dashSig = '', rulesSig = '', notesSig = '', futureSig = '';
 
   function renderFuture(body) {
     const show = bodyId !== 'moot';
@@ -84,24 +50,23 @@ export function createBodyView(ctx, bodyId) {
   }
 
   function renderHead(body) {
-    const sig = `${body.name}|${body.founded}|${body.delegated}|${body.status}`;
+    const sig = `${body.name}|${body.founded}|${body.status}`;
     if (sig === headSig) return;
     headSig = sig;
     const since = bodyId === 'moot' ? 'Speaks for the whole town' : `Sits since year ${body.founded ?? '–'}`;
     const chips = [];
-    if (body.delegated) chips.push('<span class="chip gold">Runs its own affairs</span>');
     if (body.status === 'waning') chips.push('<span class="chip down">Losing heart</span>');
     if (body.status === 'petitioning') chips.push('<span class="chip river">Asking to form</span>');
     head.innerHTML = `<span class="seal-icon">${icon(ctx.bodyIcon(bodyId))}</span><div><h2>${esc(body.name)}</h2><p>${since}</p>${chips.length ? `<div class="chips" style="margin-top:6px">${chips.join('')}</div>` : ''}</div>`;
   }
 
   function renderNotes(body, unlocks) {
-    const sig = `${unlocks.bodies}|${unlocks.delegation}`;
+    const sig = `${unlocks.bodies}`;
     if (sig === notesSig) return;
     notesSig = sig;
     notes.replaceChildren();
-    const lines = bodyId === 'moot' ? EXPLAINERS.docket : body.explainer ?? ['This body watches its own part of town.', 'It will bring you its own plans to rule on.'];
-    const first = explainer(ctx, bodyId === 'moot' ? 'docket' : `body:${bodyId}`, lines);
+    const lines = bodyId === 'moot' ? ['The Council speaks for the whole town.', 'Its numbers show how the town is going.'] : body.explainer ?? ['This body watches its own part of town.', 'It will bring you its own plans to rule on.'];
+    const first = explainer(ctx, `body:${bodyId}`, lines);
     if (first) notes.append(first);
   }
 
@@ -128,50 +93,22 @@ export function createBodyView(ctx, bodyId) {
     const sig = items.map((r) => r.id + r.level).join(',');
     if (sig === rulesSig) return;
     rulesSig = sig;
-    rules.innerHTML = `<div class="section-head"><h3>Its rules</h3><span class="count">${items.length}</span></div>` + (items.length
+    rules.innerHTML = `<div class="section-head"><h3>Its rules</h3><span class="count">${items.length}</span><button type="button" class="link-btn book-open">${icon('rules')}Rule Book</button></div>` + (items.length
       ? items.map((p) => `<div class="rule"><div class="rule-top"><span class="rule-title">${esc(p.title)}</span>${pips(p)}</div><p>${esc(p.summary ?? '')}</p></div>`).join('')
       : '<div class="empty">No rules of its own yet.</div>');
-  }
-
-  function renderDelegation(body, unlocks) {
-    const show = unlocks.delegation && bodyId !== 'moot' && body.canDelegate !== false;
-    deleg.hidden = !show;
-    if (!show) return;
-    const sig = `${body.delegated}|${body.cap}`;
-    if (sig === delegSig) return;
-    delegSig = sig;
-    const cap = body.cap || 800;
-    deleg.innerHTML = `<div class="section-head"><h3>Its affairs</h3></div>
-      <div class="delegate">
-        <b>Let them run their own affairs</b>
-        <button class="switch" role="switch" aria-checked="${Boolean(body.delegated)}" aria-label="Let ${esc(theName(body.name))} run its own affairs"></button>
-        <p>${body.delegated ? `It decides for itself and spends up to ${num(cap)} coin a year. You get a yearly report.` : 'It would decide its own requests within a yearly cap and send you a report instead.'}</p>
-        <label class="field" style="grid-column:1/-1;border:0;padding:0"><span>Yearly cap</span><select class="cap">${CAPS.map((c) => `<option value="${c}" ${c === cap ? 'selected' : ''}>${num(c)} coin</option>`).join('')}</select></label>
-      </div>`;
-    const note = explainer(ctx, 'delegation', EXPLAINERS.delegation);
-    if (note) deleg.prepend(note);
-    const sw = deleg.querySelector('.switch');
-    const capSel = deleg.querySelector('.cap');
-    sw.addEventListener('click', () => ctx.setDelegated(bodyId, sw.getAttribute('aria-checked') !== 'true', Number(capSel.value)));
-    capSel.addEventListener('change', () => { if (body.delegated) ctx.setDelegated(bodyId, true, Number(capSel.value)); });
+    rules.querySelector('.book-open').addEventListener('click', () => ctx.openRuleBook?.());
   }
 
   return {
     el,
-    docket,
-    update(body, {cards, unlocks, ruleIndex, phone, purse, categories}) {
-      renderOrders(body, unlocks, categories);
+    update(body, {unlocks, ruleIndex, purse}) {
       renderFuture(body);
       budget.update(purse, bodyId === 'moot' && unlocks.budget);
+      own.update(bodyId !== 'moot' ? body.budget ?? null : null);
       renderHead(body);
       renderNotes(body, unlocks);
-      const mine = bodyId === 'moot' ? cards : cards.filter((c) => c.from === bodyId);
-      setText(docketSec.querySelector('h3'), body.delegated ? 'Reports' : 'Needs your ruling');
-      setText(docketSec.querySelector('.count'), mine.length ? String(mine.length) : '');
-      docket.update(mine, {phone});
       renderDash(body, unlocks);
       renderRules(body, unlocks, ruleIndex);
-      renderDelegation(body, unlocks);
     },
   };
 }
@@ -181,5 +118,5 @@ export function pips(p) {
   if (max <= 1) return '';
   let out = '';
   for (let i = 1; i <= max; i++) out += `<i class="${i <= p.level ? 'on' : ''}"></i>`;
-  return `<span class="pips" title="Level ${p.level} of ${max}">${out}</span>`;
+  return `<span class="pips" role="img" aria-label="Level ${p.level} of ${max}" title="Level ${p.level} of ${max}">${out}</span>`;
 }

@@ -3,7 +3,7 @@
 // Shared invariant of sim-core (people.js, render-view.js) and sim-world (routes, footprints).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fixtureState, stepTick, createRenderView, cellIndex} from '../src/sim/index.js';
+import {fixtureState, stepTick, createRenderView, cellIndex, PACE} from '../src/sim/index.js';
 import {deckHeightAt, alongBridge} from '../src/sim/bridges.js';
 import {waterAt, FORDS, bankDistance} from '../src/terrain.js';
 
@@ -61,9 +61,9 @@ function run(speed, ticks) {
   const end = state.time.tick + ticks;
   while (state.time.tick < end) {
     now += FRAME;
-    stepTick(state, FRAME * speed, services);
+    stepTick(state, FRAME * speed * PACE, services);   // the game's own pace (src/main.js)
     routes.tick?.(state);
-    view.sync(state, {now, speed});
+    view.sync(state, {now, speed: speed * PACE});
     view.peopleDirty = null;
     view.buildingEvents.length = 0;
     bridgeList = bridgesOf(state);

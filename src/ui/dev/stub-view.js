@@ -13,6 +13,37 @@ export function selectTopBar(state) {
     era: state.era, eraName: ERA_NAMES[state.era],
     people: s.people, coin: s.coin, coinTrend: trend, food: s.food,
     foodMonths: s.food / Math.max(1, s.people * 0.9), wellbeing: s.wellbeing, homes: s.homes,
+    approval: state.era >= 3 ? stubApproval(state).value : null, approvalChange: state.era >= 3 ? stubApproval(state).change : null,
+  };
+}
+
+// A made-up approval history: a slow swell with a dip, the same every time.
+function stubApproval(state) {
+  const y = state.time.year;
+  const at = (k) => Math.round(58 + 9 * Math.sin(k / 7) - 6 * Math.exp(-(((k - y + 6) / 3) ** 2)));
+  const history = Array.from({length: Math.min(40, y + 1)}, (_, i) => ({y: y - Math.min(40, y + 1) + 1 + i})).map((p) => ({y: p.y, v: at(p.y)}));
+  return {value: history.at(-1).v, change: history.length > 1 ? history.at(-1).v - history.at(-2).v : null, history};
+}
+
+export function selectApproval(state) {
+  if (state.era < 3) return null;
+  const {value, change, history} = stubApproval(state);
+  const rows = (pairs) => {
+    const total = pairs.reduce((n, [, , p]) => n + p, 0);
+    return pairs.map(([id, v, p]) => ({id, name: FACTIONS[id] ?? id, value: v, people: p, share: p / total}));
+  };
+  return {
+    year: state.time.year - 1, value, change, strongAgainst: 6, history,
+    tabs: [
+      {id: 'faction', label: 'Groups', more: 0, rows: rows([['farmers', 54, 900], ['crafts', 71, 820], ['merchants', 38, 610], ['labour', 49, 480], ['newcomers', 63, 300]])},
+      {id: 'wealthBand', label: 'Wealth', more: 0, rows: [['Poor', 52, 0.34], ['Middling', 61, 0.36], ['Wealthy', 44, 0.3]].map(([name, v, share]) => ({id: name.toLowerCase(), name, value: v, people: Math.round(share * 3000), share}))},
+      {id: 'district', label: 'Districts', more: 9, rows: [['Mill Row', 47, 0.12], ['Old Ford', 63, 0.1], ['Tanner Bank', 55, 0.08]].map(([name, v, share]) => ({id: name, name, value: v, people: Math.round(share * 3000), share}))},
+    ],
+    drivers: [
+      {text: 'The rent cap: Makers glad, Merchants sore', kind: 'rule', points: 3},
+      {text: 'You refused: a guild hall', kind: 'ruling', points: -2},
+      {text: 'Families waiting for homes', kind: 'life', points: -1},
+    ],
   };
 }
 
@@ -28,8 +59,7 @@ export function selectBodies(state) {
   for (const [id, p] of Object.entries(state.policies)) (rulesBy[p.by] ??= []).push(id);
   return state.bodies.filter((b) => b.status !== 'dissolved').map((b) => ({
     id: b.id, kind: b.kind, centreId: b.centreId, name: bodyName(state, b), founded: b.foundedYear, status: b.status,
-    power: b.power, patience: b.patience, delegated: b.delegated, cap: b.cap,
-    canDelegate: state.era >= 3 && b.id !== 'moot',
+    power: b.power, patience: b.patience,
     explainer: b.kind === 'ward' ? ['Millbridge has its own council now.', 'It asks for local works and wants to keep more of its own taxes.'] : BODY_DEFS[b.id]?.explainer,
     metrics: b.metrics.map((m) => {
       const last = m.series[m.series.length - 1];
@@ -38,7 +68,6 @@ export function selectBodies(state) {
     }),
     docketCount: state.docket.filter((c) => c.from === b.id || (b.id === 'moot' && !state.bodies.some((x) => x.id === c.from))).length,
     rules: rulesBy[b.id] ?? [],
-    standingOrders: b.standingOrders ?? [],
   }));
 }
 
@@ -116,7 +145,7 @@ export function selectUnlocks(state) {
     chronicle: true, docket: true,
     ruleBook: e >= 1, people: e >= 1,
     bodies: e >= 2, overlays: e >= 2,
-    debates: e >= 3, delegation: e >= 3, standingOrders: e >= 3, tensions: e >= 3,
+    debates: e >= 3, tensions: e >= 3, approval: e >= 3,
     budget: e >= 4, compass: e >= 4,
     endPreview: e >= 5,
     places: (state.centres?.length ?? 0) >= 2,

@@ -1,21 +1,28 @@
 import * as THREE from 'three';
-import { heightAt, riverX, WATER_HALF, terrainSeed } from '../terrain.js';
-import { patchMaterial, hashId, LAYER_REFLECT, GRADE_HEAD } from './shaderlib.js';
-import { GROUND_GLSL, GROUND_ORIGIN, GROUND_LIMIT } from './ground.js';
-import { WOODLAND, useHaze } from './terrain.js';
+import { heightAt, riverX, WATER_HALF, terrainKey, bankDistance } from '../terrain.js';
+import { patchMaterial, hashId, LAYER_REFLECT, GRADE_HEAD, NOISE } from './shaderlib.js';
+import { GROUND_GLSL, GROUND_ORIGIN, GROUND_LIMIT, shoreCharacter } from './ground.js';
+import { WOODLAND } from './terrain.js';
+import { woodField } from '../woodland.js';
 
 // Trees (design-visual §3.5, §4.4): a deterministic woodland that frames the
 // town like a model village — woods and copses on the hills and at the map
 // edge, willows along the river, hedgerows between fields, a few orchards and
-// lone field trees. Four global InstancedMeshes (round, tall, pine, bush),
-// ~50 triangles each, flat shaded. Seasons, wind and the chop animation all
-// run in the vertex shader; the CPU only writes a chop time when a lot or a
-// road claims a tree, so steady state costs nothing.
+// lone field trees.
+//
+// Five species meshes (broadleaf, tall, fir, bush, willow), each with two
+// levels of detail drawn as two InstancedMeshes: FAR holds the whole forest
+// and drops trees near the eye in its vertex shader; NEAR holds only the
+// trees within reach of the eye (refilled on the CPU when the camera has
+// moved a few metres) and draws them with full crowns. Seasons, species
+// palettes, wind, light through leaves and the chop animation all run on the
+// GPU; the CPU only writes a chop time when a lot or a road claims a tree.
 
-export const KIND = { ROUND: 0, TALL: 1, PINE: 2, BUSH: 3 };
-const KIND_NAMES = ['round', 'tall', 'pine', 'bush'];
+export const KIND = { ROUND: 0, TALL: 1, PINE: 2, BUSH: 3, WILLOW: 4 };
+const KIND_NAMES = ['round', 'tall', 'pine', 'bush', 'willow'];
+const KINDS = KIND_NAMES.length;
 // Slots kept at the start of each mesh for park trees (placed per park lot).
-const PARK_RESERVE = [96, 48, 0, 96];
+const PARK_RESERVE = [96, 48, 0, 96, 0];
 const EXTENT = 470;
 const CELL = 5;
 // Default town centre; createTrees passes the real one (ctx.townCentre).
@@ -23,6 +30,12 @@ const DEFAULT_TOWN = [-40, 0];
 const FLAG_BLOSSOM = 1;
 // Kept share of wild trees per quality tier (lowest priority trees drop first).
 const KEEP = { low: 0.35, medium: 0.6, high: 1 };
+// Trees closer than this to the eye draw at full detail (metres), per tier.
+const NEAR_DIST = { low: 55, medium: 85, high: 120 };
+// The near set is refilled when the eye has moved this far; it holds every
+// tree within NEAR_DIST + NEAR_SLACK, so the GPU test always finds its tree.
+const NEAR_SLACK = 10;
+const NEAR_MOVE = 8;
 
 const smoothstep = (a, b, x) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -32,14 +45,8 @@ const smoothstep = (a, b, x) => {
 // ---------------------------------------------------------------------------
 // Placement
 
-/** 0..1 woodland field: broad wavy bands with smaller copse-sized lumps. */
-function woodField(x, z) {
-  const a = Math.sin(x / 37 + Math.sin(z / 53) * 1.3) * 0.25;
-  const b = Math.sin(z / 29 - x / 61 + 1.7) * 0.2;
-  const c = Math.sin((x + z) / 17 + Math.cos(x / 23)) * 0.12;
-  const d = Math.sin(x / 11 - z / 13) * 0.06;
-  return 0.5 + a + b + c + d;
-}
+// The woodland field (0..1) lives in ../woodland.js, shared with the sim (walks along
+// the woods' edge go where these woods are drawn).
 
 /** Share of pines: higher ground and a few large conifer stands. */
 function pineShare(x, z, h) {
@@ -55,11 +62,15 @@ let cachedSeed;
  * keep a prefix. Arrays are indexed by global tree index.
  */
 export function generateForest(TOWN = DEFAULT_TOWN) {
-  if (cachedForest && cachedSeed === terrainSeed()) return cachedForest;
+  if (cachedForest && cachedSeed === terrainKey()) return cachedForest;
   const list = [];
   const push = (x, z, kind, scale, seedId, flags = 0) => {
     if (Math.abs(x) > EXTENT || Math.abs(z) > EXTENT) return;
-    if (Math.abs(x - riverX(z)) < WATER_HALF + 2.5) return;
+    // Out of every water (river, creeks, lakes, the sea) and off the beaches.
+    const shore = bankDistance(x, z);
+    if (shore < 2.5) return;
+    const beach = shore < 60 ? shoreCharacter(x, z, shore) : 0;
+    if (beach > 0 && shore < beach + 3) return;
     // Treeline: woods thin out over ~12 units below a ragged line, and steep
     // faces (over ~38 degrees) stay bare rock.
     const h = heightAt(x, z);
@@ -80,7 +91,9 @@ export function generateForest(TOWN = DEFAULT_TOWN) {
       const w = woodField(x, z);
       let density = w > 0.62 ? 0.4 + (w - 0.62) * 1.1 : w > 0.52 ? (w - 0.52) * 3 : 0.022;
       density += smoothstep(260, 390, Math.max(Math.abs(x), Math.abs(z))) * 0.2;
-      const river = Math.abs(x - riverX(z));
+      // Distance from the water's centre line, as for the river (so lake and
+      // pond shores get their willows and alders too; beaches stay open).
+      const river = bankDistance(x, z) + WATER_HALF;
       const riparian = river < 17 ? 0.22 * (0.5 + 0.5 * Math.sin(z / 19 + 1.3)) : 0;
       density += riparian;
       density *= 0.22 + 0.78 * smoothstep(25, 140, Math.hypot(x - TOWN[0], z - TOWN[1]));
@@ -88,7 +101,9 @@ export function generateForest(TOWN = DEFAULT_TOWN) {
       const h = heightAt(x, z);
       const pine = riparian > 0 ? 0.03 : pineShare(x, z, h);
       const r = hashId(id, 4);
-      const kind = r < pine ? KIND.PINE : riparian > 0 || hashId(id, 5) < 0.55 ? KIND.ROUND : KIND.TALL;
+      // Willows lean over the water; alders and birches stand behind them.
+      const willow = river < 13.5 && hashId(id, 10) < 0.6;
+      const kind = willow ? KIND.WILLOW : r < pine ? KIND.PINE : riparian > 0 || hashId(id, 5) < 0.55 ? KIND.ROUND : KIND.TALL;
       // Trees deep in the woods grow a little bigger than those at the edge.
       const scale = (0.95 + hashId(id, 6) * 0.5) * (1 + 0.25 * smoothstep(0.62, 0.85, w));
       push(x, z, kind, scale, id);
@@ -181,7 +196,7 @@ export function generateForest(TOWN = DEFAULT_TOWN) {
     forest.priority[i] = t.p; forest.kind[i] = t.kind; forest.flags[i] = t.flags;
   });
   cachedForest = forest;
-  cachedSeed = terrainSeed();
+  cachedSeed = terrainKey();
   return forest;
 }
 
@@ -250,46 +265,63 @@ export function parkPlanting(lot) {
 }
 
 // ---------------------------------------------------------------------------
-// Geometry: non-indexed, one normal per face, with aPart (0 trunk, 1 canopy,
-// 2 evergreen), aPivot (canopy blob centre, for the bare-winter shrink) and
-// aShade (per-face brightness jitter for a hand-painted look).
+// Geometry: non-indexed, with soft "volume" normals, aPart (0 trunk/branch,
+// 1 deciduous canopy, 2 evergreen), aPivot (canopy clump centre, for the
+// bare-winter shrink) and aShade (baked crown occlusion x per-clump tone).
+//
+// Every species has two levels: NEAR (a crown of several lumpy clumps, real
+// branches, tiered firs, hanging willow fronds; ~60-150 triangles) for trees
+// close to the eye, and FAR (one or two blobs; ~20-40 triangles) for the rest
+// of the forest. Both levels share the crown's bounding volume, so their
+// normals and occlusion agree and the swap reads as a gain in detail only.
+
+// FAR draws trees beyond the near distance; NEAR those within it; ALL (bushes,
+// too small to need a near level) draws every instance.
+const LOD = { FAR: 0, NEAR: 1, ALL: 2 };
 
 class TreeBuilder {
   constructor(salt) {
-    this.pos = []; this.part = []; this.pivot = []; this.shade = []; this.salt = salt; this.face = 0;
+    this.salt = salt;
+    this.v = []; // {p, f (face normal), part, pivot, ring, clump, faceShade}
+    this.face = 0;
+    this.clumps = 0;
   }
 
-  tri(a, b, c, part, pivot) {
-    // Per-face shade: random jitter, undersides darker.
+  tri(a, b, c, part, pivot, ring = [1, 1, 1], clump = 0) {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
     const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
-    const ny = uz * vx - ux * vz;
-    const len = Math.hypot(uy * vz - uz * vy, ny, ux * vy - uy * vx) || 1;
-    const shade = (0.88 + hashId(this.face++, this.salt) * 0.22) * (ny / len < -0.2 ? 0.82 : 1);
-    for (const v of [a, b, c]) {
-      this.pos.push(v[0], v[1], v[2]);
-      this.part.push(part);
-      this.pivot.push(pivot[0], pivot[1], pivot[2]);
-      this.shade.push(shade);
-    }
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    nx /= len; ny /= len; nz /= len;
+    const faceShade = 0.95 + hashId(this.face++, this.salt) * 0.1;
+    [a, b, c].forEach((p, k) => this.v.push({ p, f: [nx, ny, nz], part, pivot, ring: ring[k], clump, faceShade }));
   }
 
-  /** Tapered n-sided prism (trunks), sides only. */
-  trunk(r0, r1, y0, y1, sides = 4) {
+  /** Tapered n-sided prism from base (x0,y0,z0) to top (x1,y1,z1). */
+  limb(r0, r1, p0, p1, sides = 5) {
+    const ax = p1[0] - p0[0], ay = p1[1] - p0[1], az = p1[2] - p0[2];
+    const al = Math.hypot(ax, ay, az);
+    const d = [ax / al, ay / al, az / al];
+    // A basis perpendicular to the limb.
+    const t = Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    let e1 = [d[1] * t[2] - d[2] * t[1], d[2] * t[0] - d[0] * t[2], d[0] * t[1] - d[1] * t[0]];
+    const l1 = Math.hypot(...e1); e1 = e1.map((x) => x / l1);
+    const e2 = [d[1] * e1[2] - d[2] * e1[1], d[2] * e1[0] - d[0] * e1[2], d[0] * e1[1] - d[1] * e1[0]];
+    const ring = (p, r, a) => [p[0] + (Math.cos(a) * e1[0] + Math.sin(a) * e2[0]) * r, p[1] + (Math.cos(a) * e1[1] + Math.sin(a) * e2[1]) * r, p[2] + (Math.cos(a) * e1[2] + Math.sin(a) * e2[2]) * r];
     for (let i = 0; i < sides; i++) {
       const a0 = (i / sides) * Math.PI * 2, a1 = ((i + 1) / sides) * Math.PI * 2;
-      const p = (a, r, y) => [Math.cos(a) * r, y, Math.sin(a) * r];
-      this.tri(p(a1, r0, y0), p(a0, r0, y0), p(a0, r1, y1), 0, [0, 0, 0]);
-      this.tri(p(a1, r0, y0), p(a0, r1, y1), p(a1, r1, y1), 0, [0, 0, 0]);
+      this.tri(ring(p0, r0, a1), ring(p0, r0, a0), ring(p1, r1, a0), 0, p0);
+      this.tri(ring(p0, r0, a1), ring(p1, r1, a0), ring(p1, r1, a1), 0, p0);
     }
   }
 
-  /** Icosahedron blob with deterministic vertex jitter (shared corners move together). */
-  blob(cx, cy, cz, r, sy = 1, part = 1, jitter = 0.16) {
-    const g = new THREE.IcosahedronGeometry(1, 0);
+  /** Lumpy icosahedron clump (shared corners jitter together). */
+  blob(cx, cy, cz, r, sy = 1, part = 1, jitter = 0.18, detail = 0) {
+    const g = new THREE.IcosahedronGeometry(1, detail);
     const p = g.attributes.position;
+    const clump = this.clumps++;
     const jit = (x, y, z) => {
-      const k = Math.round(x * 97) * 7 + Math.round(y * 89) * 13 + Math.round(z * 83) * 29;
+      const k = Math.round(x * 97) * 7 + Math.round(y * 89) * 13 + Math.round(z * 83) * 29 + clump * 1013;
       return 1 + (hashId(k + this.salt * 1000, 71) - 0.5) * 2 * jitter;
     };
     const verts = [];
@@ -298,52 +330,211 @@ class TreeBuilder {
       const j = jit(x, y, z);
       verts.push([cx + x * r * j, cy + y * r * sy * j, cz + z * r * j]);
     }
-    for (let i = 0; i < verts.length; i += 3) this.tri(verts[i], verts[i + 1], verts[i + 2], part, [cx, cy, cz]);
+    for (let i = 0; i < verts.length; i += 3) this.tri(verts[i], verts[i + 1], verts[i + 2], part, [cx, cy, cz], [1, 1, 1], clump);
     g.dispose();
   }
 
-  /** Six-sided open cone (pine tiers). */
-  cone(r, y0, h, sides = 6, twist = 0) {
+  /**
+   * A fir tier: drooping outer skirt -> shoulder ring -> apex. `droop` lowers
+   * alternate tips so the edge is ragged, not a clean cone.
+   */
+  tier(r, y0, h, sides, twist, droop = 0.18, shoulder = true) {
+    const clump = this.clumps++;
     const apex = [0, y0 + h, 0];
+    const outer = [], mid = [];
     for (let i = 0; i < sides; i++) {
-      const a0 = (i / sides) * Math.PI * 2 + twist, a1 = ((i + 1) / sides) * Math.PI * 2 + twist;
-      const b0 = [Math.cos(a0) * r, y0, Math.sin(a0) * r];
-      const b1 = [Math.cos(a1) * r, y0, Math.sin(a1) * r];
-      // No base cap: from the game camera and the sun the tiers above and
-      // below hide it, and the back faces still close the shadow silhouette.
-      this.tri(b1, b0, apex, 2, [0, y0, 0]);
+      const a = (i / sides) * Math.PI * 2 + twist;
+      const rr = r * (0.9 + 0.2 * hashId(i + clump * 31, this.salt + 5));
+      outer.push([Math.cos(a) * rr, y0 - (i % 2 ? droop : 0), Math.sin(a) * rr]);
+      const am = a + Math.PI / sides;
+      mid.push([Math.cos(am) * r * 0.52, y0 + h * 0.38, Math.sin(am) * r * 0.52]);
+    }
+    const pv = [0, y0, 0];
+    for (let i = 0; i < sides; i++) {
+      const j = (i + 1) % sides;
+      if (shoulder) {
+        // Outer band (tips bright) up to the shoulder ring (in shade), then the cap.
+        this.tri(outer[j], outer[i], mid[i], 2, pv, [1, 1, 0.72], clump);
+        this.tri(outer[j], mid[i], mid[j], 2, pv, [1, 0.72, 0.72], clump);
+        this.tri(mid[j], mid[i], apex, 2, pv, [0.72, 0.72, 0.9], clump);
+      } else {
+        this.tri(outer[j], outer[i], apex, 2, pv, [1, 1, 0.9], clump);
+      }
+    }
+  }
+
+  /**
+   * Willow fronds: a closed skirt hanging from the crown, its hem ragged
+   * (alternate strands longer), faces turned outward. Centred on the dome
+   * (cx, cz) and starting inside it (r0), so the strands grow out from under
+   * the crown and flare to r1 at the hem, with no gap between them.
+   */
+  curtain(r0, r1, yTop, yBot, sides, phase, cx = 0, cz = 0) {
+    const clump = this.clumps++;
+    const top = [], bot = [];
+    for (let i = 0; i < sides; i++) {
+      const a = (i / sides) * Math.PI * 2 + phase;
+      const len = (i % 2 ? 0.55 : 1) * (0.8 + 0.35 * hashId(i + clump * 17, this.salt + 9));
+      top.push([cx + Math.cos(a) * r0, yTop - (i % 2 ? 0.12 : 0), cz + Math.sin(a) * r0]);
+      const rb = r1 * (0.95 + 0.1 * hashId(i + clump * 23, this.salt + 13));
+      bot.push([cx + Math.cos(a) * rb, yTop - (yTop - yBot) * len, cz + Math.sin(a) * rb]);
+    }
+    const out = (p, q, r) => {
+      // Keep the winding outward from the trunk axis.
+      const ux = q[0] - p[0], uy = q[1] - p[1], uz = q[2] - p[2];
+      const vx = r[0] - p[0], vy = r[1] - p[1], vz = r[2] - p[2];
+      const nx = uy * vz - uz * vy, nz = ux * vy - uy * vx;
+      const mx = (p[0] + q[0] + r[0]) / 3 - cx, mz = (p[2] + q[2] + r[2]) / 3 - cz;
+      return nx * mx + nz * mz >= 0 ? [p, q, r] : [p, r, q];
+    };
+    for (let i = 0; i < sides; i++) {
+      const j = (i + 1) % sides;
+      const pv = [cx, yTop, cz];
+      // Fronds are thin and let light through: lift the crown occlusion
+      // toward the hem so the skirt does not read as a dark shade.
+      const lit = (p) => 1 + 0.5 * (1 - (p[1] - yBot) / Math.max(0.1, yTop - yBot));
+      const [a1, b1, c1] = out(top[i], top[j], bot[j]);
+      this.tri(a1, b1, c1, 1, pv, [lit(a1), lit(b1), lit(c1)], clump);
+      const [a2, b2, c2] = out(top[i], bot[j], bot[i]);
+      this.tri(a2, b2, c2, 1, pv, [lit(a2), lit(b2), lit(c2)], clump);
     }
   }
 
   build() {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
-    g.setAttribute('aPart', new THREE.Float32BufferAttribute(this.part, 1));
-    g.setAttribute('aPivot', new THREE.Float32BufferAttribute(this.pivot, 3));
-    g.setAttribute('aShade', new THREE.Float32BufferAttribute(this.shade, 1));
-    g.computeVertexNormals(); // non-indexed: face normals
-    g.computeBoundingSphere();
-    return g;
+    // Crown volume from the foliage vertices: soft normals and occlusion are
+    // taken against it, so near and far levels shade alike.
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const v of this.v) {
+      if (v.part === 0) continue;
+      x0 = Math.min(x0, v.p[0]); x1 = Math.max(x1, v.p[0]);
+      y0 = Math.min(y0, v.p[1]); y1 = Math.max(y1, v.p[1]);
+      z0 = Math.min(z0, v.p[2]); z1 = Math.max(z1, v.p[2]);
+    }
+    return finishGeometry(this, { cx: 0, cy: (y0 + y1) / 2, cz: 0, rx: Math.max(x1, -x0, z1, -z0), y0, y1 });
   }
 }
 
-function buildGeometry(kind) {
-  const b = new TreeBuilder(kind + 3);
+const norm = (x, y, z) => { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
+
+function finishGeometry(b, crown) {
+  const n = b.v.length;
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
+  const part = new Float32Array(n), pivot = new Float32Array(n * 3), shade = new Float32Array(n);
+  const sm = (t) => { t = Math.min(1, Math.max(0, t)); return t * t * (3 - 2 * t); };
+  b.v.forEach((v, i) => {
+    const [x, y, z] = v.p;
+    pos.set(v.p, i * 3);
+    pivot.set(v.pivot, i * 3);
+    part[i] = v.part;
+    let nn;
+    let ao;
+    const hf = (y - crown.y0) / Math.max(0.01, crown.y1 - crown.y0);
+    const rad = Math.hypot(x - crown.cx, z - crown.cz) / Math.max(0.01, crown.rx);
+    if (v.part === 0) {
+      // Bark: rounded around the limb's own axis, darker low and under the crown.
+      const r = norm(x - v.pivot[0], 0, z - v.pivot[2]);
+      nn = norm(v.f[0] * 0.45 + r[0] * 0.55, v.f[1] * 0.45, v.f[2] * 0.45 + r[2] * 0.55);
+      ao = 0.62 + 0.3 * sm((y + 0.3) / 1.2) - 0.18 * sm((y - crown.y0 + 0.6) / 1.2);
+    } else if (v.part === 2) {
+      // Fir: radial from the trunk axis with the cone's lift, plus the facet.
+      const r = norm(x, 0, z);
+      const soft = norm(r[0], 0.55, r[2]);
+      nn = norm(v.f[0] * 0.4 + soft[0] * 0.6, v.f[1] * 0.4 + soft[1] * 0.6, v.f[2] * 0.4 + soft[2] * 0.6);
+      ao = (0.6 + 0.4 * sm(hf * 1.1)) * v.ring;
+    } else {
+      // Broadleaf: a blend of the clump's own roundness and the whole crown's,
+      // keeping a trace of the facet so it still reads as cut paper.
+      const c = norm(x - v.pivot[0], y - v.pivot[1], z - v.pivot[2]);
+      const w = norm(x - crown.cx, (y - crown.cy) * 1.15, z - crown.cz);
+      nn = norm(v.f[0] * 0.3 + c[0] * 0.3 + w[0] * 0.4, v.f[1] * 0.3 + c[1] * 0.3 + w[1] * 0.4, v.f[2] * 0.3 + c[2] * 0.3 + w[2] * 0.4);
+      // Occlusion: darker low in the crown and toward its heart.
+      ao = (0.58 + 0.42 * sm(hf * 1.05 + 0.05)) * (0.78 + 0.22 * sm(rad * 1.4)) * v.ring;
+    }
+    nor.set(nn, i * 3);
+    const tone = v.part === 0 ? 1 : 0.92 + 0.16 * hashId(v.clump + 1, b.salt + 77);
+    shade[i] = ao * tone * v.faceShade;
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  g.setAttribute('aPart', new THREE.BufferAttribute(part, 1));
+  g.setAttribute('aPivot', new THREE.BufferAttribute(pivot, 3));
+  g.setAttribute('aShade', new THREE.BufferAttribute(shade, 1));
+  g.computeBoundingSphere();
+  return g;
+}
+
+export function buildGeometry(kind, lod = LOD.NEAR) {
+  const b = new TreeBuilder(kind + 3 + lod * 11);
+  const near = lod === LOD.NEAR;
   if (kind === KIND.ROUND) {
-    b.trunk(0.2, 0.13, -0.3, 2.7);
-    b.blob(0, 3.5, 0, 1.75, 0.88);
-    b.blob(0.75, 2.75, 0.45, 1.15, 0.85);
+    // Broadleaf (oak, beech, lime): a short trunk forking into two limbs under
+    // a broad, lumpy dome of clumps.
+    if (near) {
+      b.limb(0.23, 0.15, [0, -0.3, 0], [0.04, 2.1, 0.02], 6);
+      b.limb(0.12, 0.05, [0.04, 1.8, 0.02], [0.9, 3.0, 0.35], 4);
+      b.limb(0.11, 0.05, [0.02, 1.9, 0], [-0.75, 3.05, -0.45], 4);
+      b.blob(0, 4.05, 0, 1.3, 0.92);
+      b.blob(0.98, 3.35, 0.38, 1.02, 0.88);
+      b.blob(-0.9, 3.45, -0.42, 1.06, 0.9);
+      b.blob(0.22, 3.25, -1.02, 0.98, 0.86);
+      b.blob(-0.32, 3.15, 0.98, 0.94, 0.86);
+      b.blob(0.45, 4.6, 0.42, 0.78, 0.9);
+    } else {
+      b.limb(0.22, 0.14, [0, -0.3, 0], [0, 2.6, 0], 3);
+      b.blob(0.05, 3.62, 0, 1.92, 0.84, 1, 0.12);
+    }
   } else if (kind === KIND.TALL) {
-    b.trunk(0.17, 0.11, -0.3, 3.2);
-    b.blob(0, 4.3, 0, 1.3, 1.55, 1, 0.12);
-    b.blob(-0.35, 2.85, 0.2, 1.0, 1.0);
+    // Columnar (poplar) or airy (birch, by seed in the shader): a slim stem
+    // under stacked, narrowing clumps.
+    if (near) {
+      b.limb(0.17, 0.08, [0, -0.3, 0], [0, 4.4, 0], 5);
+      b.blob(0.05, 2.65, 0.05, 0.92, 1.0);
+      b.blob(0.3, 3.15, -0.3, 0.72, 1.05);
+      b.blob(-0.1, 3.7, 0.12, 0.98, 1.2);
+      b.blob(0.08, 4.75, -0.05, 0.84, 1.3);
+      b.blob(0.0, 5.65, 0.0, 0.55, 1.4);
+    } else {
+      b.limb(0.17, 0.1, [0, -0.3, 0], [0, 2.6, 0], 3);
+      b.blob(0, 4.0, 0, 1.08, 1.95, 1, 0.1);
+    }
   } else if (kind === KIND.PINE) {
-    b.trunk(0.2, 0.14, -0.3, 1.4);
-    b.cone(1.75, 0.9, 2.2, 6, 0);
-    b.cone(1.32, 2.15, 1.95, 6, 0.5);
-    b.cone(0.86, 3.3, 1.75, 6, 0.15);
+    // Fir and spruce: ragged tiers that droop at the tips.
+    if (near) {
+      b.limb(0.2, 0.08, [0, -0.3, 0], [0, 4.6, 0], 5);
+      const tiers = 5;
+      for (let i = 0; i < tiers; i++) {
+        const r = 1.95 - i * 0.37;
+        b.tier(r, 0.75 + i * 0.86, 1.55 - i * 0.12, 7, i * 0.45, 0.2 - i * 0.025);
+      }
+    } else {
+      b.limb(0.2, 0.14, [0, -0.3, 0], [0, 1.2, 0], 3);
+      b.tier(1.85, 0.8, 2.6, 6, 0, 0.1, false);
+      b.tier(1.2, 2.45, 2.4, 6, 0.5, 0.08, false);
+    }
+  } else if (kind === KIND.BUSH) {
+    if (near) {
+      b.blob(0, 0.62, 0, 0.88, 0.72, 1, 0.24);
+      b.blob(0.6, 0.45, 0.25, 0.62, 0.7, 1, 0.24);
+      b.blob(-0.45, 0.48, -0.35, 0.66, 0.7, 1, 0.24);
+    } else {
+      b.blob(0, 0.6, 0, 1.0, 0.72, 1, 0.2);
+    }
   } else {
-    b.blob(0, 0.6, 0, 1.0, 0.72, 1, 0.24);
+    // Willow: a leaning, forked trunk; a low dome; fronds that sweep the water.
+    if (near) {
+      b.limb(0.26, 0.17, [0, -0.3, 0], [0.35, 2.0, 0.1], 6);
+      b.limb(0.15, 0.07, [0.33, 1.9, 0.1], [1.0, 3.3, 0.5], 4);
+      b.limb(0.14, 0.07, [0.33, 1.9, 0.1], [-0.4, 3.4, -0.35], 4);
+      b.blob(0.3, 3.75, 0.05, 1.45, 0.62, 1, 0.16);
+      b.blob(1.1, 3.45, 0.55, 0.95, 0.6, 1, 0.16);
+      b.blob(-0.5, 3.5, -0.5, 1.0, 0.6, 1, 0.16);
+      b.curtain(1.05, 1.8, 3.55, 0.7, 18, 0.2, 0.3, 0.05);
+    } else {
+      b.limb(0.24, 0.16, [0, -0.3, 0], [0.3, 2.4, 0.1], 3);
+      b.blob(0.3, 3.7, 0.05, 1.85, 0.6, 1, 0.12);
+      b.curtain(1.35, 1.85, 3.5, 0.9, 10, 0.2, 0.3, 0.05);
+    }
   }
   return b.build();
 }
@@ -357,13 +548,24 @@ attribute vec3 aPivot;
 attribute float aShade;
 attribute vec4 iTree;   // seed, priority, chop start time (0 = standing), flags
 uniform float uYearT;
+uniform vec3 uLodEye;
+uniform float uLodDist;
 `;
 
-// Object space: winter bareness shrinks deciduous canopies toward their blob
-// centre; the chop tilts the tree ~12 degrees about its base, shrinks it, then
-// collapses it to a point.
+// Object space: the LOD split (each tree is drawn by exactly one level: the
+// test is the same expression on the same instance data), winter bareness
+// shrinking deciduous clumps toward their centres, leaf flutter, and the chop
+// (tilt ~12 degrees about the base, shrink, collapse to a point).
 const VERTEX_BEGIN = /* glsl */ `
   float seedT = iTree.x;
+  float lodD = distance(instanceMatrix[3].xyz, uLodEye);
+  #if TREE_LOD == 1
+    float lodKeep = 1.0 - step(uLodDist, lodD);
+  #elif TREE_LOD == 0
+    float lodKeep = step(uLodDist, lodD);
+  #else
+    float lodKeep = 1.0;
+  #endif
   float bareK = 0.0;
   #if TREE_KIND != 2
     // Bare branches arrive tree by tree (seed staggers the turn).
@@ -372,14 +574,25 @@ const VERTEX_BEGIN = /* glsl */ `
       bareK *= 0.55;
     #endif
     if (aPart > 0.5 && aPart < 1.5) {
-      transformed = aPivot + (transformed - aPivot) * mix(vec3(1.0), vec3(0.6, 0.66, 0.6), bareK);
+      transformed = aPivot + (transformed - aPivot) * mix(vec3(1.0), vec3(0.55, 0.6, 0.55), bareK);
     }
+  #endif
+  // Leaf flutter: a small breathing of the foliage along its normal.
+  float windK = 0.3 + 0.7 * min(1.0, length(uWind));
+  if (aPart > 0.5) {
+    float fl = sin(uDecoTime * 3.3 + position.x * 2.1 + position.y * 1.7 + position.z * 1.3 + seedT * 40.0);
+    transformed += normal * fl * 0.035 * windK * (1.0 - bareK * 0.7);
+  }
+  #if TREE_KIND == 4
+    // Willow fronds swing below the crown.
+    float hang = max(0.0, 3.6 - position.y) * step(0.5, aPart);
+    transformed.xz += normalize(uWind + 1e-4) * hang * 0.07 * windK * sin(uDecoTime * 1.6 + seedT * 9.0 + position.x);
   #endif
   float chopK = iTree.z != 0.0 ? clamp((uTime - iTree.z) / 0.6, 0.0, 1.0) : 0.0;
   float tilt = 0.21 * smoothstep(0.0, 0.55, chopK);
   transformed.yz = mat2(cos(tilt), sin(tilt), -sin(tilt), cos(tilt)) * transformed.yz;
   transformed.y *= 1.0 - smoothstep(0.35, 1.0, chopK);
-  transformed *= step(chopK, 0.999);
+  transformed *= step(chopK, 0.999) * lodKeep;
 `;
 
 // World space wind: a slow two-frequency sway that grows with height above
@@ -402,65 +615,142 @@ const PROJECT = /* glsl */ `
   gl_Position = projectionMatrix * mvPosition;
 `;
 
+const VARYINGS = /* glsl */ `
+varying vec3 vTreeCol;
+varying vec3 vTreeW;
+varying vec3 vTreeN;
+varying float vTreeBare;
+varying float vTreeLeaf;
+varying float vTreeBirch;
+varying float vTreeY;
+`;
+
+// Species palettes (linear). Summer greens by seed, an autumn turn staggered
+// per tree, bare winter wood, spring freshness and blossom on fruit trees.
 const VERTEX_COLOR = /* glsl */ `
-  // Leaf colour: summer greens by seed, autumn turn staggered per tree,
-  // bare winter wood, spring freshness and blossom on fruit trees.
+  #ifdef USE_SHADOWMAP
+    // Shadow lookups at the draped, swaying position the tree is drawn at.
+    worldPosition = treeWorld;
+  #endif
   float s2 = fract(seedT * 7.13);
   float s3 = fract(seedT * 3.71);
-  vec3 trunkCol = vec3(0.16, 0.095, 0.05) * (0.85 + 0.3 * s3);
+  vec3 trunkCol = vec3(0.15, 0.095, 0.055) * (0.85 + 0.3 * s3);
+  float birch = 0.0;
   vec3 leaf;
+  vec3 autumnCol;
   #if TREE_KIND == 2
-    leaf = mix(vec3(0.060, 0.160, 0.066), vec3(0.048, 0.125, 0.056), s2);
+    // Scots pine / fir greens, and a few blue-grey spruces.
+    leaf = mix(vec3(0.052, 0.140, 0.060), vec3(0.040, 0.112, 0.052), s2);
+    leaf = mix(leaf, vec3(0.050, 0.118, 0.095), step(0.8, s3));
+    trunkCol = vec3(0.17, 0.085, 0.05) * (0.85 + 0.3 * s3);
+    autumnCol = leaf;
+  #elif TREE_KIND == 1
+    // Birch (pale bark, airy yellow-green) or poplar (dark, glossy).
+    birch = step(s3, 0.38);
+    leaf = mix(vec3(0.075, 0.190, 0.062), vec3(0.150, 0.270, 0.065), birch);
+    trunkCol = mix(trunkCol, vec3(0.62, 0.60, 0.55), birch);
+    autumnCol = mix(vec3(0.62, 0.46, 0.06), vec3(0.72, 0.52, 0.07), s2);
+  #elif TREE_KIND == 4
+    // Willow: silvery yellow-green, yellow in autumn.
+    leaf = mix(vec3(0.150, 0.250, 0.075), vec3(0.135, 0.230, 0.090), s2);
+    trunkCol = vec3(0.13, 0.10, 0.07) * (0.85 + 0.3 * s3);
+    autumnCol = vec3(0.55, 0.45, 0.08);
+  #elif TREE_KIND == 3
+    leaf = s2 < 0.5 ? vec3(0.090, 0.210, 0.060) : vec3(0.110, 0.200, 0.075);
+    autumnCol = s3 < 0.5 ? vec3(0.45, 0.16, 0.04) : vec3(0.40, 0.26, 0.05);
   #else
-    leaf = s2 < 0.33 ? vec3(0.114, 0.262, 0.069) : s2 < 0.66 ? vec3(0.141, 0.262, 0.073) : vec3(0.076, 0.209, 0.085);
-    #if TREE_KIND == 3
-      leaf *= vec3(0.9, 0.95, 0.85);
-    #endif
+    // Oak, beech, lime, and the odd copper beech.
+    leaf = s2 < 0.33 ? vec3(0.100, 0.235, 0.062) : s2 < 0.66 ? vec3(0.135, 0.255, 0.066) : vec3(0.080, 0.205, 0.080);
+    leaf = mix(leaf, vec3(0.20, 0.07, 0.06), step(0.965, s3));
+    autumnCol = s3 < 0.25 ? vec3(0.571, 0.279, 0.044) : s3 < 0.5 ? vec3(0.479, 0.122, 0.027)
+              : s3 < 0.75 ? vec3(0.693, 0.445, 0.069) : vec3(0.323, 0.195, 0.026);
+  #endif
+  #if TREE_KIND != 2
     float fresh = smoothstep(0.07, 0.14, uYearT) * (1.0 - smoothstep(0.22, 0.34, uYearT));
     leaf = mix(leaf, leaf * vec3(1.35, 1.3, 0.8), fresh * 0.6);
-    vec3 autumnCol = s3 < 0.25 ? vec3(0.571, 0.279, 0.044) : s3 < 0.5 ? vec3(0.479, 0.122, 0.027)
-                   : s3 < 0.75 ? vec3(0.693, 0.445, 0.069) : vec3(0.323, 0.195, 0.026);
     float turn = clamp(uAutumn * 1.6 - seedT * 0.6, 0.0, 1.0);
     #if TREE_KIND == 3
       turn *= 0.5;
     #endif
     leaf = mix(leaf, autumnCol, turn);
-    leaf = mix(leaf, vec3(0.195, 0.144, 0.098), bareK);
+    // Bare crowns read as a haze of grey-brown twigs, not a solid ball.
+    leaf = mix(leaf, vec3(0.27, 0.22, 0.18), bareK);
     float blossomOn = mod(iTree.w, 2.0) >= 1.0 || seedT < 0.12 ? 1.0 : 0.0;
-    #if TREE_KIND == 3
-      blossomOn = 0.0; // blossoming bushes read as pale rocks from above
+    #if TREE_KIND != 0
+      blossomOn = 0.0; // only fruit trees and a few wild cherries blossom
     #endif
     leaf = mix(leaf, vec3(0.90, 0.56, 0.64), uBlossom * blossomOn * 0.85);
   #endif
-  // Lower canopy faces sit in their own shade.
-  float under = aPart > 0.5 ? smoothstep(-1.6, 0.6, position.y - aPivot.y) : 1.0;
-  vTreeCol = (aPart < 0.5 ? trunkCol : leaf * (0.78 + 0.22 * under)) * aShade;
-  vTreeUp = normalize(mat3(instanceMatrix) * objectNormal).y;
+  vTreeLeaf = aPart > 0.5 ? 1.0 : 0.0;
+  vTreeCol = (aPart < 0.5 ? trunkCol : leaf) * aShade;
+  vTreeW = treeWorld.xyz;
+  vTreeN = normalize(mat3(instanceMatrix) * objectNormal);
   vTreeBare = aPart > 0.5 && aPart < 1.5 ? bareK : 0.0;
+  vTreeBirch = birch * (1.0 - vTreeLeaf);
+  vTreeY = position.y;
 `;
 
-function makeMaterials(grade, kind) {
-  const defines = { TREE_KIND: kind };
-  const material = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const FRAGMENT_HEAD = VARYINGS + NOISE + /* glsl */ `
+uniform vec3 uSunColor;
+uniform vec3 uSkyHorizon;
+`;
+
+const FRAGMENT_COLOR = /* glsl */ `
+  vec3 col = vTreeCol;
+  // Leafy break-up: soft light and dark dapples across each crown.
+  float dapple = vnoise(vTreeW.xz * 1.6 + vTreeW.y * 1.9) * 0.6 + vnoise(vTreeW.xz * 4.1 - vTreeW.y * 3.3) * 0.4;
+  col *= mix(1.0, 0.86 + 0.28 * dapple, vTreeLeaf);
+  // Twiggy break-up on bare crowns: fine light and dark flecks.
+  float twig = vnoise(vTreeW.xz * 6.5 + vTreeW.y * 7.0);
+  col *= mix(1.0, 0.75 + 0.5 * twig, vTreeBare);
+  // Birch bark: dark lenticels across the white stem.
+  float marks = smoothstep(0.62, 0.7, vnoise(vec2(vTreeW.x * 3.0 + vTreeW.z * 3.0, vTreeY * 9.0)));
+  col = mix(col, vec3(0.06, 0.05, 0.045), marks * vTreeBirch * 0.85);
+  // Snow caps on up-facing faces (bare crowns hold a little less), plus a
+  // light frosting on every face so winter woods read pale, not black.
+  vec3 nW = normalize(vTreeN);
+  float snowAmt = smoothstep(0.25, 0.8, uSnow);
+  float snowK = snowAmt * smoothstep(0.05, 0.5, nW.y + (dapple - 0.5) * 0.3) * (1.0 - 0.25 * vTreeBare);
+  #if TREE_KIND == 2
+    snowK *= 0.7; // firs shed snow off their drooping tips: keep some green
+  #endif
+  col = mix(col, vec3(0.62, 0.64, 0.68), snowAmt * (0.22 + 0.15 * vTreeBare));
+  col = mix(col, vec3(0.88, 0.9, 0.93), snowK);
+  diffuseColor.rgb = col * uTint;
+`;
+
+// Light through leaves: crowns glow at their edges when the sun is behind
+// them, and silhouettes pick up a breath of sky.
+const FRAGMENT_EMISSIVE = /* glsl */ `
+  {
+    vec3 eyeDir = normalize(vTreeW - cameraPosition);
+    vec3 nW2 = normalize(vTreeN);
+    float edge = 1.0 - abs(dot(nW2, eyeDir));
+    float back = pow(max(dot(eyeDir, uSunDir), 0.0), 3.0);
+    float day = smoothstep(0.0, 0.15, uSunDir.y) * (1.0 - uNight);
+    float leafy = vTreeLeaf * (1.0 - vTreeBare * 0.8) * (1.0 - smoothstep(0.25, 0.8, uSnow));
+    totalEmissiveRadiance += diffuseColor.rgb * uSunColor * back * (0.25 + 0.75 * edge) * 0.55 * day * leafy;
+    totalEmissiveRadiance += uSkyHorizon * pow(edge, 3.0) * 0.045 * vTreeLeaf * (1.0 - uNight * 0.8);
+  }
+`;
+
+function makeMaterials(grade, kind, lod, lodUniforms) {
+  const defines = { TREE_KIND: kind, TREE_LOD: lod };
+  // Willow fronds are a thin skirt hanging past the dome: seen from above,
+  // the eye looks over its near edge into the canopy, so they draw from both
+  // sides (three flips the normal on back faces) instead of showing a hole.
+  const material = new THREE.MeshLambertMaterial({ color: 0xffffff, side: kind === KIND.WILLOW ? THREE.DoubleSide : THREE.FrontSide });
   patchMaterial(material, grade, {
-    key: `tree:${kind}`,
+    key: `tree:${kind}:${lod}`,
     defines,
-    vertexHead: VERTEX_HEAD + 'varying vec3 vTreeCol;\nvarying float vTreeUp;\nvarying float vTreeBare;\n',
+    uniforms: lodUniforms,
+    vertexHead: VERTEX_HEAD + VARYINGS,
     vertexBegin: VERTEX_BEGIN,
     vertexEnd: VERTEX_COLOR,
-    fragmentHead: 'varying vec3 vTreeCol;\nvarying float vTreeUp;\nvarying float vTreeBare;\n',
-    fragmentColor: /* glsl */ `
-      vec3 col = vTreeCol;
-      // Snow caps on up-facing faces (bare crowns hold a little less), plus a
-      // light frosting on every face so winter woods read pale, not black.
-      float snowAmt = smoothstep(0.25, 0.8, uSnow);
-      float snowK = snowAmt * smoothstep(0.12, 0.55, vTreeUp) * (1.0 - 0.25 * vTreeBare);
-      col = mix(col, vec3(0.62, 0.64, 0.68), snowAmt * 0.22);
-      col = mix(col, vec3(0.88, 0.9, 0.93), snowK);
-      diffuseColor.rgb = col * uTint;
-    `,
+    fragmentHead: FRAGMENT_HEAD,
+    fragmentColor: FRAGMENT_COLOR,
+    fragmentEmissive: FRAGMENT_EMISSIVE,
   });
-  useHaze(material, grade);
   const patched = material.onBeforeCompile;
   material.onBeforeCompile = (shader, renderer) => {
     patched(shader, renderer);
@@ -469,13 +759,13 @@ function makeMaterials(grade, kind) {
 
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   depth.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, grade.uniforms);
+    Object.assign(shader.uniforms, grade.uniforms, lodUniforms);
     shader.defines = { ...(shader.defines ?? {}), ...defines };
     shader.vertexShader = GRADE_HEAD + VERTEX_HEAD + shader.vertexShader
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + VERTEX_BEGIN)
       .replace('#include <project_vertex>', PROJECT);
   };
-  depth.customProgramCacheKey = () => `treedepth:${kind}`;
+  depth.customProgramCacheKey = () => `treedepth:${kind}:${lod}`;
   return { material, depth };
 }
 
@@ -492,7 +782,7 @@ export function createTrees(ctx) {
   // Global tree index -> slot in its kind mesh. Wild trees follow the park
   // reserve, in priority order, so a tier keeps a prefix of each mesh.
   const slotOf = new Int32Array(forest.count);
-  const wildCount = [0, 0, 0, 0];
+  const wildCount = new Array(KINDS).fill(0);
   for (let i = 0; i < forest.count; i++) {
     const k = forest.kind[i];
     slotOf[i] = PARK_RESERVE[k] + wildCount[k]++;
@@ -504,24 +794,40 @@ export function createTrees(ctx) {
   const quat = new THREE.Quaternion();
   const scl = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
-  for (let k = 0; k < 4; k++) {
-    const capacity = PARK_RESERVE[k] + wildCount[k];
-    const { material, depth } = makeMaterials(grade, k);
-    const mesh = new THREE.InstancedMesh(buildGeometry(k), material, Math.max(1, capacity));
-    mesh.name = `trees:${KIND_NAMES[k]}`;
+  // LOD split shared by both levels: the eye (main camera, also during the
+  // shadow and reflection passes) and the near distance.
+  const lodUniforms = { uLodEye: { value: new THREE.Vector3(0, 1e5, 0) }, uLodDist: { value: NEAR_DIST.high } };
+  const instanced = (k, lod, capacity) => {
+    const { material, depth } = makeMaterials(grade, k, lod, lodUniforms);
+    const mesh = new THREE.InstancedMesh(buildGeometry(k, lod), material, Math.max(1, capacity));
+    mesh.name = `trees:${KIND_NAMES[k]}${lod === LOD.NEAR ? ':near' : ''}`;
     mesh.frustumCulled = false;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.customDepthMaterial = depth;
-    mesh.layers.enable(LAYER_REFLECT);
+    // The quarter-res river mirror draws the far level only (every tree, see
+    // setReflectionPass), so the near level stays out of the reflection layer.
+    if (lod !== LOD.NEAR) mesh.layers.enable(LAYER_REFLECT);
     const iTree = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, capacity) * 4), 4);
     iTree.setUsage(THREE.DynamicDrawUsage);
     mesh.geometry.setAttribute('iTree', iTree);
+    group.add(mesh);
+    return { mesh, iTree };
+  };
+  for (let k = 0; k < KINDS; k++) {
+    const capacity = PARK_RESERVE[k] + wildCount[k];
+    const bush = k === KIND.BUSH;
+    const { mesh, iTree } = instanced(k, bush ? LOD.ALL : LOD.FAR, capacity);
     // Park reserve starts hidden.
     matrix.makeScale(0, 0, 0);
     for (let s = 0; s < PARK_RESERVE[k]; s++) mesh.setMatrixAt(s, matrix);
-    meshes.push({ mesh, iTree, lo: Infinity, hi: -1, freePark: Array.from({ length: PARK_RESERVE[k] }, (_, i) => PARK_RESERVE[k] - 1 - i) });
-    group.add(mesh);
+    const near = bush ? null : instanced(k, LOD.NEAR, capacity);
+    if (near) {
+      near.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      near.mesh.count = 0;
+      near.mesh.visible = false;
+    }
+    meshes.push({ mesh, iTree, near, lo: Infinity, hi: -1, freePark: Array.from({ length: PARK_RESERVE[k] }, (_, i) => PARK_RESERVE[k] - 1 - i) });
   }
 
   for (let i = 0; i < forest.count; i++) {
@@ -529,7 +835,9 @@ export function createTrees(ctx) {
     const s = slotOf[i];
     pos.set(forest.x[i], forest.y[i], forest.z[i]);
     quat.setFromAxisAngle(up, forest.yaw[i]);
-    scl.setScalar(forest.scale[i]);
+    // Crowns vary in build as well as size: some broad, some lanky.
+    const shape = 0.88 + 0.26 * forest.seed[i];
+    scl.set(forest.scale[i] * (1.06 - (shape - 0.88) * 0.5), forest.scale[i] * shape, forest.scale[i] * (1.06 - (shape - 0.88) * 0.5));
     matrix.compose(pos, quat, scl);
     m.mesh.setMatrixAt(s, matrix);
     m.iTree.array.set([forest.seed[i], forest.priority[i], 0, forest.flags[i]], s * 4);
@@ -559,6 +867,8 @@ export function createTrees(ctx) {
   let lastRoadsRef = null;
   let lastRoadsVersion = -1;
   let choppedThisFrame = 0;
+  let nearDirty = true;
+  const nearEye = new THREE.Vector3(0, 1e5, 0);
   const lotKeys = new Map(); // lot id -> footprint key already cleared
   const parks = new Map(); // lot id -> [{kind, slot}]
 
@@ -568,6 +878,7 @@ export function createTrees(ctx) {
     const m = meshes[forest.kind[i]];
     const s = slotOf[i];
     m.iTree.array[s * 4 + 2] = time;
+    nearDirty = true;
     if (s < m.lo) m.lo = s;
     if (s > m.hi) m.hi = s;
     shared.chopVersion++;
@@ -644,6 +955,7 @@ export function createTrees(ctx) {
       m.matrixDirty = true;
       slots.push({ kind: t.kind, slot });
     }
+    nearDirty = true;
     parks.set(id, slots);
   }
 
@@ -660,6 +972,44 @@ export function createTrees(ctx) {
       m.matrixDirty = true;
     }
     parks.delete(id);
+    nearDirty = true;
+  }
+
+  /**
+   * Refill the near meshes with every standing slot within reach of the eye
+   * (a copy of the far mesh's rows, so chops and parks carry over).
+   */
+  function rebuildNear(eye) {
+    nearEye.copy(eye);
+    nearDirty = false;
+    const r = lodUniforms.uLodDist.value + NEAR_SLACK;
+    const r2 = r * r;
+    for (const m of meshes) {
+      const near = m.near;
+      if (!near) continue;
+      const src = m.mesh.instanceMatrix.array, srcT = m.iTree.array;
+      const dst = near.mesh.instanceMatrix.array, dstT = near.iTree.array;
+      let n = 0;
+      for (let s = 0, count = m.mesh.count; s < count; s++) {
+        const o = s * 16;
+        if (src[o] === 0 && src[o + 2] === 0) continue; // hidden park slot
+        const dx = src[o + 12] - eye.x, dy = src[o + 13] - eye.y, dz = src[o + 14] - eye.z;
+        if (dx * dx + dy * dy + dz * dz > r2) continue;
+        for (let k = 0; k < 16; k++) dst[n * 16 + k] = src[o + k];
+        for (let k = 0; k < 4; k++) dstT[n * 4 + k] = srcT[s * 4 + k];
+        n++;
+      }
+      near.mesh.count = n;
+      near.mesh.visible = n > 0;
+      if (!n) continue;
+      const im = near.mesh.instanceMatrix;
+      im.clearUpdateRanges();
+      im.addUpdateRange(0, n * 16);
+      im.needsUpdate = true;
+      near.iTree.clearUpdateRanges();
+      near.iTree.addUpdateRange(0, n * 4);
+      near.iTree.needsUpdate = true;
+    }
   }
 
   function flush() {
@@ -696,6 +1046,12 @@ export function createTrees(ctx) {
       syncLots(time);
     }
     flush();
+    // Level of detail follows the eye.
+    const eye = frame?.camera?.position;
+    if (eye) {
+      lodUniforms.uLodEye.value.copy(eye);
+      if (nearDirty || eye.distanceToSquared(nearEye) > NEAR_MOVE * NEAR_MOVE) rebuildNear(eye);
+    }
     if (primed && choppedThisFrame) lights.animateFor(0.8, frame.time);
     else if (!primed) lights.markDirty();
     primed = true;
@@ -704,9 +1060,11 @@ export function createTrees(ctx) {
   function applyQuality(q) {
     const keep = KEEP[q.name] ?? 1;
     shared.keep = keep;
-    for (let k = 0; k < 4; k++) {
+    for (let k = 0; k < KINDS; k++) {
       meshes[k].mesh.count = PARK_RESERVE[k] + Math.round(wildCount[k] * keep);
     }
+    lodUniforms.uLodDist.value = NEAR_DIST[q.name] ?? NEAR_DIST.medium;
+    nearDirty = true;
     // Low tier: the shadow pass skips bushes.
     meshes[KIND.BUSH].mesh.castShadow = q.name !== 'low';
   }
@@ -717,12 +1075,25 @@ export function createTrees(ctx) {
     update,
     applyQuality,
     count: () => forest.count,
-    triangles: () => meshes.reduce((n, m) => n + (m.mesh.geometry.attributes.position.count / 3) * m.mesh.count, 0),
+    /** Submitted triangles (both levels; the far level collapses near trees). */
+    triangles: () => meshes.reduce((n, m) => n + (m.mesh.geometry.attributes.position.count / 3) * m.mesh.count
+      + (m.near ? (m.near.mesh.geometry.attributes.position.count / 3) * m.near.mesh.count : 0), 0),
+    /** Trees drawn at full detail right now. */
+    nearCount: () => meshes.reduce((n, m) => n + (m.near?.mesh.count ?? 0), 0),
+    /**
+     * Around the river mirror render: the far level draws every tree (the
+     * near level is not in the reflection layer), then the split returns.
+     */
+    setReflectionPass(on) {
+      lodUniforms.uLodDist.value = on ? 0 : NEAR_DIST[ctx.quality?.name] ?? NEAR_DIST.medium;
+    },
     dispose() {
       for (const m of meshes) {
-        m.mesh.geometry.dispose();
-        m.mesh.material.dispose();
-        m.mesh.customDepthMaterial.dispose();
+        for (const mesh of m.near ? [m.mesh, m.near.mesh] : [m.mesh]) {
+          mesh.geometry.dispose();
+          mesh.material.dispose();
+          mesh.customDepthMaterial.dispose();
+        }
       }
       WOODLAND.tWood.value.dispose();
       scene.remove(group);

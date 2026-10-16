@@ -1,8 +1,9 @@
 // Emergent roads: a wear field over a 2-unit grid. Walkers wear the cells they
 // enter; worn cells harden into trails, tracks and roads; unused ones fade.
 // Paved roads and avenues come only from planned works (works.js).
-import { heightAt, waterAt, fordAt, riverX, terrainSeed, FORDS } from '../terrain.js';
+import { heightAt, waterAt, fordAt, riverX, terrainKey, FORDS, floodDepthAt, terrainVersion, bankSide } from '../terrain.js';
 import { findRoute, cellsToWaypoints } from '../navigation.js';
+import { buildNodes, patchNodes } from '../path-nodes.js';
 
 export const CELL = 2;
 // The region: 384 x 384 cells of 2 units, -384..384 on both axes (room for
@@ -75,16 +76,20 @@ export function bandCenterZ(band) { return ORIGIN_Z + (band + 0.5) * BAND_CELLS 
 let terrainCache = null;
 
 // Static per-cell terrain facts for the current terrain seed (computed once
-// per seed). water: 0 land, 1 deep, 2 ford.
+// per seed). water: 0 land, 1 deep, 2 ford. flood: how deep a great flood
+// stands on the cell (the floodplain; all 0 in version-1 valleys).
 export function terrainGrid() {
-  if (terrainCache && terrainCache.seed === terrainSeed()) return terrainCache;
+  if (terrainCache && terrainCache.seed === terrainKey()) return terrainCache;
   const water = new Uint8Array(CELLS);
   const height = new Float32Array(CELLS);
   const slope = new Float32Array(CELLS);
+  const flood = new Float32Array(CELLS);
+  const floods = terrainVersion() >= 2;
   for (let i = 0; i < CELLS; i++) {
     const { x, z } = cellCenter(i);
     height[i] = heightAt(x, z);
     if (waterAt(x, z)) water[i] = fordAt(x, z) ? 2 : 1;
+    else if (floods) flood[i] = floodDepthAt(x, z);
   }
   for (let cz = 0; cz < GRID_H; cz++) {
     for (let cx = 0; cx < GRID_W; cx++) {
@@ -98,7 +103,7 @@ export function terrainGrid() {
       slope[i] = water[i] ? 0 : d / CELL;
     }
   }
-  terrainCache = { seed: terrainSeed(), water, height, slope };
+  terrainCache = { seed: terrainKey(), water, height, slope, flood, floods };
   return terrainCache;
 }
 
@@ -134,7 +139,7 @@ function markFords(r) {
     else r.planned[i] &= ~FLAG.FORD;
   }
   r.fordsMarked = 1;
-  r.fordsSeed = terrainSeed();
+  r.fordsSeed = terrainKey();
 }
 
 // Fills fields missing from older or partial saves. Safe to call often.
@@ -148,7 +153,7 @@ export function ensureRoads(state) {
   if (!r.xings) r.xings = {};
   if (!r.routes) r.routes = {};
   if (!r.counts) r.counts = recount(r);
-  if (!r.fordsMarked || (r.fordsSeed ?? null) !== terrainSeed()) markFords(r);
+  if (!r.fordsMarked || (r.fordsSeed ?? null) !== terrainKey()) markFords(r);
   r.version ??= 0;
   r.navRev ??= 0;
   r.wearAddedMonth ??= 0;
@@ -172,7 +177,7 @@ function migrateRoads(state) {
       }
   }
   if (old.embanked) for (let z = 0; z < old.H; z++) if (z + dz >= 0 && z + dz < GRID_H) next.embanked[z + dz] = old.embanked[z];
-  for (const k of ['xings', 'version', 'navRev', 'wearAddedMonth', 'worksDone', 'embankRev', 'towpathEra']) if (old[k] != null) next[k] = old[k];
+  for (const k of ['xings', 'version', 'navRev', 'wearAddedMonth', 'worksDone', 'embankRev', 'towpathEra', 'reclaim']) if (old[k] != null) next[k] = old[k];
   // Crossing bands are numbered from the origin: shift them too.
   const shift = Math.round(dz / BAND_CELLS);
   next.xings = Object.fromEntries(Object.entries(old.xings ?? {}).map(([band, n]) => [String(Number(band) + shift), n]));
@@ -240,6 +245,8 @@ export function setTier(state, i, tier) {
   if (adj && (old >= 3) !== (tier >= 3)) bumpNeighbours(adj, i, tier >= 3 ? 1 : -1);
   r.tier[i] = tier;
   structuralDirty.get(r)?.add(i);
+  // Path nodes depend on which cells are paths, not on their tiers.
+  if ((old >= 1) !== (tier >= 1)) nodesDirty(r, i);
   r.counts[old]--;
   r.counts[tier]++;
   r.low[i] = 0;
@@ -460,21 +467,47 @@ function stampField(fp, b) {
 }
 
 // Is the rest of a flat [x, z, ...] route still clear of buildings, from the
-// waypoint at flat index fromIndex? Walks each segment in small steps (a
-// supercover walk) and checks the cell under every step.
+// waypoint at flat index fromIndex? Visits every cell each segment passes
+// through (a grid traversal: a leg clipping the corner of a wall by a hair
+// counts), except the cell the walk starts in.
 export function routeStillValid(state, route, fromIndex = 0) {
   if (!route || route.length < 4) return true;
-  const { blocked, field } = footprints(state);
+  const { blocked } = footprints(state);
   for (let k = Math.max(0, fromIndex); k + 3 < route.length; k += 2) {
-    const ax = route[k], az = route[k + 1], bx = route[k + 2], bz = route[k + 3];
-    const len = Math.hypot(bx - ax, bz - az);
-    const steps = Math.max(1, Math.ceil(len / 0.4));
-    for (let t = k === fromIndex ? 1 : 0; t <= steps; t++) {
-      const c = cellOf(ax + (bx - ax) * t / steps, az + (bz - az) * t / steps);
-      if (c >= 0 && blocked[c]) return false;
-    }
+    if (!segmentClear(blocked, route[k], route[k + 1], route[k + 2], route[k + 3], k === fromIndex)) return false;
   }
   return true;
+}
+
+// routeStillValid of [x, z, ...route from flat index seg] without building
+// that list: the walk from (x, z) to the waypoint skips its starting cell.
+export function routeClearFrom(state, x, z, route, seg) {
+  if (!route || seg + 1 >= route.length) return true;
+  const { blocked } = footprints(state);
+  if (!segmentClear(blocked, x, z, route[seg], route[seg + 1], true)) return false;
+  for (let k = seg; k + 3 < route.length; k += 2) {
+    if (!segmentClear(blocked, route[k], route[k + 1], route[k + 2], route[k + 3], false)) return false;
+  }
+  return true;
+}
+
+function segmentClear(blocked, ax, az, bx, bz, skipFirst) {
+  let x = Math.floor((ax - ORIGIN_X) / CELL), z = Math.floor((az - ORIGIN_Z) / CELL);
+  const ex = Math.floor((bx - ORIGIN_X) / CELL), ez = Math.floor((bz - ORIGIN_Z) / CELL);
+  const dx = bx - ax, dz = bz - az;
+  const sx = dx > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
+  const tdx = dx !== 0 ? Math.abs(CELL / dx) : Infinity, tdz = dz !== 0 ? Math.abs(CELL / dz) : Infinity;
+  let tx = dx !== 0 ? ((sx > 0 ? x + 1 : x) * CELL + ORIGIN_X - ax) / dx : Infinity;
+  let tz = dz !== 0 ? ((sz > 0 ? z + 1 : z) * CELL + ORIGIN_Z - az) / dz : Infinity;
+  const n = Math.abs(ex - x) + Math.abs(ez - z);
+  for (let k = 0; ; k++) {
+    if (!(skipFirst && k === 0)) {
+      const c = cellIndex(x, z);
+      if (c >= 0 && blocked[c]) return false;
+    }
+    if (k >= n) return true;
+    if (tx < tz) { x += sx; tx += tdx; } else { z += sz; tz += tdz; }
+  }
 }
 
 // ---------------------------------------------------------------- nav grid
@@ -514,7 +547,7 @@ export function navGrid(state, { fresh = false } = {}) {
     if (!fresh && grid.patchedAt != null && tick - grid.patchedAt < FOOTPRINT_TICKS && tick >= grid.patchedAt) return grid;
     grid = patchFootprints(state, grid, key, tick);
   } else {
-    grid = buildNavGrid(state, key, bucket, tick);
+    grid = buildNavGrid(state, key, bucket, tick, grid);
   }
   navCache.set(state, grid);
   return grid;
@@ -531,7 +564,41 @@ function cellCost(state, i, fp, adj, fords = fordsNearBridges(state)) {
 
 function tooSteep(t, i) { return t.slope[i] > NAV_MAX_SLOPE || t.height[i] > NAV_MAX_HEIGHT; }
 
-function buildNavGrid(state, key, bucket, tick) {
+// Path nodes (path-nodes.js): where the drawn centreline of each path cell
+// runs, in world units (NaN off the paths), and which neighbours it links to,
+// for waypoints that follow the drawn lines.
+const NAV_GEOM = { W: GRID_W, H: GRID_H, cell: CELL, ox: ORIGIN_X, oz: ORIGIN_Z };
+function navNodes(r) { return buildNodes(NAV_GEOM, r.tier, r.planned); }
+// A copy of `prev`'s nodes with every node the changed cells can move redone.
+function patchedNodes(r, prev, dirty) {
+  const nodes = { nodeX: prev.nodeX.slice(), nodeZ: prev.nodeZ.slice(), nodeLinks: prev.nodeLinks.slice() };
+  patchNodes(NAV_GEOM, r.tier, r.planned, nodes, dirty);
+  return nodes;
+}
+// roads -> cells that became or stopped being paths, or changed towpath or
+// planned flag, since navGrid's / structuralGrid's nodes were built.
+const navNodeDirty = new WeakMap();
+const structuralNodeDirty = new WeakMap();
+// The nodes around cell i may move.
+function nodesDirty(r, i) {
+  navNodeDirty.get(r)?.add(i);
+  structuralNodeDirty.get(r)?.add(i);
+}
+// grid -> the roads its nodes were made from.
+const nodeOwner = new WeakMap();
+// Nodes for a new grid over roads r: the previous grid's (prev, of the same
+// roads), patched for the cells changed since (`dirtyMap`), or a fresh build;
+// both give exactly the same nodes.
+function nodesFor(r, prev, dirtyMap) {
+  const dirty = dirtyMap.get(r);
+  const nodes = !prev || nodeOwner.get(prev) !== r || !dirty ? navNodes(r)
+    : dirty.size ? patchedNodes(r, prev, dirty) : { nodeX: prev.nodeX, nodeZ: prev.nodeZ, nodeLinks: prev.nodeLinks };
+  dirtyMap.set(r, new Set());
+  return nodes;
+}
+function owned(grid, r) { nodeOwner.set(grid, r); return grid; }
+
+function buildNavGrid(state, key, bucket, tick, prev) {
   const r = state.roads;
   const { water } = terrainGrid();
   const adj = adjacencyOf(r);
@@ -543,7 +610,8 @@ function buildNavGrid(state, key, bucket, tick) {
     wcode[i] = water[i] ? (isBridge(r, i) ? 3 : water[i]) : 0;
     cost[i] = cellCost(state, i, fp, adj, fords);
   }
-  return { key, bucket, tick, footprintsOnly: false, fp, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height };
+  const nodes = nodesFor(r, prev, navNodeDirty);
+  return owned({ key, bucket, tick, footprintsOnly: false, fp, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height, ...nodes }, r);
 }
 
 // A new grid object (consumers compare identity and keys) sharing the water
@@ -557,7 +625,11 @@ function patchFootprints(state, prev, key, tick) {
   for (let i = 0; i < CELLS; i++) {
     if (old.blocked[i] !== fp.blocked[i] || old.field[i] !== fp.field[i]) cost[i] = cellCost(state, i, fp, adj, fords);
   }
-  return { ...prev, key, tick, patchedAt: tick, footprintsOnly: true, fp, cost, comp: undefined, coarse: undefined };
+  // The nodes are shared while no path cell has changed since they were
+  // built; otherwise a copy has the nodes around those cells redone.
+  const r = state.roads;
+  const nodes = nodesFor(r, prev, navNodeDirty);
+  return owned({ ...prev, key, tick, patchedAt: tick, footprintsOnly: true, fp, cost, ...nodes, comp: undefined, coarse: undefined }, r);
 }
 
 // The grid for simulation-side routes (aggregate group traffic). It must be
@@ -573,18 +645,21 @@ export function structuralGrid(state) {
   const base = `${r.navRev}:${footprintKey(state)}`;
   let grid = structuralCache.get(state);
   if (grid && grid.base === base && grid.roads === r) {
-    const dirty = structuralDirty.get(r);
-    if (!dirty?.size) return grid;
-    grid = patchStructural(state, grid, dirty);
+    const dirty = structuralDirty.get(r), nodeDirty = structuralNodeDirty.get(r);
+    if (!dirty?.size && !nodeDirty?.size) return grid;
+    grid = owned(patchStructural(state, grid, dirty, nodeDirty), r);
     dirty.clear();
+    nodeDirty.clear();
     structuralCache.set(state, grid);
     return grid;
   }
+  const prev = grid;
   const cost = new Float32Array(CELLS);
   const wcode = new Uint8Array(CELLS);
   const ctx = structuralContext(state);
   for (let i = 0; i < CELLS; i++) structuralCell(ctx, i, cost, wcode);
-  grid = { key: `${base}:${r.version}`, bucket: base, base, roads: r, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height };
+  const nodes = nodesFor(r, prev, structuralNodeDirty);
+  grid = owned({ key: `${base}:${r.version}`, bucket: base, base, roads: r, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height, ...nodes }, r);
   structuralCache.set(state, grid);
   structuralDirty.set(r, new Set());
   return grid;
@@ -610,8 +685,9 @@ function structuralCell({ r, t, adj, fp, fords }, i, cost, wcode) {
 
 // A changed cell and its neighbours (their road adjacency counts may change too),
 // into a copy: anything cached on the old grid object stays with it.
-function patchStructural(state, prev, dirty) {
+function patchStructural(state, prev, dirty, nodeDirty) {
   const cost = prev.cost.slice(), wcode = prev.water.slice();
+  const nodes = nodeDirty.size ? patchedNodes(state.roads, prev, nodeDirty) : { nodeX: prev.nodeX, nodeZ: prev.nodeZ, nodeLinks: prev.nodeLinks };
   const ctx = structuralContext(state);
   for (const i of dirty) {
     const cx = i % GRID_W, cz = (i - cx) / GRID_W;
@@ -621,7 +697,7 @@ function patchStructural(state, prev, dirty) {
         if (x >= 0 && z >= 0 && x < GRID_W && z < GRID_H) structuralCell(ctx, z * GRID_W + x, cost, wcode);
       }
   }
-  return { ...prev, key: `${prev.base}:${state.roads.version}`, cost, water: wcode, comp: undefined, coarse: undefined, blockCost: undefined };
+  return { ...prev, key: `${prev.base}:${state.roads.version}`, cost, water: wcode, ...nodes, comp: undefined, coarse: undefined, blockCost: undefined };
 }
 
 // ---------------------------------------------------------------- crossings
@@ -644,7 +720,10 @@ export function monthlyRoads(state, ctx = {}) {
   if ((state.era ?? 0) >= TOWPATH_PAVED_ERA && r.towpathEra !== TOWPATH_PAVED_ERA) paveTowpaths(state);
   applyGroupTraffic(state);
   recordCrossRiverTies(state, !!ctx.skipPeople);
+  consolidateWear(state);
   decayAndRetier(state);
+  bridgeGaps(state);
+  seedReclaimedPaths(state);
   for (const k of Object.keys(r.xings)) {
     r.xings[k] *= XING_DECAY;
     if (r.xings[k] < 0.5) delete r.xings[k];
@@ -687,6 +766,148 @@ function decayAndRetier(state) {
   if (x1 >= 0) markDirtyRect(r, x0, z0, x1, z1);
 }
 
+// ---------------------------------------------------------------- orderly paths
+
+// Desire lines braid: walkers a step to one side of a busy lane wear a
+// second, fainter lane beside it, and wide smears form where many routes
+// nearly agree. Each month a little of the wear on the flank of a busier
+// lane drifts onto it (people step onto the trodden line), so braids close
+// into one lane and smears narrow to their ridge. A cell is a flank when a
+// 4-neighbour carries at least FLANK_RATIO times its wear and the cell on
+// its other side is fainter still; a path crossing a lane (worn on both
+// sides along its own line) is not a flank and keeps its wear.
+export const FLANK_RATIO = 2;
+export const FLANK_SHARE = 0.08;
+const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+let flankScratch = null;
+
+function consolidateWear(state) {
+  const r = state.roads;
+  const { wear, tier, planned } = r;
+  const { water } = terrainGrid();
+  const { blocked, field } = footprints(state);
+  if (!flankScratch) flankScratch = { to: new Int32Array(CELLS), list: [] };
+  const { to, list } = flankScratch;
+  list.length = 0;
+  for (let i = 0; i < CELLS; i++) {
+    const w = wear[i];
+    if (w < 5 || tier[i] > 2 || (planned[i] & FLAG.PLANNED) || water[i] || blocked[i]) continue;
+    const cx = i % GRID_W, cz = (i - cx) / GRID_W;
+    let best = -1, bestW = w * FLANK_RATIO, bd = 0;
+    for (let d = 0; d < 4; d++) {
+      const j = cellIndex(cx + N4[d][0], cz + N4[d][1]);
+      if (j < 0 || wear[j] < bestW || tier[j] < tier[i] || water[j] || blocked[j] || field[j] === FIELD.CROP) continue;
+      if (wear[j] === bestW && best >= 0 && j > best) continue;
+      best = j; bestW = wear[j]; bd = d;
+    }
+    if (best < 0) continue;
+    const o = cellIndex(cx - N4[bd][0], cz - N4[bd][1]);
+    if (o >= 0 && wear[o] > w * 0.5) continue;
+    to[list.length] = best;
+    list.push(i);
+  }
+  // Apply after the scan, so the result does not depend on scan order.
+  for (let k = 0; k < list.length; k++) {
+    const i = list[k], j = to[k];
+    const move = wear[i] * FLANK_SHARE;
+    wear[i] -= move;
+    wear[j] += move;
+    markDirty(r, i);
+    markDirty(r, j);
+  }
+}
+
+// A one-cell break in a line of trodden cells (both opposite neighbours worn
+// to at least a trail) is part of the same path: people step over it every
+// day. If it carries some wear of its own it takes the lower of the two
+// tiers, so paths read and route as continuous lines.
+const GAP_PAIRS = [[1, 0], [0, 1], [1, 1], [1, -1]];
+export const GAP_WEAR = 0.25;
+
+function bridgeGaps(state) {
+  const r = state.roads;
+  const { wear, tier } = r;
+  const { water } = terrainGrid();
+  const { blocked, field } = footprints(state);
+  const max = ORGANIC_MAX[clampEra(state.era ?? 0)];
+  const minWear = GAP_WEAR * UPGRADE_AT[1];
+  const W = GRID_W;
+  const fill = [];
+  // Two cells in from the edge, so every neighbour index below is in range.
+  for (let z = 2; z < GRID_H - 2; z++) {
+    for (let x = 2, i = z * W + 2; x < W - 2; x++, i++) {
+      const t = tier[i];
+      if (t >= 3 || wear[i] < minWear || water[i] || blocked[i] || field[i] === FIELD.CROP) continue;
+      let want = 0;
+      for (let k = 0; k < 4; k++) {
+        const dx = GAP_PAIRS[k][0], dz = GAP_PAIRS[k][1];
+        const d = dz * W + dx;
+        const a = i + d, b = i - d;
+        const ta = tier[a], tb = tier[b];
+        if (!ta || !tb || ta <= t || tb <= t || water[a] || water[b]) continue;
+        // A diagonal break is only a break if the corners beside it are open
+        // (otherwise the cells already join, or this is a parallel path).
+        if (dx && dz && (tier[i + dx] || tier[i - dx] || tier[i + dz * W] || tier[i - dz * W])) continue;
+        const m = Math.min(ta, tb, max);
+        if (m <= want || wear[i] < GAP_WEAR * UPGRADE_AT[m]) continue;
+        // Both sides must run on away from the gap: a break in one line, not
+        // the strip between two parallel paths.
+        if (!runsOn(tier, a, dx, dz) || !runsOn(tier, b, -dx, -dz)) continue;
+        want = m;
+      }
+      if (want > t) fill.push(i, want);
+    }
+  }
+  for (let k = 0; k < fill.length; k += 2) {
+    const i = fill[k], t = fill[k + 1];
+    wear[i] = Math.max(wear[i], UPGRADE_AT[t]);
+    if (t > tier[i]) setTier(state, i, t);
+  }
+}
+
+// Is there a trodden cell beyond cell j, continuing in direction (dx, dz)
+// (straight on, or bending by 45 degrees)? j is at least one cell from the edge.
+function runsOn(tier, j, dx, dz) {
+  const W = GRID_W;
+  if (tier[j + dz * W + dx]) return true;
+  if (dx && dz) return tier[j + dx] > 0 || tier[j + dz * W] > 0;
+  return tier[j + (dz + dx) * W + dx - dz] > 0 || tier[j + (dz - dx) * W + dx + dz] > 0;
+}
+
+// Cells to wear through a reclaimed lot once its building is gone
+// (reclaim.js queues them; see reclaimDerelicts). Entries wait while the
+// demolition runs and lapse after RECLAIM_WAIT_MONTHS.
+export const RECLAIM_WAIT_MONTHS = 60;
+
+export function queueReclaimedPath(state, buildingId, cells, tier = 2) {
+  const r = state.roads;
+  r.reclaim = r.reclaim ?? [];
+  r.reclaim.push({ buildingId, cells: cells.slice(), tier, months: 0 });
+}
+
+function seedReclaimedPaths(state) {
+  const r = state.roads;
+  if (!r.reclaim?.length) return;
+  const standing = new Set((state.buildings ?? []).map(b => b.id));
+  const max = ORGANIC_MAX[clampEra(state.era ?? 0)];
+  const keep = [];
+  for (const entry of r.reclaim) {
+    if (standing.has(entry.buildingId)) {
+      if (++entry.months < RECLAIM_WAIT_MONTHS) keep.push(entry);
+      continue;
+    }
+    const { blocked, field } = footprints(state);
+    const t = Math.min(entry.tier, max);
+    for (const i of entry.cells) {
+      if (i < 0 || blocked[i] || field[i] === FIELD.CROP || terrainGrid().water[i]) continue;
+      r.wear[i] = Math.max(r.wear[i], UPGRADE_AT[t]);
+      if (r.tier[i] < t) setTier(state, i, t);
+      markDirty(r, i);
+    }
+  }
+  r.reclaim = keep;
+}
+
 // ---------------------------------------------------------------- group traffic
 
 // Trades map to the building types their members walk to each day.
@@ -720,7 +941,7 @@ export function aggregateGroups(state, headless = false) {
     // Split by bank, so a group's centre never sits in the river and
     // far-bank commuters really cross.
     const door = doorPoint(home);
-    const side = door.x < riverX(door.z) ? 0 : 1;
+    const side = bankSide(door.x, door.z);
     const key = `${h.districtId ?? 0}|${h.trade ?? 'none'}|${side}`;
     let g = groups.get(key);
     if (!g) groups.set(key, g = { key, trade: h.trade ?? 'none', size: 0, sx: 0, sz: 0 });
@@ -896,9 +1117,9 @@ export function crossRiverTies(state) {
   for (const h of state.households ?? []) {
     const home = byId.get(h.homeId);
     if (!home) continue;
-    const side = home.x < riverX(home.z) ? 0 : 1;
+    const side = bankSide(home.x, home.z);
     for (const dest of [destFor(h.trade ?? 'none', home, h, side), destFor('errand', home, h, side)]) {
-      if (!dest || (dest.x < riverX(dest.z) ? 0 : 1) === side) continue;
+      if (!dest || bankSide(dest.x, dest.z) === side) continue;
       ties.push({ h, members: Math.max(0, (h.size ?? 1) - (walkers.get(h.id) ?? 0)), size: h.size ?? 1, z: (home.z + dest.z) / 2, from: home, to: dest });
       break;
     }
@@ -1028,6 +1249,8 @@ export function setPlannedTier(state, i, tier, flags = 0, { uncapped = false } =
   const t = uncapped ? tier : Math.min(tier, Math.max(max, 3));
   const before = r.planned[i];
   r.planned[i] |= FLAG.PLANNED | flags;
+  // Planned cells never join a knot (path-nodes.js): the nodes about it may move.
+  if (r.planned[i] !== before) nodesDirty(r, i);
   if (r.planned[i] !== before && t <= r.tier[i]) r.version++;
   if (t > r.tier[i]) setTier(state, i, t);
   if (r.wear[i] < UPGRADE_AT[3] && t >= 3) r.wear[i] = Math.max(r.wear[i], UPGRADE_AT[3]);
@@ -1048,7 +1271,12 @@ export function setTowpath(state, i) {
   r.planned[i] |= FLAG.TOWPATH | FLAG.PLANNED;
   const tier = (state.era ?? 0) >= TOWPATH_PAVED_ERA ? 4 : 2;
   if (r.tier[i] < tier) setTier(state, i, tier);
-  else if (before !== r.planned[i]) r.version++;
+  else if (before !== r.planned[i]) {
+    // A new towpath flag moves this cell's path node onto the bank lane.
+    structuralDirty.get(r)?.add(i);
+    nodesDirty(r, i);
+    r.version++;
+  }
   markDirty(r, i);
   return true;
 }
@@ -1101,3 +1329,6 @@ function hasLampNear(r, cx, cz, rad) {
 
 // River centre at a world z, for works that span the river.
 export function riverCentre(z) { return riverX(z); }
+
+// Internals for tests and benchmarks.
+export const __test = { consolidateWear, bridgeGaps, decayAndRetier, seedReclaimedPaths };

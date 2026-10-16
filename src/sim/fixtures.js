@@ -9,31 +9,32 @@
 // and a steady stream of settlers speeds up the early years. Roads, lots and buildings
 // therefore come out of the same desire paths and site choices as in play.
 //
-// The town grows live (about a second, then memoised per session). Growing the city
-// takes ~10 s, so it is cached as a save in src/sim/fixtures/city.json (walkers and the
-// answer log are left out; walkers are re-drawn on load). Regenerate it after changing
-// the simulation:
+// Both are cached as saves in src/sim/fixtures/{town,city}.json (walkers and the
+// answer log are left out; walkers are re-drawn on load), so a change to the economy
+// does not silently reshape the towns the tests and the UI read. Regenerate them on
+// purpose, and keep the tests that read them free of their incidental layout:
 //
-//   node src/sim/fixtures/build.js city
+//   node src/sim/fixtures/build.js town city
 //
 // In the browser, call `await loadFixture('city')` once to fetch the cached file; after
 // that fixtureState('city') is instant. Without a usable cache it grows on the spot.
 
-import {createState, stepTick, rule, immigrate, serialize, restore} from './index.js';
+import {createState, stepTick, rule, immigrate, serialize, restore, trimAllToFit} from './index.js';
 import {syncIndividuals} from './people.js';
 import {POLICIES} from './policies.js';
 
 export const FIXTURE_VERSION = 1;
 
 export const FIXTURE_PROFILES = {
-  town: {seed: 2024, cached: false, pop: 600, era: 2, minYear: 30, maxYear: 60, boost: 0.08, accept: 0.35, acceptBodies: 0.85},
+  town: {seed: 2024, cached: true, pop: 600, era: 2, minYear: 30, maxYear: 60, boost: 0.08, accept: 0.35, acceptBodies: 0.85},
   city: {seed: 1888, cached: true, pop: 3000, era: 4, minYear: 92, maxYear: 125, boost: 0.06, accept: 0.35, acceptBodies: 0.85},
 };
 
 const memo = new Map();   // name -> save text
 
 export function fixtureState(name = 'hamlet', options = {}) {
-  if (name === 'hamlet') return createState(options.seed, options);
+  // Fixtures are baselines: they keep the river-only (version 1) valleys they were grown in.
+  if (name === 'hamlet') return createState(options.seed, {terrainVersion: 1, ...options});
   if (!FIXTURE_PROFILES[name]) throw new Error(`Unknown fixture: ${name}`);
   const cached = FIXTURE_PROFILES[name].cached;
   const text = memo.get(name) ?? (cached ? readCache(name) : null) ?? growAndRemember(name);
@@ -63,7 +64,7 @@ export async function loadFixture(name, options = {}) {
 // Run the real sim headless until the profile's era and population are reached.
 export function growFixture(name, {onYear = null} = {}) {
   const profile = FIXTURE_PROFILES[name];
-  const state = createState(profile.seed);
+  const state = createState(profile.seed, {terrainVersion: 1});
   const council = standInCouncil(profile);
   const done = () => state.era >= profile.era && state.indicators.pop >= profile.pop && state.time.year >= profile.minYear;
   while (!done() && state.time.year < profile.maxYear) {
@@ -107,6 +108,8 @@ export function standInCouncil(profile) {
   const rand = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
   const seen = new Set();
   return (state) => {
+    // Budgets: the season's asks, trimmed alike to the town's room (all approved if they fit).
+    if (state.docket.some((c) => c.kind === 'budget')) trimAllToFit(state);
     for (const card of [...state.docket]) {
       // Only cards a player could see: queued cards wait for the next session.
       if (seen.has(card.id) || ('surfacedMonth' in card && card.surfacedMonth == null)) continue;
@@ -191,7 +194,7 @@ function usable(text) {
   }
 }
 
-const cacheUrl = (name) => new URL(`./fixtures/${name}.json`, import.meta.url);   // only 'city' is cached
+const cacheUrl = (name) => new URL(`./fixtures/${name}.json`, import.meta.url);   // the cached profiles: town, city
 
 // Node only, synchronously, without importing node modules (keeps the browser build clean).
 function readCache(name) {

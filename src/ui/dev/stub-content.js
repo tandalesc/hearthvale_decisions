@@ -126,11 +126,20 @@ export const TENSION_PAIRS = [
   ['enclosure', 'commons', 'Enclosure fences the fields. The commons keep them open.', ['gentry'], ['farmers']],
 ];
 
+// Town feeling (the shape of src/sim/opinion.js): town-wide shares and a row
+// per faction [id, share of the people, top stance, for, against].
+function opinion(verdict, f, a, rows = [], extra = {}) {
+  return {
+    verdict, for: f, against: a, indifferent: Math.max(0, Math.round((1 - f - a) * 100) / 100), ...extra,
+    factions: rows.map(([faction, share, stance, fo, ag]) => ({faction, name: FACTIONS[faction] ?? faction, share, stance, for: fo, against: ag})),
+  };
+}
+
 // Docket cards. Options follow the language guide: verb phrase plus one
 // trade-off sentence. Reactions: dir −2..2 per faction.
 export const CARDS = [
   {
-    id: 'c-cottages', kind: 'proposal', from: 'moot', era: 0, title: 'Room to put down roots',
+    id: 'c-cottages', category: 'land', kind: 'proposal', from: 'moot', era: 0, title: 'Room to put down roots',
     why: 'Young families are ready to settle. They want to build this spring, before the harvest.',
     asker: {name: 'Mara Hollin', role: 'Village steward'}, urgency: 1, costLine: 'Costs 2,040 coin. Homes for 18 people.',
     options: [
@@ -139,10 +148,11 @@ export const CARDS = [
       {key: 'later', label: 'Not now', tradeoff: 'The steward will ask again next year.', reactions: []},
     ],
     details: [{label: 'Families waiting', value: '3'}, {label: 'Homes free', value: '0'}, {label: 'Coin in the chest', value: '14,200'}],
+    opinion: opinion('popular', 0.52, 0.18, [['farmers', 0.36, 'for', 0.6, 0.2], ['newcomers', 0.3, 'for', 0.8, 0.1], ['labour', 0.19, 'indifferent', 0.25, 0.15], ['crafts', 0.07, 'indifferent', 0.2, 0.2], ['gentry', 0.08, 'against', 0.15, 0.7]]),
     expiresInMonths: 18,
   },
   {
-    id: 'c-bridge', kind: 'debate', from: 'river-authority', era: 2, title: 'A bridge at the mill ford',
+    id: 'c-bridge', category: 'works', kind: 'debate', from: 'river-authority', era: 2, title: 'A bridge at the mill ford',
     why: 'Many people cross at the mill ford. In spring it floods. A bridge would save time and lives.',
     asker: {name: 'Tamsin Ode', role: 'River warden'}, urgency: 2, costLine: 'Costs 1,600 coin. Upkeep 5 a year.',
     options: [
@@ -156,10 +166,11 @@ export const CARDS = [
       against: [{faction: 'millers', label: 'Millers', note: 'fear losing water rights', p: 0.62}],
     },
     details: [{label: 'Crossings a day', value: '412'}, {label: 'Floods in ten years', value: '3'}, {label: 'Time saved', value: 'about an hour a day'}, {label: 'Coin in the chest', value: '3,120'}],
+    opinion: opinion('divisive', 0.41, 0.36, [['farmers', 0.3, 'split', 0.45, 0.4], ['merchants', 0.22, 'for', 0.78, 0.1], ['millers', 0.18, 'against', 0.12, 0.62], ['labour', 0.2, 'indifferent', 0.2, 0.18], ['gentry', 0.1, 'against', 0.25, 0.55]]),
     expiresInMonths: 21,
   },
   {
-    id: 'c-granary', kind: 'proposal', from: 'agri-council', era: 1, title: 'A granary by the mill',
+    id: 'c-granary', category: 'food', kind: 'proposal', from: 'agri-council', era: 1, title: 'A granary by the mill',
     why: 'Two of the last five harvests were thin. The farmers want a store for bad years.',
     asker: {name: 'Owen Barley', role: 'Agricultural Council'}, urgency: 1, costLine: 'Costs 900 coin. Upkeep 20 a year.',
     options: [
@@ -168,10 +179,11 @@ export const CARDS = [
       {key: 'refuse', label: 'Refuse', tradeoff: 'The council will lose some patience with you.', reactions: [{faction: 'farmers', dir: -2}]},
     ],
     details: [{label: 'Food stored', value: '7 months'}, {label: 'Thin harvests', value: '2 of 5'}],
+    opinion: opinion('popular', 0.58, 0.14, [['farmers', 0.48, 'for', 0.82, 0.06], ['labour', 0.22, 'for', 0.5, 0.15], ['merchants', 0.18, 'against', 0.2, 0.45], ['crafts', 0.12, 'indifferent', 0.2, 0.15]]),
     expiresInMonths: 14,
   },
   {
-    id: 'c-guild-form', kind: 'petition', from: 'moot', era: 1, title: 'The craftsfolk want a guild',
+    id: 'c-guild-form', category: 'labour', kind: 'petition', from: 'moot', era: 1, title: 'The craftsfolk want a guild',
     why: 'There are now nine workshops. The craftsfolk want their own body. It would set fair prices and train apprentices.',
     asker: {name: 'Ivo Penhallow', role: 'Master joiner'}, urgency: 0, costLine: 'It asks for a share of the yearly tax.',
     options: [
@@ -180,17 +192,18 @@ export const CARDS = [
       {key: 'later', label: 'Not now', tradeoff: 'They will ask again in three years.', reactions: [{faction: 'crafts', dir: -1}]},
       {key: 'refuse', label: 'Refuse', tradeoff: 'They will not ask again for fifteen years. Some will be angry.', reactions: [{faction: 'crafts', dir: -2}]},
     ],
+    opinion: opinion('forming', 0, 0, [], {pending: true}),
     expiresInMonths: 24,
   },
   {
-    id: 'c-wells', kind: 'report', from: 'health-board', era: 3, title: 'Three new wells',
+    id: 'c-wells', category: 'health', kind: 'report', from: 'health-board', era: 3, title: 'Three new wells',
     why: 'The Health Board dug three wells this year, in the Low Quarter and by the tannery. Fewer people fell sick.',
     asker: {name: 'Dr Elspeth Varro', role: 'Health Board'}, urgency: 0, costLine: 'Spent 540 of its 800 coin cap.',
     options: [{key: 'ack', label: 'Noted', tradeoff: '', reactions: []}],
     expiresInMonths: 12,
   },
   {
-    id: 'c-strike', kind: 'event', from: 'union', era: 3, title: 'The mill hands walk out',
+    id: 'c-strike', category: 'labour', kind: 'event', from: 'union', era: 3, title: 'The mill hands walk out',
     why: 'Pay at the big mills fell again. The mill hands have stopped work. They are gathered at the mill gates.',
     asker: {name: 'Bram Kettle', role: "Workers' Union"}, urgency: 2, costLine: 'Mill output stops while the strike lasts.',
     options: [
@@ -205,17 +218,18 @@ export const CARDS = [
     expiresInMonths: 3,
   },
   {
-    id: 'c-lamps', kind: 'demand', from: 'watch', era: 3, title: 'Lamps on the river streets',
+    id: 'c-lamps', category: 'works', kind: 'demand', from: 'watch', era: 3, title: 'Lamps on the river streets',
     why: 'Thefts by the quay doubled this year. The Watch wants lamps along the river streets. It has the backing to insist.',
     asker: {name: 'Captain Hale', role: 'Town Watch'}, urgency: 1, costLine: 'Costs 1,100 coin. Upkeep 40 a year.',
     options: [
       {key: 'yes', label: 'Do it', tradeoff: 'Safer nights. A steady cost.', cost: 1100, reactions: [{faction: 'merchants', dir: 1}, {faction: 'gentry', dir: 1}]},
       {key: 'negotiate', label: 'Half the streets for now', tradeoff: 'Costs 600. The Watch accepts, but its patience drops.', cost: 600, reactions: [{faction: 'merchants', dir: 1}]},
     ],
+    opinion: opinion('unpopular', 0.24, 0.43, [['labour', 0.34, 'against', 0.12, 0.62], ['newcomers', 0.22, 'against', 0.15, 0.5], ['merchants', 0.2, 'for', 0.6, 0.15], ['crafts', 0.14, 'indifferent', 0.2, 0.3], ['gentry', 0.1, 'for', 0.55, 0.2]]),
     expiresInMonths: 10,
   },
   {
-    id: 'c-schooling', kind: 'debate', from: 'school-board', era: 3, title: 'School for every child',
+    id: 'c-schooling', category: 'education', kind: 'debate', from: 'school-board', era: 3, title: 'School for every child',
     why: 'Four in ten people can read. The School Board wants the town to pay for every child to go to school.',
     asker: {name: 'Agnes Moor', role: 'School Board'}, urgency: 1, costLine: 'Costs 1,800 coin a year.',
     options: [
@@ -227,10 +241,14 @@ export const CARDS = [
       for: [{faction: 'scholars', label: 'Scholars', note: 'strongly for', p: 0.84}, {faction: 'newcomers', label: 'Newcomers', note: 'likely for', p: 0.6}],
       against: [{faction: 'clergy', label: 'Clergy', note: 'want to keep teaching', p: 0.69}],
     },
+    opinion: {...opinion('divisive', 0.44, 0.4, []), sides: [
+      {name: 'School Board', ...opinion('popular', 0.55, 0.2, [['labour', 0.34, 'for', 0.6, 0.15], ['newcomers', 0.24, 'for', 0.7, 0.1], ['clergy', 0.08, 'against', 0.1, 0.8], ['scholars', 0.06, 'for', 0.9, 0.02], ['merchants', 0.28, 'indifferent', 0.3, 0.25]])},
+      {name: 'Parish', ...opinion('divisive', 0.36, 0.38, [['labour', 0.34, 'split', 0.4, 0.4], ['newcomers', 0.24, 'against', 0.2, 0.55], ['clergy', 0.08, 'for', 0.9, 0.04], ['scholars', 0.06, 'against', 0.05, 0.85], ['merchants', 0.28, 'indifferent', 0.3, 0.25]])},
+    ]},
     expiresInMonths: 16,
   },
   {
-    id: 'c-fair', kind: 'proposal', from: 'arts-society', era: 4, title: 'A summer fair on the green',
+    id: 'c-fair', category: 'culture', kind: 'proposal', from: 'arts-society', era: 4, title: 'A summer fair on the green',
     why: 'Visitors spend well in towns with a fair. The Society wants a three-day fair this summer.',
     asker: {name: 'Rosalind Fenn', role: 'Festival & Arts Society'}, urgency: 0, costLine: 'Costs 500 coin. It may bring 800 visitors.',
     options: [
@@ -238,6 +256,7 @@ export const CARDS = [
       {key: 'allow', label: 'Allow it', tradeoff: 'No cost. A smaller fair.', reactions: [{faction: 'merchants', dir: 1}]},
       {key: 'refuse', label: 'Refuse', tradeoff: 'A quiet summer.', reactions: [{faction: 'merchants', dir: -1}, {faction: 'clergy', dir: 1}]},
     ],
+    opinion: opinion('indifferent', 0.27, 0.16, [['merchants', 0.24, 'for', 0.7, 0.05], ['labour', 0.3, 'indifferent', 0.15, 0.15], ['farmers', 0.28, 'indifferent', 0.12, 0.18], ['clergy', 0.06, 'against', 0.1, 0.6], ['crafts', 0.12, 'indifferent', 0.2, 0.1]]),
     expiresInMonths: 8,
   },
 ];
@@ -245,7 +264,7 @@ export const CARDS = [
 // Extra cards the stub deals into later sessions.
 export const LATER_CARDS = [
   {
-    kind: 'proposal', from: 'moot', title: 'A festival for the harvest',
+    kind: 'proposal', category: 'culture', from: 'moot', title: 'A festival for the harvest',
     why: 'The harvest came in well. People want to mark it. A small feast would lift spirits.',
     asker: {name: 'Mara Hollin', role: 'Village steward'}, urgency: 0, costLine: 'Costs 300 coin.',
     options: [
@@ -255,7 +274,7 @@ export const LATER_CARDS = [
     expiresInMonths: 12,
   },
   {
-    kind: 'petition', from: 'moot', title: 'Paths through the barley',
+    kind: 'petition', category: 'works', from: 'moot', title: 'Paths through the barley',
     why: 'People cut across the barley to reach the mill. The farmers are cross. A proper track would fix it.',
     asker: {name: 'Owen Barley', role: 'Farmer'}, urgency: 1, costLine: 'Costs 240 coin.',
     options: [

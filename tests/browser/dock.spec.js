@@ -1,10 +1,10 @@
-// The side dock and resizable panel (desk and tablet), and the phone's view
-// strip: every view reachable, no sideways scroll, reveals for new unlocks.
+// The left rail and its resizable drawer, the dock's Council crest (desk and
+// tablet), and the phone's view strip: every view reachable, no sideways
+// scroll, reveals for new unlocks. Panels never move the camera.
 import {test} from '@playwright/test';
 import {expect, hv, open, settle} from './helpers.js';
 
-const width = (page) => hv(page, () => Math.round(document.querySelector('.binder').getBoundingClientRect().width));
-const rightInset = (page) => hv(page, () => window.hearthvale.world.insets().right);
+const insets = (page) => hv(page, () => JSON.stringify(window.hearthvale.world.insets()));
 
 // Records whether any element matching sel gained is-new after this call.
 async function watchReveals(page, sel) {
@@ -16,62 +16,29 @@ async function watchReveals(page, sel) {
   }, sel);
 }
 
-test('the panel resizes by drag, keys and double-click, persists, and the camera reframes live', async ({page}) => {
-  await open(page, {fixture: 'town', stub: true});
-  const w0 = await width(page);
-  const r0 = await rightInset(page);
-  const grip = await page.locator('.binder .panel-resize').boundingBox();
-  const y = grip.y + grip.height / 2;
-  await page.mouse.move(grip.x + grip.width / 2, y);
+test('opening, closing and resizing panels never moves the camera', async ({page}) => {
+  const errors = await open(page, {fixture: 'city', stub: true});
+  const frame = await insets(page);
+  await page.locator('.rail [data-view="rules"]').click();
+  await expect(page.locator('.drawer')).toHaveClass(/is-open/);
+  await expect.poll(() => hv(page, () => getComputedStyle(document.querySelector('.drawer')).transform)).toBe('none');
+  const g = await page.locator('.drawer .panel-resize').boundingBox();
+  await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
   await page.mouse.down();
-  await page.mouse.move(grip.x - 60, y, {steps: 4});
-  // Mid-drag: the panel and the scene insets already follow.
-  await expect.poll(() => width(page)).toBeGreaterThan(w0 + 40);
-  await expect.poll(() => rightInset(page)).toBeGreaterThan(r0 + 40);
-  await page.mouse.move(grip.x - 120, y, {steps: 4});
+  await page.mouse.move(g.x + 90, g.y + g.height / 2, {steps: 5});
   await page.mouse.up();
-  const w1 = await width(page);
-  expect(Math.abs(w1 - (w0 + 128))).toBeLessThan(4);
-  await expect.poll(async () => Math.abs(await rightInset(page) - (r0 + w1 - w0))).toBeLessThan(2);
-  expect(await hv(page, () => JSON.parse(localStorage.getItem('hearthvale-ui')).binderWidth)).toBe(w1);
-
-  // Limits: never past min(720, 55 %), never under 320.
-  const g = await page.locator('.binder .panel-resize').boundingBox();
-  await page.mouse.move(g.x + 8, y);
-  await page.mouse.down();
-  await page.mouse.move(40, y, {steps: 4});
-  await page.mouse.up();
-  expect(await width(page)).toBeLessThanOrEqual(720);
-  const g2 = await page.locator('.binder .panel-resize').boundingBox();
-  await page.mouse.move(g2.x + 8, y);
-  await page.mouse.down();
-  await page.mouse.move(1430, y, {steps: 4});
-  await page.mouse.up();
-  expect(await width(page)).toBe(320);
-
-  // Keyboard: arrows step 16 px; the handle reports its value.
-  await page.locator('.binder .panel-resize').focus();
-  await page.keyboard.press('ArrowLeft');
-  await page.keyboard.press('ArrowLeft');
-  expect(await width(page)).toBe(352);
-  await expect(page.locator('.binder .panel-resize')).toHaveAttribute('aria-valuenow', '352');
-  await page.keyboard.press('ArrowRight');
-  expect(await width(page)).toBe(336);
-
-  // The width survives a reload.
-  await page.reload();
-  await page.waitForFunction(() => window.hearthvale?.app);
+  await page.locator('.dock [data-body="council"]').click();
+  await expect(page.locator('.dk')).toBeVisible();
   await settle(page);
-  expect(await width(page)).toBe(336);
-
-  // Double-click puts it back.
-  await page.locator('.binder .panel-resize').dblclick();
-  expect(await width(page)).toBe(w0);
-  await expect.poll(async () => Math.abs(await rightInset(page) - r0)).toBeLessThan(2);
-  expect(await hv(page, () => JSON.parse(localStorage.getItem('hearthvale-ui')).binderWidth)).toBeNull();
+  expect(await insets(page)).toBe(frame);
+  await page.locator('.dk-close').click();
+  await page.locator('.rail [data-view="rules"]').click();
+  await settle(page);
+  expect(await insets(page)).toBe(frame);
+  expect(errors).toEqual([]);
 });
 
-test('left rail mirrors the dock: a view opens its drawer, the open view closes it, and the drawer resizes', async ({page}) => {
+test('left rail: a view opens its drawer, the open view closes it, the drawer resizes, and only views and the map sit on it', async ({page}) => {
   await open(page, {fixture: 'city', stub: true});
   const rules = page.locator('.rail [data-view="rules"]');
   const left = () => hv(page, () => window.hearthvale.world.insets().left);
@@ -84,9 +51,9 @@ test('left rail mirrors the dock: a view opens its drawer, the open view closes 
   await rules.click();
   await expect(page.locator('.drawer')).toHaveClass(/is-open/);
   await expect(rules).toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(left).toBeGreaterThan(railLeft + 250);
-  const opened = await left();
-  // Drag the drawer's inner edge: wider, and the scene reframes.
+  // No locate or full-screen tiles: views, then the map.
+  await expect(page.locator('.rail [data-view="home"], .rail [data-view="fullscreen"]')).toHaveCount(0);
+  // Drag the drawer's inner edge: wider; the scene stays put.
   const drawerW = () => hv(page, () => Math.round(document.querySelector('.drawer').getBoundingClientRect().width));
   const w0 = await drawerW();
   // Let the drawer finish sliding in before grabbing its edge.
@@ -97,7 +64,7 @@ test('left rail mirrors the dock: a view opens its drawer, the open view closes 
   await page.mouse.move(g.x + 90, g.y + g.height / 2, {steps: 5});
   await page.mouse.up();
   expect(Math.abs(await drawerW() - (w0 + 82))).toBeLessThan(4);
-  await expect.poll(left).toBeGreaterThan(opened + 70);
+  expect(await left()).toBe(railLeft);
   await page.locator('.drawer .panel-resize').focus();
   await page.keyboard.press('ArrowLeft');
   const w1 = await drawerW();
@@ -107,86 +74,55 @@ test('left rail mirrors the dock: a view opens its drawer, the open view closes 
   await rules.click();
   await expect(page.locator('.drawer')).not.toHaveClass(/is-open/);
   await expect(rules).toHaveAttribute('aria-pressed', 'false');
-  await expect.poll(left).toBe(railLeft);
+  expect(await left()).toBe(railLeft);
   await page.reload();
   await page.waitForFunction(() => window.hearthvale?.app);
   await page.locator('.rail [data-view="people"]').click();
   expect(await drawerW()).toBe(w1);
 });
 
-test('side dock: crests switch bodies, the open crest tucks the panel away, badges and tips show', async ({page}) => {
+test('the dock holds one crest, the Council: a badge for every request, a tip, and it opens and closes the panel', async ({page}) => {
   const errors = await open(page, {fixture: 'city', stub: true});
-  await expect(page.locator('.binder .tabstrip')).toHaveCount(0);
-  const moot = page.locator('.dock [data-body="moot"]');
-  await expect(moot).toHaveAttribute('aria-pressed', 'true');
-  await expect(moot.locator('.badge')).toHaveText(/^\d+$/);
-  // Every busy body shows its own count.
-  for (const b of await page.locator('.dock-list .dock-btn:not(.is-quiet)').all()) await expect(b.locator('.badge')).not.toBeEmpty();
-
-  const farms = page.locator('.dock [data-body="agri-council"]');
-  await farms.hover();
-  await expect(page.locator('.tip')).toBeVisible();
-  await expect(page.locator('.tip')).toContainText('Agricultural');
-  await farms.click();
-  await expect(page.locator('.binder .body-view[data-body="agri-council"]')).toBeVisible();
-  await expect(farms).toHaveAttribute('aria-pressed', 'true');
-  await expect(moot).toHaveAttribute('aria-pressed', 'false');
-  // The open body's crest tucks the panel away; the dock stays.
-  await farms.click();
-  await expect(page.locator('.ui')).toHaveClass(/docked/);
-  await expect(page.locator('.binder')).toBeHidden();
-  await expect(page.locator('.dock')).toBeVisible();
-  await expect(farms).toHaveAttribute('aria-pressed', 'false');
-  // Any crest opens the panel to its body.
-  await moot.click();
-  await expect(page.locator('.ui')).not.toHaveClass(/docked/);
-  await expect(page.locator('.binder .body-view[data-body="moot"]')).toBeVisible();
-  expect(await hv(page, () => window.hearthvale.app.docked)).toBe(false);
-  expect(await hv(page, () => JSON.parse(localStorage.getItem('hearthvale-ui')).dock)).toBe('open');
+  await expect(page.locator('.dock .crest-btn')).toHaveCount(1);
+  const crest = page.locator('.dock [data-body="council"]');
+  const want = await hv(page, () => window.hearthvale.state().docket.filter((c) => c.kind !== 'report').length);
+  await expect(crest.locator('.badge')).toHaveText(String(want));
+  await crest.hover();
+  await expect(page.locator('.tip')).toContainText('Council');
+  await crest.click();
+  await expect(page.locator('.dk')).toBeVisible();
+  await expect(crest).toHaveAttribute('aria-pressed', 'true');
+  await crest.click();
+  await expect(page.locator('.dk')).toBeHidden();
+  await expect(crest).toHaveAttribute('aria-pressed', 'false');
   expect(errors).toEqual([]);
 });
 
-test('side dock: a new card shows a petitioner chip unless its docket is open, and a new body slides in', async ({page}) => {
+test('a new body joins the Council\'s list with the reveal dot until visited', async ({page}) => {
   await open(page, {fixture: 'town', stub: true});
-  // Open to another body: the chip slides out beside the panel, nothing else moves.
-  await page.locator('.dock [data-body="agri-council"]').click();
-  await page.locator('.settings-btn').focus();
-  await hv(page, () => window.hearthvale.dev.addCard());
-  await expect(page.locator('.petition')).toBeVisible();
-  await expect(page.locator('.dock [data-body="agri-council"]')).toHaveAttribute('aria-pressed', 'true');
-  expect(await hv(page, () => document.activeElement?.className)).toContain('settings-btn');
-  // Once it has slid out, it sits clear of the panel.
-  await expect.poll(() => hv(page, () => document.querySelector('.binder').getBoundingClientRect().left - document.querySelector('.petition').getBoundingClientRect().right)).toBeGreaterThanOrEqual(0);
-  await page.locator('.petition').click();
-  await expect(page.locator('.dock [data-body="moot"]')).toHaveAttribute('aria-pressed', 'true');
-
-  // A founded body's crest arrives with the reveal and a dot until visited.
-  await watchReveals(page, '.dock-btn');
-  const before = await page.locator('.dock .dock-btn').count();
+  await hv(page, () => window.hearthvale.app.openCouncil());
+  const before = await page.locator('.dk-index [data-page]').count();
+  const known = await page.locator('.dk-index [data-page]').evaluateAll((els) => els.map((e) => e.dataset.page));
   await hv(page, () => window.hearthvale.dev.foundBody());
-  await expect(page.locator('.dock .dock-btn')).toHaveCount(before + 1);
-  expect(await hv(page, () => window.__revealed.length)).toBe(1);
-  const id = await hv(page, () => window.__revealed[0]);
-  await expect(page.locator(`.dock [data-body="${id}"] .dot`)).toBeVisible();
-  await page.locator(`.dock [data-body="${id}"]`).click();
-  await expect(page.locator(`.dock [data-body="${id}"] .dot`)).toBeHidden();
+  await expect(page.locator('.dk-index [data-page]')).toHaveCount(before + 1);
+  const id = await page.locator('.dk-index [data-page]').evaluateAll((els, k) => els.map((e) => e.dataset.page).find((x) => !k.includes(x)), known);
+  await expect(page.locator(`.dk-index [data-page="${id}"] .dot`)).toBeVisible();
+  await page.locator(`.dk-index [data-page="${id}"]`).click();
+  await expect(page.locator(`.dk-index [data-page="${id}"] .dot`)).toHaveCount(0);
 });
 
-test('side dock: on a short tablet the crests scroll with a fade and stay on screen', async ({page}) => {
+test('short tablet: the Council fits between the top bar and the time strip', async ({page}) => {
   await page.setViewportSize({width: 844, height: 390});
   await open(page, {fixture: 'city', stub: true});
-  const info = await hv(page, () => {
-    const list = document.querySelector('.dock-list');
-    const dock = document.querySelector('.dock').getBoundingClientRect();
-    return {scrolls: list.scrollHeight > list.clientHeight, fade: list.classList.contains('fade-end'), bottom: dock.bottom, right: dock.right};
+  await hv(page, () => window.hearthvale.app.openCouncil());
+  const r = await hv(page, () => {
+    const b = (s) => document.querySelector(s).getBoundingClientRect();
+    return {dk: b('.dk'), top: b('.topbar'), strip: b('.timestrip'), dock: b('.dock')};
   });
-  expect(info.scrolls).toBe(true);
-  expect(info.fade).toBe(true);
-  expect(info.bottom).toBeLessThanOrEqual(390);
-  expect(info.right).toBeLessThanOrEqual(844);
-  await hv(page, () => { const l = document.querySelector('.dock-list'); l.scrollTop = l.scrollHeight; });
-  await expect(page.locator('.dock-list')).toHaveClass(/fade-start/);
-  await expect(page.locator('.dock-list')).not.toHaveClass(/fade-end/);
+  expect(r.dk.top).toBeGreaterThanOrEqual(r.top.bottom);
+  expect(r.dk.bottom).toBeLessThanOrEqual(r.strip.top);
+  expect(r.dk.right).toBeLessThanOrEqual(r.dock.left);
+  expect(r.dock.bottom).toBeLessThanOrEqual(390);
 });
 
 for (const [w, h] of [[390, 844], [320, 568]]) {
@@ -197,15 +133,11 @@ for (const [w, h] of [[390, 844], [320, 568]]) {
     await expect(nav).toBeInViewport();
     const ids = await nav.locator('.nav-item').evaluateAll((els) => els.map((e) => e.dataset.view));
     const views = {rules: '.rulebook', people: '.people', tensions: '.tensions', chronicle: '.chronicle', places: '.places'};
-    for (const want of ['moot', 'map', ...Object.keys(views)]) expect(ids, want).toContain(want);
-    // The docket first, then every body (the dock's crests), then the views and the map.
-    const crests = await hv(page, () => window.hearthvale.app.layout === 'phone' && [...document.querySelectorAll('.dock .dock-btn')].map((b) => b.dataset.body));
-    const bodies = ids.filter((i) => !views[i] && i !== 'map');
-    expect(bodies[0]).toBe('moot');
-    expect(bodies.length).toBeGreaterThanOrEqual(8);
-    expect(ids.slice(0, bodies.length)).toEqual(bodies);
+    for (const want of ['council', 'map', ...Object.keys(views)]) expect(ids, want).toContain(want);
+    // The Council first (every body lives inside it), then the views and the map.
+    expect(ids[0]).toBe('council');
+    expect(ids.filter((i) => !views[i] && i !== 'map' && i !== 'council')).toEqual([]);
     expect(ids.at(-1)).toBe('map');
-    if (crests && crests.length) expect([...crests].sort()).toEqual([...bodies].sort());
     for (const id of ids) {
       const item = nav.locator(`[data-view="${id}"]`);
       const box = await item.boundingBox();
@@ -219,16 +151,16 @@ for (const [w, h] of [[390, 844], [320, 568]]) {
         continue;
       }
       await item.click();
-      const sel = views[id] ? `.sheet ${views[id]}` : `.sheet .body-view[data-body="${id}"]`;
+      const sel = views[id] ? `.sheet ${views[id]}` : '.sheet .dk';
       await expect(page.locator(sel), id).toBeVisible();
       await expect(item).toHaveAttribute('aria-current', 'true');
       expect(await hv(page, () => window.hearthvale.app.sheet.index), id).toBeGreaterThan(0);
       expect(await hv(page, () => document.documentElement.scrollWidth), id).toBe(w);
     }
-    // The docket opens tall; tapping it again lowers the sheet to its peek.
-    await nav.locator('[data-view="moot"]').click();
+    // The Rule Book opens tall; tapping it again lowers the sheet to its peek.
+    await nav.locator('[data-view="rules"]').click();
     await expect.poll(() => hv(page, () => window.hearthvale.app.sheet.index)).toBe(2);
-    await nav.locator('[data-view="moot"]').click();
+    await nav.locator('[data-view="rules"]').click();
     await expect.poll(() => hv(page, () => window.hearthvale.app.sheet.index)).toBe(0);
     expect(await hv(page, () => document.documentElement.scrollWidth)).toBe(w);
     expect(errors).toEqual([]);

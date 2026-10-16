@@ -1,12 +1,14 @@
-// Chronicle: a vertical timeline grouped by era (design-visual §8.5), and
-// the small bottom-left feed of the last three lines. Lines about one place
-// carry its name as a quiet tag; with two or more centres the timeline can
-// be filtered to one place.
+// Chronicle: a vertical timeline grouped by era (design-visual §8.5). It
+// holds the most recent lines; "Show earlier lines" asks for more, so a long
+// town's history never loads all at once, and era groups out of view skip
+// rendering. New lines also pass through the notice stack as they come
+// (app.js). Lines
+// about one place carry its name as a quiet tag; with two or more centres
+// the timeline can be filtered to one place.
 import {esc, h} from '../dom.js';
 import {icon} from '../icons.js';
 import {ERA_NAMES, ERA_NUMERALS, ERA_SWATCHES} from '../format.js';
 import {explainer, EXPLAINERS} from './explainer.js';
-import {animate} from '../motion.js';
 import {previewSection} from './late-surfaces.js';
 
 export function createChronicle(ctx) {
@@ -19,7 +21,10 @@ export function createChronicle(ctx) {
   const note = explainer(ctx, 'chronicle', EXPLAINERS.chronicle);
   if (note) el.append(note);
   const preview = previewSection();
-  el.append(preview.el, filters, list);
+  const more = h('button.link-btn.chronicle-more', {type: 'button', hidden: true});
+  more.innerHTML = `${icon('chevron-down')}Show earlier lines`;
+  more.addEventListener('click', () => ctx.moreChronicle?.());
+  el.append(preview.el, filters, list, more);
   let sig = '', place = 'all', last = null;
 
   filters.addEventListener('click', (e) => {
@@ -59,9 +64,10 @@ export function createChronicle(ctx) {
 
   return {
     el,
-    // centres: [{id, name}] for the live centres.
-    update(entries = [], {summary, show, centres = []} = {}) {
+    // centres: [{id, name}] for the live centres; earlier: older lines exist.
+    update(entries = [], {summary, show, centres = [], earlier = false} = {}) {
       preview.update(summary, show);
+      more.hidden = !earlier;
       last = [entries, centres];
       render(entries, centres);
     },
@@ -72,21 +78,4 @@ export function createChronicle(ctx) {
 function centreOf(e) {
   const id = e.refs?.centreId ?? e.centreId;
   return id == null ? null : String(id);
-}
-
-// Feed: last three lines, older ones fading. New lines rise in.
-export function createFeed() {
-  const el = h('div.feed', {'aria-live': 'polite', 'aria-label': 'Latest from the chronicle'});
-  let lastKey = '';
-  return {
-    el,
-    update(entries = []) {
-      const recent = entries.filter((e) => e.kind !== 'year').slice(-3).reverse();
-      const key = recent.map((e) => e.key ?? e.text).join('|');
-      if (key === lastKey) return;
-      lastKey = key;
-      el.innerHTML = recent.map((e, i) => `<div class="feed-line paper k-${esc(e.kind ?? 'line')} age-${i}"><span>${esc(e.text)}</span></div>`).join('');
-      animate(el.firstElementChild, [{opacity: 0, transform: 'translateY(8px)'}, {opacity: 1, transform: 'none'}], {duration: 360});
-    },
-  };
 }

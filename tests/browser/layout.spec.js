@@ -19,29 +19,33 @@ for (const fixture of ['hamlet', 'town', 'city']) {
       const insets = await page.evaluate(() => window.hearthvale.world.insets?.());
       expect(insets.top, `${width}×${height} top inset`).toBeGreaterThan(40);
       expect(insets.bottom, `${width}×${height} bottom inset`).toBeGreaterThan(40);
-      if (layout === 'desk') expect(insets.right).toBeGreaterThan(300);
-      if (layout === 'tablet') expect(insets.right).toBeGreaterThan(50);
+      // Only the fixed chrome frames the scene: the dock on the right, never a panel.
+      if (layout !== 'phone') {
+        expect(insets.right).toBeGreaterThan(50);
+        expect(insets.right).toBeLessThan(100);
+      }
     }
     expect(errors).toEqual([]);
   });
 }
 
-test('tablet side sheet and phone sheet stay clear of the chrome when open', async ({page}) => {
+test('the tablet Council and the phone sheet stay clear of the chrome when open', async ({page}) => {
   await open(page, {fixture: 'city'});
   await page.setViewportSize({width: 768, height: 1024});
   await settle(page);
-  await page.locator('.dock [data-body="moot"]').click();
-  await expect.poll(() => page.evaluate(() => document.querySelector('.binder').getBoundingClientRect().right)).toBeLessThanOrEqual(768);
+  await page.locator('.dock [data-body="council"]').click();
   await settle(page);
-  const binder = await page.locator('.binder').boundingBox();
+  const dk = await page.locator('.dk').boundingBox();
   const top = await page.locator('.topbar').boundingBox();
   const strip = await page.locator('.timestrip').boundingBox();
-  expect(binder.y).toBeGreaterThanOrEqual(top.y + top.height);
-  expect(binder.y + binder.height).toBeLessThanOrEqual(strip.y);
-  expect(binder.x + binder.width).toBeLessThanOrEqual(768);
+  const dock = await page.locator('.dock').boundingBox();
+  expect(dk.y).toBeGreaterThanOrEqual(top.y + top.height);
+  expect(dk.y + dk.height).toBeLessThanOrEqual(strip.y);
+  expect(dk.x + dk.width).toBeLessThanOrEqual(dock.x);
+  await page.locator('.brand').click();
   await page.keyboard.press('Escape');
   await settle(page);
-  await expect(page.locator('.ui')).toHaveClass(/docked/);
+  await expect(page.locator('.dk')).toBeHidden();
 
   await page.setViewportSize({width: 320, height: 568});
   await settle(page);
@@ -50,7 +54,7 @@ test('tablet side sheet and phone sheet stay clear of the chrome when open', asy
     await settle(page);
     const visible = await page.evaluate(() => innerHeight - document.querySelector('.sheet').getBoundingClientRect().top);
     const peek = await page.evaluate(() => window.hearthvale.app.sheet.peekHeight);
-    expect(peek, 'the peek holds the time controls and the view strip').toBeGreaterThanOrEqual(100);
+    expect(peek, 'the peek holds the time controls and the view strip in one row').toBeGreaterThanOrEqual(64);
     const expected = [peek, Math.round(568 * 0.55), Math.round(568 * 0.92)][snap];
     expect(Math.abs(visible - expected), `snap ${snap}`).toBeLessThan(2);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);

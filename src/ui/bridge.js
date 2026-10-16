@@ -15,8 +15,8 @@ const narratorMods = import.meta.glob('../narrator-client.js');
 const SELECTORS = ['selectTopBar', 'selectDocket', 'selectBodies', 'selectRuleBook', 'selectTensions', 'selectFactions',
   'selectChronicle', 'selectEraProgress', 'selectUnlocks', 'selectInspect',
   // Optional: later-era surfaces and disasters.
-  'selectEvents', 'selectBudget', 'selectCompass', 'selectEndPreview', 'selectCentres'];
-const ACTIONS = ['rule', 'setDelegated', 'dissolveBody', 'setStandingOrder', 'setIndividualCap'];
+  'selectEvents', 'selectBudget', 'selectCompass', 'selectEndPreview', 'selectCentres', 'selectApproval', 'selectBudgetSeason', 'selectAdvisers'];
+const ACTIONS = ['rule', 'dissolveBody', 'setIndividualCap', 'strikeBudgetLine', 'approveAllBudgets', 'trimAllToFit', 'hireAdviser', 'dismissAdviser', 'setAdviserMode', 'redrawSlate', 'letStand'];
 
 async function first(globs) {
   for (const load of Object.values(globs)) {
@@ -33,6 +33,7 @@ export async function loadSim(params) {
     const pick = (name, ...mods) => mods.find((m) => typeof m?.[name] === 'function')?.[name];
     return {
       kind: 'real',
+      pace: index.PACE ?? 1,
       createState: index.createState,
       stepTick: index.stepTick,
       serialize: pick('serialize', index, ser),

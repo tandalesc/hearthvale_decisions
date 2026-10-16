@@ -54,7 +54,7 @@ function makeBody(state, id, foundedYear) {
   const def = BODY_DEFS[id];
   return {
     id, kind: id, foundedYear, status: 'active', power: 0.35 + rng(state) * 0.45, patience: 0.4 + rng(state) * 0.6,
-    delegated: false, cap: 0, budgetShare: 0.06,
+    budgetShare: 0.06,
     metrics: def.metrics.map(([key, label, unit, base, drift]) => ({id: key, label, unit, series: series(state, base, drift)})),
   };
 }
@@ -82,7 +82,6 @@ export function fixtureState(name = 'town', {seed = 11, fresh = false} = {}) {
     deferred: {},
   };
   BODY_ORDER.slice(0, f.bodies).forEach((id, i) => state.bodies.push(makeBody(state, id, i === 0 ? 0 : 6 + i * 7)));
-  if (name === 'city') state.bodies.find((b) => b.id === 'health-board').delegated = true;
   for (const id of f.cards) state.docket.push(cloneCard(CARDS.find((c) => c.id === id), state));
   for (const [id, level] of Object.entries(f.policies)) {
     state.policies[id] = {level, since: Math.max(1, Math.floor(rng(state) * f.year)), by: rng(state) < 0.6 ? 'player' : state.bodies[Math.floor(rng(state) * state.bodies.length)].id};
@@ -214,31 +213,11 @@ export function rule(state, cardId, optionKey) {
   return {ok: true};
 }
 
-export function setDelegated(state, bodyId, on, cap = 800) {
-  const body = state.bodies.find((b) => b.id === bodyId);
-  if (!body) return {ok: false};
-  body.delegated = Boolean(on);
-  body.cap = cap;
-  const name = bodyName(state, body);
-  addEntry(state, 'decision', on ? `You let ${theName(name)} run its own affairs.` : `You took back ${theName(name)}'s affairs.`);
-  return {ok: true};
-}
-
 export function dissolveBody(state, bodyId) {
   const body = state.bodies.find((b) => b.id === bodyId);
   if (!body || body.id === 'moot') return {ok: false};
   body.status = 'dissolved';
   addEntry(state, 'decision', `You dissolved ${theName(bodyName(state, body))}.`);
-  return {ok: true};
-}
-
-export function setStandingOrder(state, bodyId, order) {
-  const body = state.bodies.find((b) => b.id === bodyId);
-  if (!body || !order) return {ok: false};
-  body.standingOrders ??= [];
-  const id = order.id ?? `so${body.standingOrders.length + 1}-${state.time.tick | 0}`;
-  body.standingOrders = body.standingOrders.filter((o) => o.id !== id);
-  if (!order.remove) body.standingOrders.push({id, match: {...order.match}, action: order.action, maxCost: order.maxCost ?? null});
   return {ok: true};
 }
 

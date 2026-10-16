@@ -14,7 +14,7 @@ export async function open(page, {fixture, paused = true, renderer = 'stub', stu
   await page.addInitScript(() => {
     localStorage.setItem('hearthvale-model-enabled', 'false');
     // Explainers are one-time notes; mark them seen unless a test wants them.
-    if (!sessionStorage.getItem('keep-explainers')) localStorage.setItem('hearthvale-ui-seen', JSON.stringify(['explain:docket', 'explain:rules', 'explain:people', 'explain:chronicle', 'explain:tensions', 'explain:overlays', 'explain:delegation']));
+    if (!sessionStorage.getItem('keep-explainers')) localStorage.setItem('hearthvale-ui-seen', JSON.stringify(['explain:docket', 'explain:rules', 'explain:people', 'explain:chronicle', 'explain:tensions', 'explain:overlays', 'explain:council']));
   });
   const params = new URLSearchParams();
   if (fixture) params.set('fixture', fixture);
@@ -38,18 +38,19 @@ export const hv = (page, fn, arg) => page.evaluate(fn, arg);
 export async function regionIssues(page) {
   return page.evaluate(() => {
     const layout = document.querySelector('.ui').dataset.layout;
-    const selectors = ['.topbar', '.rail', '.timestrip', '.binder', '.dock', '.feed', '.sheet'];
+    const selectors = ['.topbar', '.rail', '.timestrip', '.dk', '.dock', '.notice-stack', '.sheet'];
     const rects = [];
     for (const sel of selectors) {
       const el = document.querySelector(sel);
       if (!el) continue;
       const cs = getComputedStyle(el);
       if (cs.display === 'none' || cs.visibility === 'hidden' || el.hidden) continue;
-      if (sel === '.binder' && (layout !== 'desk' || document.querySelector('.ui').classList.contains('docked'))) continue;
+      // The Council in the phone sheet is part of the sheet.
+      if (sel === '.dk' && layout === 'phone') continue;
       let r = el.getBoundingClientRect();
       if (sel === '.sheet') r = {x: r.x, y: r.y, right: r.right, bottom: Math.min(r.bottom, innerHeight), width: r.width, height: innerHeight - r.y};
-      if (sel === '.feed') {
-        const lines = [...el.children].filter((c) => getComputedStyle(c).display !== 'none');
+      if (sel === '.notice-stack') {
+        const lines = [...el.querySelectorAll('.notice')].filter((c) => getComputedStyle(c).display !== 'none');
         if (!lines.length) continue;
         const rs = lines.map((l) => l.getBoundingClientRect());
         r = {x: Math.min(...rs.map((q) => q.x)), y: Math.min(...rs.map((q) => q.y)), right: Math.max(...rs.map((q) => q.right)), bottom: Math.max(...rs.map((q) => q.bottom))};
@@ -73,11 +74,9 @@ export async function regionIssues(page) {
     const brand = shown('.brand h1, .brand .date > *'), metrics = shown('.metric'), end = shown('.topbar-end');
     if (metrics.length && brand.length && Math.max(...brand.map((r) => r.right)) > Math.min(...metrics.map((r) => r.left)) + 0.5) issues.push('top bar name runs into the numbers');
     if (metrics.length && end.length && Math.max(...metrics.map((r) => r.right)) > end[0].left + 0.5) issues.push('top bar numbers run into settings');
-    for (const el of document.querySelectorAll('.metric, .brand h1, .era-progress .label, .peek-date b, .sheet-nav, .dock')) {
+    for (const el of document.querySelectorAll('.metric, .brand h1, .era-progress .label, .date-chip, .sheet-nav, .dock')) {
       const r = el.getBoundingClientRect();
       if (!r.width || getComputedStyle(el).display === 'none' || getComputedStyle(el).visibility === 'hidden') continue;
-      // A closed tablet binder may still be sliding off-screen.
-      if (el.closest('.binder') && document.querySelector('.ui').classList.contains('docked')) continue;
       if (r.right > innerWidth + 0.5) issues.push(`${el.className} past the edge`);
     }
     return issues;

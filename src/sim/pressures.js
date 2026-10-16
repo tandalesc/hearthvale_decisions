@@ -153,6 +153,8 @@ export function computeIndicators(state) {
   I.employment = jobs.workers ? clamp(jobs.filled / jobs.workers, 0, 1) : 1;
   const yearlySpend = yearlyNetSpend(state);
   I.treasuryYears = yearlySpend > 0 ? clamp(state.treasury / yearlySpend, 0, 10) : (state.treasury > 0 ? 10 : 0);
+  // How the streets look (aesthetics.js, yearly; 0.5 until the first pass).
+  I.looks = state.aesthetics?.town ?? 0.5;
   I.wellbeing = wellbeingOf(state);
   return I;
 }
@@ -218,20 +220,31 @@ function yearlyNetSpend(state) {
 
 // 0-100, shown in the top bar. Food, homes, work, health and calm.
 function wellbeingOf(state) {
+  const p = wellbeingParts(state);
+  const score = p.food + p.homes + p.work + p.health + p.calm + p.hunger + p.looks + p.extra;
+  return Math.round(clamp(score, 0, 100));
+}
+
+// The parts of wellbeing in points (they sum to the unclamped score). The
+// approval pass (approval.js) reads them to say why people feel as they do.
+export function wellbeingParts(state) {
   const I = state.indicators, P = state.pressures;
   const food = I.foodBalance >= 2 ? 1 : I.foodBalance / 2;
   const homes = 1 - I.housingPressure;
   const work = I.employment;
   const shortage = state.economy.shortage;
   const hunger = shortage.food > 0 ? Math.min(1, shortage.food / Math.max(1, I.pop)) : 0;
-  // Rules and events add a little on top (feast days, festival fund, curfew).
-  const extra = state.modifierAdds?.happiness ?? 0;
-  const score = 30 * food + 18 * homes + 18 * work + 16 * P.health + 18 * (1 - P.unrest) - 25 * hunger + extra;
-  return Math.round(clamp(score, 0, 100));
+  return {
+    food: 30 * food, homes: 18 * homes, work: 18 * work, health: 16 * P.health, calm: 18 * (1 - P.unrest), hunger: -25 * hunger,
+    // Shabby, littered streets wear people down; parks and gardens lift them.
+    looks: 12 * ((I.looks ?? 0.5) - 0.5),
+    // Rules and events add a little on top (feast days, festival fund, curfew).
+    extra: state.modifierAdds?.happiness ?? 0,
+  };
 }
 
 // Yearly samples for trend lines and the end-of-chronicle page.
-const HISTORY_KEYS = ['pop', 'households', 'inequality', 'housingPressure', 'foodBalance', 'avgWealth', 'avgHomeTier', 'density', 'wellbeing', 'tension', 'literacy'];
+const HISTORY_KEYS = ['pop', 'households', 'inequality', 'housingPressure', 'foodBalance', 'avgWealth', 'avgHomeTier', 'density', 'wellbeing', 'tension', 'literacy', 'looks'];
 const HISTORY_CAP = 200;
 
 export function recordHistory(state) {

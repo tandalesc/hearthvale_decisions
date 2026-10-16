@@ -17,13 +17,12 @@ export function explainer(ctx, id, lines) {
 }
 
 export const EXPLAINERS = {
-  docket: ['This is the docket. Requests that need your ruling land here.', 'Nothing changes until you choose. Each request expires in time.'],
+  council: ['Every request that needs your ruling lands here.', 'The Town Council holds them all; each body keeps its own page. Nothing changes until you choose.'],
   rules: ['The Rule Book holds every rule in force.', 'Rules change only through proposals. Bodies will ask you to add, raise or drop them.'],
   people: ['These are the groups that live here.', 'Each wants different things. Their mood shapes how your rulings land.'],
   chronicle: ['The chronicle keeps the story of your town.', 'Your rulings are marked with a seal.'],
   tensions: ['Some rules pull against each other.', 'When two rules fight, both cost coin and little changes.'],
   overlays: ['The map can show what is hard to see.', 'Look at worn paths, land value or health across the town.'],
-  debates: ['Some requests split the town.', 'The strip shows who is for and against, and how sure they are.'],
-  delegation: ['You can let a body run its own affairs.', 'It spends within a cap and sends you a yearly report. You can take it back at any time.'],
+  debates: ['Some requests split the town.', 'The bar shows how the town leans. Open it to see each faction.'],
   bodies: ['Each body now keeps a small dashboard.', 'The lines show the last five years.'],
 };

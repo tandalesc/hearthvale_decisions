@@ -35,6 +35,9 @@ export function createSheet({onSnap} = {}) {
     const H = sheetHeight();
     el.style.transition = animated && !reduced() ? 'transform var(--t-slow) var(--ease-out)' : 'none';
     el.style.transform = `translateY(${Math.max(0, H - px)}px)`;
+    // How much of the sheet is below the screen: sticky footers inside it
+    // (the inspector's actions row) use it to stay in view.
+    el.style.setProperty('--sheet-hidden', `${Math.round(Math.max(0, H - px))}px`);
   }
 
   function snapTo(i, animated = true) {

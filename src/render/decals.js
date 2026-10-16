@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { patchMaterial, hashId, NOISE } from './shaderlib.js';
 import { GROUND_GLSL } from './ground.js';
+import { GROUND_AO, GROUND_AO_GLSL, bakeOcclusionSteps, setGroundField, aoDayFactor, bakedWeights } from './occlusion.js';
 
 // Ground decals (design-visual §3.3, §6): what sells "sitting on the table".
 //   1. Contact shadows under every building (multiply blend, terrain-following
@@ -8,7 +9,8 @@ import { GROUND_GLSL } from './ground.js';
 //   2. Contact blobs under every tree (multiply blend, one flat quad each).
 //   3. Coloured ground: park lawns with gravel paths, flower gardens for
 //      wealthy homes, dirt-and-plank yards around construction (lit Lambert).
-// Three draw calls. Instances are rebuilt only when lots change.
+// Three draw calls. Instances are rebuilt only when lots change, and so is
+// the baked ground occlusion field (occlusion.js) the terrain multiplies in.
 
 // Ground height from the shared height texture (terrain.js), so decals follow
 // any terrain seed. Lots and trees never sit in the channel; clamp above water.
@@ -166,6 +168,7 @@ attribute vec3 iCenter;
 attribute vec4 iDecal;   // half x, half z, kind, seed
 attribute vec3 iColor;
 varying vec2 vDecalLocal;
+varying vec2 vDecalWorld;
 varying vec4 vDecal;
 varying vec3 vDecalColor;
 ${HEIGHT_GLSL}
@@ -173,6 +176,8 @@ ${HEIGHT_GLSL}
 
 const COLOR_FRAG_HEAD = /* glsl */ `
 varying vec2 vDecalLocal;
+varying vec2 vDecalWorld;
+${GROUND_AO_GLSL}
 varying vec4 vDecal;
 varying vec3 vDecalColor;
 ${NOISE}
@@ -226,6 +231,8 @@ const COLOR_FRAG = /* glsl */ `
   // Snow covers lawns and yards like the terrain around them.
   col = mix(col, vec3(0.90, 0.92, 0.94), smoothstep(0.25, 0.8, uSnow) * 0.9);
   if (alpha < 0.01) discard;
+  // Lawns and gardens hug the walls: they take the ground's occlusion too.
+  col *= groundOcclusion(vDecalWorld);
   diffuseColor = vec4(col * uTint, alpha);
 `;
 
@@ -239,12 +246,14 @@ function colorMaterial(grade) {
   });
   patchMaterial(material, grade, {
     key: 'decal-color',
+    uniforms: GROUND_AO,
     vertexHead: COLOR_HEAD,
     vertexBegin: /* glsl */ `
       vec2 decalLocal = position.xz * iDecal.xy;
       transformed = vec3(iCenter.x + decalLocal.x, 0.0, iCenter.z + decalLocal.y);
       transformed.y = landHeight(transformed.xz) + 0.04;
       vDecalLocal = decalLocal;
+      vDecalWorld = transformed.xz;
       vDecal = iDecal;
       vDecalColor = iColor;
     `,
@@ -303,6 +312,12 @@ export function createDecals(ctx) {
   let blobsBuilt = false;
   let lastChop = -1;
   let keep = 1;
+  let quality = ctx.quality;
+  // Baked ground occlusion: rebuilt when footprints change, at most once a
+  // second while a town grows (a bake of a large city takes a few ms).
+  let aoVersion = -1;
+  let aoAt = -Infinity;
+  let aoForest = null;
 
   /** Body footprint estimate (centre and half extents) for a lot summary. */
   function bodies(s, out) {
@@ -402,6 +417,49 @@ export function createDecals(ctx) {
     a.needsUpdate = true;
   }
 
+  /** Building bodies (pads, or the footprint estimate) and tree crowns for the bake. */
+  function bakeGroundAO() {
+    const blocks = [];
+    const tmp = [];
+    for (const lot of ctx.buildings.lots.values()) {
+      const s = lot.summary;
+      if (!s || lot.anim?.kind === 'demolish' || s.type === 'park' || s.type === 'bridge') continue;
+      const h = Math.min(18, Math.max(1, s.bodyH || 3));
+      if (s.pads?.length) {
+        for (const p of s.pads) blocks.push({ x: p.x, z: p.z, hw: p.w / 2 - 0.3, hd: p.d / 2 - 0.3, h });
+      } else {
+        for (const [x, z, hw, hd] of bodies(s, tmp)) blocks.push({ x, z, hw, hd, h });
+      }
+    }
+    const trees = [];
+    const shared = ctx.forest;
+    if (shared) {
+      const { forest, chopT } = shared;
+      const n = Math.round(forest.count * keep);
+      for (let i = 0; i < n; i++) {
+        if (forest.kind[i] === 3 || chopT[i]) continue;
+        trees.push({ x: forest.x[i], z: forest.z[i], r: (forest.kind[i] === 2 ? 1.7 : 2.1) * forest.scale[i] });
+      }
+      aoForest = shared;
+    }
+    // Baked over a few frames (a pass or two each) so no frame carries it all;
+    // a newer bake replaces one still running.
+    aoBake = bakeOcclusionSteps(blocks, trees);
+    stepBake();
+  }
+
+  let aoBake = null;
+  const AO_BAKE_MS = 2;
+  function stepBake() {
+    if (!aoBake) return;
+    const t0 = performance.now();
+    let r;
+    do r = aoBake.next(); while (!r.done && performance.now() - t0 < AO_BAKE_MS);
+    if (!r.done) return;
+    aoBake = null;
+    setGroundField(r.value);
+  }
+
   function update(view, frame) {
     const v = ctx.buildings.version();
     let dirty = v !== lastVersion;
@@ -418,9 +476,20 @@ export function createDecals(ctx) {
     }
     if (!blobsBuilt) buildBlobs();
     else if (ctx.forest && ctx.forest.chopVersion !== lastChop) syncChops();
+    const [wc, ws] = bakedWeights(quality);
+    if (wc + ws > 0 && (v !== aoVersion || ctx.forest !== aoForest) && frame.time - aoAt >= 1) {
+      aoVersion = v;
+      aoAt = frame.time;
+      bakeGroundAO();
+    } else {
+      stepBake();
+    }
+    const day = aoDayFactor(ctx.grade?.current);
+    GROUND_AO.uGroundAO.value.set(wc * day, ws * day);
   }
 
   function applyQuality(q) {
+    quality = q;
     keep = ctx.forest?.keep ?? (q.name === 'low' ? 0.4 : q.name === 'medium' ? 0.7 : 1);
     if (blobsBuilt) blobSet.commit(Math.round(ctx.forest.forest.count * keep));
   }
@@ -434,6 +503,9 @@ export function createDecals(ctx) {
         m.geometry.dispose();
         m.material.dispose();
       }
+      aoBake = null;
+      setGroundField(null);
+      GROUND_AO.uGroundAO.value.set(0, 0);
       scene.remove(group);
     },
   };

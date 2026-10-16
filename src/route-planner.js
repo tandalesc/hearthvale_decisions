@@ -2,7 +2,7 @@
 // worker (or a cooperative scheduler when workers are unavailable), writes
 // finished routes into walker tasks, and records river-crossing demand.
 import { RouteScheduler, cellsToWaypoints } from './navigation.js';
-import { terrainSeed } from './terrain.js';
+import { terrainSeed, terrainVersion, terrainWaters } from './terrain.js';
 import { countDeckTrips } from './sim/bridges.js';
 import { navGrid, cellOf, cellCenter, nearestOpen, recordCrossingBand, WALKER_SCALE, footprints } from './sim/roads.js';
 
@@ -12,6 +12,7 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
   const waiting = new Map();
   const stats = { mode: 'cooperative', pending: 0, completed: 0, cacheHits: 0, requests: 0, rejected: 0 };
   let engine = null, grid = null, lastState = null, nextId = 0;
+  let ticked = false; // tick() keeps the grid current (see enqueue)
 
   try {
     if (worker && typeof Worker !== 'undefined') {
@@ -39,7 +40,7 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
     else cache.clear();
     grid = g;
     // The worker's crossing analysis needs this town's river (terrain seed).
-    if (engine) engine.postMessage({ type: 'grid', grid: { ...g, footprintsOnly, terrainSeed: terrainSeed() } });
+    if (engine) engine.postMessage({ type: 'grid', grid: { ...g, footprintsOnly, terrainSeed: terrainSeed(), terrainVersion: terrainVersion(), terrainArchetype: terrainWaters()?.forced ?? null } });
     else fallback.setGrid({ ...g, footprintsOnly });
     return g;
   }
@@ -71,9 +72,12 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
     apply(job, result);
   }
 
-  // Core request. Returns true if the route was delivered or queued.
+  // Core request. Returns true if the route was delivered or queued. While
+  // tick() runs every frame, a request uses the grid as it was at the start
+  // of the frame: a road change mid-tick is picked up by the next tick, so the
+  // rebuild lands in a frame of its own instead of on top of the sim's.
   function enqueue(state, x0, z0, goal, job) {
-    const g = sync(state);
+    const g = ticked && grid && state === lastState ? grid : sync(state);
     stats.requests++;
     const from = nearestOpen(state, cellOf(x0, z0));
     // Goals in the water or inside a wall move to the nearest open ground.
@@ -158,7 +162,10 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
       return ok;
     },
     tick(state, budgetMs = 2) {
-      if (state) sync(state);
+      if (state) {
+        sync(state);
+        ticked = true;
+      }
       if (!engine) fallback.tick(budgetMs, 128);
       stats.pending = waiting.size;
     },

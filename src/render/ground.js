@@ -5,10 +5,14 @@ import * as T from '../terrain.js';
 //
 // A float texture over -420..420 at 1 unit per sample that every shader reads
 // with the same manual bilinear filter, and a CPU mirror of the exact same
-// data for placement, picking and camera clamps. Two channels per sample:
+// data for placement, picking and camera clamps. Four channels per sample:
 //   R  ground height (terrain + building pads)
 //   G  signed offset from the river centreline, u = x - riverX(z), so shaders
-//      know the banks for any terrain seed without a copy of riverX.
+//      know the banks for any terrain seed without a copy of riverX
+//   B  distance to the nearest water of any kind (negative over it): the
+//      river's banks, and lake, pond, creek and sea shores
+//   A  shore character: + beach width in metres (sand on the sea, shingle on
+//      lakes), - marsh strength (the delta's mud flats and reeds)
 // Building pads flatten a footprint to its foundation height and blend back
 // to natural ground over PAD_BLEND units, so houses, fields, fences, decals
 // and villagers all agree with the terrain mesh. Changes upload row ranges
@@ -32,21 +36,28 @@ uniform vec2 uGroundOrigin;
 uniform float uGroundStep;
 uniform float uGroundN;
 uniform float uWaterHalf;
-vec2 groundTexel(ivec2 c) {
+vec4 groundTexel(ivec2 c) {
   c = clamp(c, ivec2(0), ivec2(int(uGroundN) - 1));
-  return texelFetch(tGround, c, 0).rg;
+  return texelFetch(tGround, c, 0);
 }
 // Manual bilinear on NEAREST float data: identical to the CPU mirror.
-vec2 groundBilinear(vec2 xz) {
+vec4 groundBilinear(vec2 xz) {
   vec2 p = (xz - uGroundOrigin) / uGroundStep;
   vec2 i = floor(p);
   vec2 f = p - i;
   ivec2 c = ivec2(i);
-  vec2 a = groundTexel(c);
-  vec2 b = groundTexel(c + ivec2(1, 0));
-  vec2 d = groundTexel(c + ivec2(0, 1));
-  vec2 e = groundTexel(c + ivec2(1, 1));
+  vec4 a = groundTexel(c);
+  vec4 b = groundTexel(c + ivec2(1, 0));
+  vec4 d = groundTexel(c + ivec2(0, 1));
+  vec4 e = groundTexel(c + ivec2(1, 1));
   return mix(mix(a, b, f.x), mix(d, e, f.x), f.y);
+}
+// Metres to the nearest water (negative over it) and the shore's character.
+float groundShore(vec2 xz) {
+  return groundBilinear(xz).b;
+}
+float groundBeach(vec2 xz) {
+  return groundBilinear(xz).a;
 }
 float groundHeight(vec2 xz) {
   return groundBilinear(xz).r;
@@ -63,6 +74,18 @@ vec3 groundNormal(vec2 xz) {
 }
 `;
 
+// Beach width (+, metres) or marsh strength (-) at (x, z): the A channel.
+// Version-1 valleys have only the river: 0 everywhere.
+export const BEACH = { sea: 14, lake: 4, pond: 1.5 };
+export function shoreCharacter(x, z, d = T.bankDistance(x, z)) {
+  if (typeof T.terrainWaters !== 'function' || !T.terrainWaters()) return 0;
+  const marsh = T.marshAt(x, z);
+  if (marsh > 0.02) return -marsh;
+  if (d > 60) return 0;
+  const k = T.nearestWaterKind(x, z);
+  return k === T.KIND.SEA ? BEACH.sea : k === T.KIND.LAKE ? BEACH.lake : k === T.KIND.POND ? BEACH.pond : 0;
+}
+
 const smooth = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 const toI = (x) => (x - GROUND_ORIGIN) / GROUND_STEP;
 
@@ -70,8 +93,8 @@ export function createGround() {
   const count = GROUND_N * GROUND_N;
   const natural = new Float32Array(count);
   const height = new Float32Array(count); // CPU mirror of channel R
-  const data = new Float32Array(count * 2); // RG texture data
-  const texture = new THREE.DataTexture(data, GROUND_N, GROUND_N, THREE.RGFormat, THREE.FloatType);
+  const data = new Float32Array(count * 4); // RGBA texture data
+  const texture = new THREE.DataTexture(data, GROUND_N, GROUND_N, THREE.RGBAFormat, THREE.FloatType);
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
   texture.generateMipmaps = false;
@@ -101,12 +124,15 @@ export function createGround() {
         const x = GROUND_ORIGIN + i * GROUND_STEP;
         const k = j * GROUND_N + i;
         natural[k] = T.heightAt(x, z);
-        data[k * 2 + 1] = x - rx;
+        data[k * 4 + 1] = x - rx;
+        const shore = T.bankDistance(x, z);
+        data[k * 4 + 2] = Math.max(-200, Math.min(200, shore));
+        data[k * 4 + 3] = shoreCharacter(x, z, shore);
       }
     }
     height.set(natural);
     for (const pad of pads.values()) applyPad(pad, 0, 0, GROUND_N - 1, GROUND_N - 1);
-    for (let k = 0; k < count; k++) data[k * 2] = height[k];
+    for (let k = 0; k < count; k++) data[k * 4] = height[k];
     uniforms.uWaterHalf.value = T.WATER_HALF;
     texture.clearUpdateRanges();
     texture.needsUpdate = true;
@@ -159,7 +185,7 @@ export function createGround() {
     for (let j = r.j0; j <= r.j1; j++) {
       for (let i = r.i0; i <= r.i1; i++) {
         const k = j * GROUND_N + i;
-        data[k * 2] = height[k];
+        data[k * 4] = height[k];
       }
     }
     dirty = dirty

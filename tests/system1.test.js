@@ -76,7 +76,7 @@ test('decision requests take 1..64 state groups and up to 64 questions, rejectin
 
 test('one state becomes one /v1/decisions call; several states one /v1/decisions/batch call; client ids never reach the model',()=>{
  const one=validateDecisionRequest({groups:[group([routine('player-secret-id'),routine('b')])]});
- const single=buildDecisionPayload(one);assert.deepEqual(single.state,town);assert.deepEqual(Object.keys(single.questions),['routine_0','routine_1']);for(const q of Object.values(single.questions))assert.deepEqual(Object.keys(q),['instructions','criteria']);assert.ok(!JSON.stringify(single).includes('player-secret-id'));
+ const single=buildDecisionPayload(one);assert.deepEqual(single.state,town);assert.deepEqual(Object.keys(single.questions),['routine_0','routine_1']);for(const q of Object.values(single.questions)){assert.deepEqual(Object.keys(q),['type','instructions','criteria']);assert.equal(q.type,'choice');}assert.ok(!JSON.stringify(single).includes('player-secret-id'));
  const two=validateDecisionRequest({groups:[group([routine('a')]),group([routine('b'),routine('c')],{...town,phase:'rest'})]});
  const batch=buildDecisionPayload(two);assert.equal(batch.requests.length,2);assert.equal(batch.requests[1].state.phase,'rest');assert.deepEqual(Object.keys(batch.requests[1].questions),['routine_0','routine_1']);
  assert.equal(upstreamUrl(config,'/v1/decisions'),'http://rrh-llm-1:4000/v1/decisions');assert.equal(upstreamUrl(config,'/v1/decisions/batch'),'http://rrh-llm-1:4000/v1/decisions/batch');
@@ -104,6 +104,33 @@ test('answers are normalized per kind: offered choices only, valid probability m
  assert.deepEqual(Object.keys(parseDecisionAnswers({model:'m',results:[{answers:{routine_0:{...ok,choice:'work'}}},{answers:{routine_0:ok}}]},two).answers),['x','y']);assert.equal(parseDecisionAnswers({results:[{answers:{routine_0:{...ok,choice:'work'}}},{answers:{routine_0:ok}}]},two).answers.x.choice,'work');
  assert.deepEqual(Object.keys(parseDecisionAnswers({results:[{error:'x'},{answers:{routine_0:ok}}]},two).answers),['y'],'one failed batch item leaves the others');
  for(const bad of [{results:[{answers:{}}]},{answers:{routine_0:ok}},{results:'no'}])assert.throws(()=>parseDecisionAnswers(bad,two));
+});
+test('score and noul kinds render in the model\'s native shape and come back as option-keyed choices',()=>{
+ const scale=defineDecisionKind({id:'unit_test_scale',type:'score',criteria:{low:'Low.',mid:'Mid.',high:'High.'},share:'town',instructions:()=>'How much?'});
+ const yesno=defineDecisionKind({id:'unit_test_yesno',type:'noul',criteria:{join:'They join.',stay_out:'They stay out.'},share:'town',instructions:()=>'Do they join?'});
+ assert.equal(getDecisionKind('migration_wave').type,'score');assert.equal(getDecisionKind('routine').type,'choice');
+ assert.deepEqual(renderQuestion(validateQuestion({kind:scale.id,id:'s'})),{type:'score',instructions:'How much?',criteria:['Low.','Mid.','High.']});
+ assert.deepEqual(renderQuestion(validateQuestion({kind:yesno.id,id:'y'})),{type:'noul',instructions:'Do they join?',criteria:{true:'They join.',false:'They stay out.'}});
+ assert.deepEqual(renderQuestion(validateQuestion({kind:scale.id,id:'s',allowed:['high','low']})).criteria,['Low.','High.'],'a narrowed scale keeps its order');
+ assert.throws(()=>validateQuestion({kind:scale.id,id:'s',allowed:['mid']}),'a scale needs two levels');assert.throws(()=>validateQuestion({kind:yesno.id,id:'y',allowed:['join']}),'yes/no needs both sides');
+ for(const [type,n] of [['score',1],['score',11],['noul',3],['vote',2]])assert.throws(()=>defineDecisionKind({id:`unit_bad_${type}_${n}`,type,criteria:Object.fromEntries(Array.from({length:n},(_,i)=>[`o${i}`,'O.'])),instructions:()=>''}));
+ // Native score answers: level-index probabilities -> option keys, argmax choice, expected level.
+ const s=normalizeAnswer(validateQuestion({kind:scale.id,id:'s'}),{type:'score',score:1.3,confidence:.5,probabilities:{0:.1,1:.5,2:.4},legend:{0:'Low.',1:'Mid.',2:'High.'}});
+ assert.equal(s.choice,'mid');assert.equal(s.confidence,.5);assert.deepEqual(s.probabilities,{low:.1,mid:.5,high:.4});assert.ok(Math.abs(s.score-1.3)<1e-9);
+ const narrowedScale=normalizeAnswer(validateQuestion({kind:scale.id,id:'s',allowed:['low','high']}),{type:'score',probabilities:{0:.25,1:.75}});
+ assert.deepEqual(narrowedScale.probabilities,{low:.25,high:.75});assert.equal(narrowedScale.score,1.5,'score is on the full scale');
+ for(const bad of [{type:'score',probabilities:{0:.5,3:.5}},{type:'score',probabilities:{0:.2,1:.2}},{type:'score'},{type:'noul',noul:.5}])assert.equal(normalizeAnswer(validateQuestion({kind:scale.id,id:'s'}),bad),null);
+ // Native noul answers: P(yes) on the first key.
+ const y=normalizeAnswer(validateQuestion({kind:yesno.id,id:'y'}),{type:'noul',noul:.2});
+ assert.equal(y.choice,'stay_out');assert.ok(Math.abs(y.confidence-.8)<1e-9);assert.ok(Math.abs(y.probabilities.join-.2)<1e-9);assert.equal(y.score,undefined);
+ for(const bad of [{type:'noul',noul:1.2},{type:'noul'},{type:'score',probabilities:{0:1}}])assert.equal(normalizeAnswer(validateQuestion({kind:yesno.id,id:'y'}),bad),null);
+ // The browser re-checks the server's normalized answer as a 'choice'; the score survives.
+ assert.deepEqual(normalizeAnswer(validateQuestion({kind:scale.id,id:'s'}),{...s,type:'choice'}),{kind:scale.id,choice:'mid',confidence:.5,probabilities:{low:.1,mid:.5,high:.4},score:s.score});
+ // End to end through the server envelope.
+ const groups=validateDecisionRequest({groups:[{state:{},questions:[{kind:scale.id,id:'a'},{kind:yesno.id,id:'b'}]}]});
+ const payload=buildDecisionPayload(groups);assert.equal(payload.questions.unit_test_scale_0.type,'score');assert.equal(payload.questions.unit_test_yesno_1.type,'noul');
+ const parsed=parseDecisionAnswers({answers:{unit_test_scale_0:{type:'score',probabilities:{0:.7,1:.2,2:.1}},unit_test_yesno_1:{type:'noul',noul:.9}}},groups).answers;
+ assert.equal(parsed.a.choice,'low');assert.equal(parsed.b.choice,'join');
 });
 
 test('decision requests authenticate server-side, refuse redirects, pick the endpoint by state count, split on 413 and reject failures for fallback',async()=>{

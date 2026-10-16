@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { patchMaterial } from './shaderlib.js';
 import { GROUND_GLSL } from './ground.js';
+import { deckProfile } from '../sim/bridges.js';
+import { surfaceLevelAt } from '../terrain.js';
 
 // Villagers (design-visual §4.5): one instanced mesh for everyone, animated
 // entirely in the vertex shader. The sim's render view owns the per-person
@@ -79,9 +81,10 @@ function buildVillagerGeometry() {
     return o;
   };
 
-  // Legs: sides only (tops hide in the torso, soles on the ground).
-  box([0.02, 0, -0.09], [0.19, 0.72, 0.09], BONE.LEG_L, all(PART.LEGS, ['py', 'ny']));
-  box([-0.19, 0, -0.09], [-0.02, 0.72, 0.09], BONE.LEG_R, all(PART.LEGS, ['py', 'ny']));
+  // Legs: tops hide in the torso. Soles in a dark shoe brown: a swinging
+  // leg tilts its bottom toward the camera, and an open sole shows the hollow.
+  box([0.02, 0, -0.09], [0.19, 0.72, 0.09], BONE.LEG_L, { ...all(PART.LEGS, ['py']), ny: PART.WOOD });
+  box([-0.19, 0, -0.09], [-0.02, 0.72, 0.09], BONE.LEG_R, { ...all(PART.LEGS, ['py']), ny: PART.WOOD });
   // Torso.
   box([-0.22, 0.68, -0.14], [0.22, 1.3, 0.14], BONE.TORSO, all(PART.CLOTH, ['ny']));
   // Head: face and sides skin, hair on top and at the back.
@@ -163,9 +166,41 @@ attribute vec3 iVel;
 attribute vec4 iA;   // t0, phase, gait, action
 attribute vec4 iB;   // actionT0, skin, cloth, hat
 attribute vec2 iC;   // scale, facing
+attribute vec3 iTurn; // heading shown when the row's heading last changed, time of that change; z: an angler's water level (fishLineWater)
 uniform float uLodNear;
+uniform float uTurnEase; // 1: ease turns; 0: snap (reduced motion)
 uniform float uLodFar;
 uniform float uFigureScale;
+
+// A fishing rod (action 8) is the placard's pole, stretched and pointed out over the
+// water from the right hand; the placard itself becomes the line hanging from its tip.
+// No extra triangles. Cast (the rod sweeps up over the shoulder and forward) over the
+// first ROD_CAST seconds, then held, bobbing a little.
+const float ROD_LEN = 2.1;
+const float ROD_CAST = 1.3;
+const float LINE_LEN = 2.0;
+// waterY: the water surface under the rod's tip in the figure's own units (the row's
+// level, from markFades, less the walker's base, over its scale), or below -100 when
+// unknown (the line then hangs LINE_LEN).
+vec3 rodVertex(vec3 position, vec3 hand, float actT, float phase, float part, float waterY) {
+  float castT = clamp(actT / ROD_CAST, 0.0, 1.0);
+  float a = 0.55 + 1.9 * sin(3.14159265 * castT) + 0.04 * sin(uTime * 1.7 + phase) * castT;
+  vec3 dir = vec3(0.0, sin(a), cos(a));
+  vec3 side = vec3(1.0, 0.0, 0.0);
+  vec3 nrm = cross(dir, side);
+  vec3 tip = hand + dir * ROD_LEN;
+  if (part > 5.5) {
+    // The line: a thin strip from the tip straight down to the water (bobbing on it),
+    // paid out as the cast lands.
+    float bottom = waterY > -100.0 ? waterY + 0.012 * sin(uTime * 2.3 + phase) : tip.y - LINE_LEN;
+    float drop = max(0.0, tip.y - bottom) * castT * castT;
+    float top = step(0.1, position.y);
+    return tip + vec3(position.x < -0.3 ? -0.006 : 0.006, -drop * (1.0 - top), 0.0);
+  }
+  float t = clamp((position.y + 0.05) / 1.0, 0.0, 1.0);
+  float taper = (1.0 - 0.65 * t) * 0.55;
+  return hand + dir * (t * ROD_LEN) + side * ((position.x + 0.30) * taper) + nrm * (position.z * taper);
+}
 
 // Rotate p about a pivot around the x axis. a > 0 swings a hanging limb
 // forward (+z): (0,-1,0) -> (0,-cos a, sin a).
@@ -179,6 +214,18 @@ vec3 swingZ(vec3 p, vec3 pivot, float a) {
   vec3 d = p - pivot;
   float c = cos(a), s = sin(a);
   return pivot + vec3(d.x * c - d.y * s, d.x * s + d.y * c, d.z);
+}
+
+// The sim turns walkers instantly at every waypoint and turns standers to
+// face a building or event on arrival. Ease from the heading shown at that
+// moment (iTurn, kept by markFades) to the row's own, along the shorter arc:
+// about 0.25 s on the move, 0.4 s for the arrival turn.
+float easedYaw(float target) {
+  if (uTurnEase < 0.5) return target;
+  float dur = length(iVel.xz) > 0.05 ? 0.25 : 0.4;
+  float k = smoothstep(0.0, 1.0, clamp((uTime - iTurn.y) / dur, 0.0, 1.0));
+  float d = mod(target - iTurn.x + 3.14159265, 6.2831853) - 3.14159265;
+  return iTurn.x + d * k;
 }
 
 // Posed, scaled, rotated and placed vertex in world space.
@@ -214,6 +261,8 @@ vec3 personPosition(vec3 position) {
   float bob = abs(cos(w)) * 0.05 * g;
   float lift = 0.0;
   float twist = 0.0;
+  float tilt = 0.0;   // upper body forward (< 0) about the hips
+  float lie = 0.0;    // the whole figure laid on its back
   // Idle: a slow breath so standing crowds are not frozen.
   bob += (1.0 - step(0.05, gait)) * sin(uTime * 1.6 + phase) * 0.012;
 
@@ -228,6 +277,8 @@ vec3 personPosition(vec3 position) {
     lL = 0.0; lR = 0.0;
   } else if (action == 3.0) {     // sit on the ground, legs out
     lL = 1.45; lR = 1.45; aL = 0.35; aR = 0.35; li = -0.62;
+  } else if (action == 7.0) {     // sit on a bench: hips at seat height (0.49), feet on the ground
+    lL = 0.83; lR = 0.83; aL = 0.5; aR = 0.5; li = -0.235;
   } else if (action == 4.0) {     // cheer: arms up, bouncing
     float b = sin(actT * 9.0 + phase);
     aL = 2.7 + 0.25 * b; aR = 2.7 - 0.25 * b; oL = 0.35; oR = 0.35;
@@ -241,6 +292,19 @@ vec3 personPosition(vec3 position) {
     lL = 0.35 * d; lR = -0.35 * d;
     li = abs(d) * 0.1;
     twist = 0.7 * sin(actT * 2.5 + phase);
+  } else if (action == 8.0) {     // fish: both hands on the rod, out in front
+    aR = 0.85; oR = 0.12; aL = 0.8; oL = -0.12; lL = 0.0; lR = 0.0;
+  } else if (action == 9.0) {     // lean on a rail: forearms forward, upper body tipped over it
+    aL = 1.35; aR = 1.35; oL = 0.05; oR = 0.05; lL = 0.0; lR = 0.08;
+    tilt = -0.34;
+  } else if (action == 10.0) {    // lie on the grass, face up, arms at the sides
+    aL = 0.12; aR = 0.12; oL = 0.18; oR = 0.18; lL = 0.0; lR = 0.06;
+    lie = 1.0;
+  } else if (action == 11.0) {    // kneel: hips low, shins back, reaching forward and down
+    lL = -0.95; lR = -0.9; aL = 0.75; aR = 0.7; oL = 0.05; oR = 0.05; li = -0.36;
+    tilt = -0.28;
+  } else if (action == 12.0) {    // point: right arm out toward what is watched
+    aR = 1.6 + 0.05 * sin(actT * 1.3 + phase); oR = 0.06; aL = 0.15;
   }
   if (action > 0.5) {
     armL = mix(armL, aL, k); armR = mix(armR, aR, k);
@@ -260,6 +324,11 @@ vec3 personPosition(vec3 position) {
   else if (bone == 2.0) p = swingZ(swingX(p, shoulderL, armL), shoulderL, outL) + vec3(0.0, up, 0.0);
   else if (bone == 3.0 || bone == 9.0 || bone == 10.0) {
     if (bone == 9.0 && action != 2.0) p = hide;
+    else if (bone == 10.0 && action == 8.0) {
+      vec3 hand = swingZ(swingX(vec3(-0.30, 0.76, 0.06), shoulderR, armR), shoulderR, -outR) + vec3(0.0, up, 0.0);
+      float waterY = iTurn.z > -100.0 ? (iTurn.z - base.y) / max(scale, 1e-3) : -1e4;
+      p = k > 0.99 ? rodVertex(position, hand, actT, phase, floor(aPart + 0.5), waterY) : hide;
+    }
     else if (bone == 10.0 && action != 5.0) p = hide;
     else p = swingZ(swingX(p, shoulderR, armR), shoulderR, -outR) + vec3(0.0, up, 0.0);
   } else if (bone == 8.0) {
@@ -276,6 +345,10 @@ vec3 personPosition(vec3 position) {
   }
   // Legs carry the hip drop when sitting.
   if (bone == 4.0 || bone == 5.0) p.y += lift;
+  // Leaning and kneeling tip everything above the hips forward.
+  if (tilt != 0.0 && bone != 4.0 && bone != 5.0) p = swingX(p, vec3(0.0, 0.72 + lift, 0.0), tilt * k);
+  // Lying down: the whole figure on its back, head away from the faced view.
+  if (lie > 0.5) p = swingX(p, vec3(0.0, 0.0, 0.0), 1.5 * k) + vec3(0.0, 0.17 * k, 0.0);
 
   if (lod) {
     // Far: one standing block (torso stretched to the ground plus head/hat).
@@ -284,7 +357,7 @@ vec3 personPosition(vec3 position) {
   }
 
   // Face the direction of travel, else the stored facing.
-  float yaw = length(iVel.xz) > 0.05 ? atan(iVel.x, iVel.z) : iC.y;
+  float yaw = easedYaw(length(iVel.xz) > 0.05 ? atan(iVel.x, iVel.z) : iC.y);
   yaw += twist * k;
   float cy = cos(yaw), sy = sin(yaw);
   p *= scale;
@@ -316,31 +389,262 @@ vec3 personColor() {
 }
 `;
 
+// Blob shadow, sun-aware (design-visual §4.5), one draw for everyone:
+//  - contact: a small, faint, round blob right under the walker, the same in
+//    every pose (an N64-style drop shadow, much softer); it only blends the
+//    cast into the feet;
+//  - cast: in 'blob' mode a soft capsule from the walker away from the sun,
+//    body-wide, body-tall over tan(elevation) (capped), feathered toward the
+//    tip, fading at dusk and weaker under the moon and when rain dims the
+//    light. The low tier draws the contact alone.
+// The two join as a soft union, with no seam. Everything is worked out here
+// per vertex and per fragment from per-frame uniforms, so blobs move with
+// their walkers at the full frame rate. In 'full' mode (uSunShadow 0) only
+// the contact is drawn.
+//
+// Never darker than one shadow:
+//  - in building or tree shade there is no direct sun to take away, so the
+//    cast fades by the sun shadow map's lit fraction at the feet (looked up
+//    here in the vertex shader, the same for every vertex of a blob; the map's
+//    matrix only changes when the map re-renders, so it stays valid between
+//    its few-Hz refreshes). The faint contact stays.
+//  - overlapping blobs keep the darkest one, not the product: two draws of
+//    the same quads. The first (MIN blending) leaves the framebuffer's colour
+//    alone and keeps, in its alpha, the lowest light factor any blob asks for
+//    at that pixel (opaque and blended ground leave alpha at 1). The second
+//    multiplies the colour by that alpha once and puts the alpha back to 1.
+// Never down a ledge: a quad vertex whose surface drops away from the plane
+// under the feet (a deck's or quay's edge, a parapet face, a bank) stays on
+// that plane and fades out.
 const BLOB_VERT = /* glsl */ `
 #include <common>
+#include <packing>
 #include <fog_pars_vertex>
 attribute vec3 iPos;
 attribute vec3 iVel;
 attribute vec4 iA;
+attribute vec4 iB;
 attribute vec2 iC;
 uniform float uTime;
 uniform float uLodFar;
+uniform float uFigureScale;
+uniform vec3 uSunDir;
+uniform float uSunShadow; // 0 = contact only; else direct-sun share (rain dims it)
+uniform float uNight;
+// The sun's shadow map (lights.js): RGBA-packed depth, as three r180 draws it.
+uniform sampler2D uSunMap;
+uniform mat4 uSunMatrix;
+uniform vec3 uSunMapInfo; // map size in texels, depth bias, 1 when the map is usable
 varying vec2 vUv;
 varying float vWade;
+varying float vEdge;    // 0 where the quad is held up over a ledge (fades out)
+varying vec4 vDeckAB;   // the deck a walker stands on (ends), for an exact edge clip
+varying float vDeckHalf; // its half-width; below 0 when not on a deck
+varying vec2 vWorldXZ;  // this fragment's ground position
+varying float vLit;     // sun reaching the ground under this vertex (shade: 0)
+varying vec2 vLocal;    // metres from the feet: (away from the sun, across)
+varying vec4 vShape;    // cast length, near radius, far radius, sun strength
+varying float vContact; // contact radius
+varying vec2 vSlope;    // ground rise per metre along (away, across)
 ${DRAPE_GLSL}
+// Bridge decks near the view (people.js setDecks): ends, half-widths and a
+// table of DECK_SAMPLES heights along each deck (the sim's deckProfile:
+// ramps up from the banks, arched on stone and iron), so a shadow lies on
+// the deck and its ramps instead of sinking to the ground beneath.
+#define MAX_DECKS 8
+#define DECK_SAMPLES 20
+const float DECK_VERGE = 0.6;
+uniform int uDeckN;
+uniform vec4 uDeckAB[MAX_DECKS];
+uniform float uDeckHalf[MAX_DECKS];
+uniform vec4 uDeckH[MAX_DECKS * 5];
+float deckSample(int i, int k) {
+  vec4 v = uDeckH[i * 5 + k / 4];
+  int c = k - (k / 4) * 4;
+  return c == 0 ? v.x : c == 1 ? v.y : c == 2 ? v.z : v.w;
+}
+// The walking surface under xz: a deck (with its sloping verge) or the ground.
+// Which deck (index into uDeck*) a point stands on, or -1.
+int deckIndexAt(vec2 xz) {
+  for (int i = 0; i < MAX_DECKS; i++) {
+    if (i >= uDeckN) break;
+    vec4 ab = uDeckAB[i];
+    vec2 d = ab.zw - ab.xy;
+    float t = dot(xz - ab.xy, d) / max(dot(d, d), 1e-6);
+    if (t < 0.0 || t > 1.0) continue;
+    if (length(xz - (ab.xy + d * t)) <= uDeckHalf[i]) return i;
+  }
+  return -1;
+}
+float surfaceY(vec2 xz) {
+  float g = groundHeight(xz);
+  for (int i = 0; i < MAX_DECKS; i++) {
+    if (i >= uDeckN) break;
+    vec4 ab = uDeckAB[i];
+    vec2 d = ab.zw - ab.xy;
+    float t = dot(xz - ab.xy, d) / max(dot(d, d), 1e-6);
+    if (t < 0.0 || t > 1.0) continue;
+    float off = length(xz - (ab.xy + d * t));
+    float hw = uDeckHalf[i];
+    if (off > hw + DECK_VERGE) continue;
+    float f = t * float(DECK_SAMPLES - 1);
+    int k = int(min(floor(f), float(DECK_SAMPLES - 2)));
+    float y = mix(deckSample(i, k), deckSample(i, k + 1), f - float(k));
+    // Beside the deck over lower ground (water, a bank below): a hard edge,
+    // which the ledge rule in main() holds up. The verge only blends where
+    // the ground rises to meet a ramp.
+    if (off > hw && g < y) return g;
+    return mix(y, g, clamp((off - hw) / DECK_VERGE, 0.0, 1.0));
+  }
+  return g;
+}
+// A drop below the plane under the feet larger than this is a ledge.
+const float LEDGE = 0.35;
+// The surface at xz for the slope estimate: a ledge counts as level, so a
+// walker by a parapet or a quay edge sees the deck or quay, not the drop.
+float surfaceNear(vec2 xz, float s0) {
+  float y = surfaceY(xz);
+  return s0 - y > LEDGE ? s0 : y;
+}
 // River surface height (water.js WATER_Y); wading walkers stand below it.
 const float WATER_LEVEL = 0.025;
+const float MAX_STRETCH = 2.6; // shadow length per body height (sun ~21 deg)
+#ifndef BLOB_APPLY
+// Sun visibility at world point wp: 0 in shade, 1 in sun, bilinear between
+// the four nearest texels (three's texture2DCompare on unpackRGBAToDepth).
+float sunLitAt(vec3 wp) {
+  vec4 c = uSunMatrix * vec4(wp, 1.0);
+  vec3 sc = c.xyz / c.w;
+  sc.z += uSunMapInfo.y;
+  if (sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0) return 1.0;
+  float size = uSunMapInfo.x;
+  vec2 px = sc.xy * size - 0.5;
+  vec2 f = fract(px);
+  vec2 uv = (floor(px) + 0.5) / size;
+  float t = 1.0 / size;
+  float a = step(sc.z, unpackRGBAToDepth(texture2D(uSunMap, uv)));
+  float b = step(sc.z, unpackRGBAToDepth(texture2D(uSunMap, uv + vec2(t, 0.0))));
+  float e = step(sc.z, unpackRGBAToDepth(texture2D(uSunMap, uv + vec2(0.0, t))));
+  float g = step(sc.z, unpackRGBAToDepth(texture2D(uSunMap, uv + vec2(t, t))));
+  return mix(mix(a, b, f.x), mix(e, g, f.x), f.y);
+}
+#endif
 void main() {
   vec3 base = drapedBase(iPos, iVel, iA.x);
   float d = distance(base, cameraPosition);
   // Hidden indoors and well before the people themselves fade out.
   float fs = fadedScale(iC.x);
   float on = step(0.01, fs) * (1.0 - step(uLodFar * 0.75, d));
+  vUv = position.xz;
+  vLocal = vec2(0.0);
+  vShape = vec4(0.0, 1.0, 1.0, 0.0);
+  vContact = 1.0;
+  vSlope = vec2(0.0);
+  vEdge = 1.0;
+  vLit = 1.0;
+  vDeckAB = vec4(0.0);
+  vDeckHalf = -1.0;
+  vWorldXZ = base.xz;
   // Wading at a ford: the blob becomes a ripple ring on the water surface.
   vWade = step(base.y, WATER_LEVEL - 0.04);
-  vec3 anchor = vWade > 0.5 ? vec3(base.x, WATER_LEVEL + 0.012, base.z) : base + vec3(0.0, 0.05, 0.0);
-  vec3 transformed = anchor + vec3(position.x * 0.5, 0.0, position.z * 0.5) * fs * on * (1.0 + 0.3 * vWade);
-  vUv = position.xz;
+  vec3 transformed;
+  if (vWade > 0.5) {
+    transformed = vec3(base.x, WATER_LEVEL + 0.012, base.z) + vec3(position.x, 0.0, position.z) * 0.65 * fs * on;
+  } else {
+    float S = fs * uFigureScale;
+    // Sun on the ground: direction away from it, and how strongly it casts.
+    float sunY = clamp(uSunDir.y, 0.0, 1.0);
+    vec2 away = -uSunDir.xz / max(length(uSunDir.xz), 1e-4);
+    vec2 side = vec2(away.y, -away.x);
+    // At night the light is the moon (grade.js): uSunShadow already scales
+    // the cast by its weaker light.
+    float sun = uSunShadow * smoothstep(0.02, 0.2, sunY);
+    // The surface under the feet (deck, ramp or ground) and its normal.
+    float s0 = surfaceY(base.xz);
+    bool onSurface = abs(base.y - s0) < 0.2;
+    vec3 n = vec3(0.0, 1.0, 0.0);
+    if (onSurface) {
+      const float E = 0.6;
+      float hx = surfaceNear(base.xz + vec2(E, 0.0), s0) - surfaceNear(base.xz - vec2(E, 0.0), s0);
+      float hz = surfaceNear(base.xz + vec2(0.0, E), s0) - surfaceNear(base.xz - vec2(0.0, E), s0);
+      n = normalize(vec3(-hx, 2.0 * E, -hz));
+    }
+    float ndl = dot(n, uSunDir);
+    #ifndef BLOB_APPLY
+      // In shade there is no direct sun for the walker to block: fade the
+      // cast by how much sun reaches the feet. Four taps around a point a
+      // little up and toward the sun (clear of the ground's own depth), so the
+      // fade is soft over about a metre.
+      if (uSunMapInfo.z > 0.5 && sun > 0.001 && on > 0.5) {
+        vec3 c = base + n * 0.3 + uSunDir * 0.4;
+        vec3 sx = vec3(side.x, 0.0, side.y) * 0.3 * S;
+        vec3 ax = vec3(away.x, 0.0, away.y) * 0.3 * S;
+        sun *= 0.25 * (sunLitAt(c + sx + ax) + sunLitAt(c + sx - ax) + sunLitAt(c - sx + ax) + sunLitAt(c - sx - ax));
+      }
+    #endif
+    // Body height: head top 1.65, a hat adds a little.
+    float height = (1.65 + (iB.w > 0.5 ? 0.1 : 0.0)) * S;
+    // Where the shadow of the head lands: the ray from it, away from the sun,
+    // meets the local ground plane. A slope facing the sun shortens it, one
+    // facing away lengthens it. Its plan direction is always "away".
+    // Bounded: never more than twice its flat-ground length, so a shadow on a
+    // slope facing away from the sun does not reach over the crest.
+    float tRay = height * n.y / max(ndl, max(sunY, 0.05) * 0.5);
+    float len = sun > 0.001 ? min(length(uSunDir.xz) * tRay, height * MAX_STRETCH) : 0.0;
+    // Lit slopes show a slightly crisper shadow, glancing ones a slightly
+    // softer one; never gone, so it reads on every hill.
+    sun *= mix(0.8, 1.15, clamp(ndl / max(sunY, 0.1), 0.0, 1.0));
+    // Body-wide near the feet; the penumbra widens toward the far end, so
+    // the tip is feathered more than the feet.
+    float r0 = 0.42 * S;
+    float r1 = r0 + 0.14 * len;
+    // Contact: a small round blob, about the walker's width.
+    float rc = 0.5 * S;
+    // Quad from just behind the feet to past the tip, wide enough for both.
+    float along = mix(-max(r0, rc), len + r1, position.z * 0.5 + 0.5);
+    float across = position.x * max(r1, rc);
+    // (across, along) -> world is a rotation, never a mirror, so the quad keeps its winding.
+    vec2 off = away * along + side * across;
+    vec3 p = base + vec3(off.x, 0.0, off.y) * on;
+    // Lie on the walking surface (deck, ramp or ground) along the whole length,
+    // but never down a ledge: where the surface falls away from the plane
+    // under the feet, stay on that plane and fade out.
+    if (onSurface) {
+      vec2 grad = -n.xz / max(n.y, 0.2);
+      float plane = s0 + dot(grad, off);
+      float sy = surfaceY(p.xz);
+      float drop = plane - sy;
+      // Faded from a small drop, so nothing of the blob reaches past a deck's
+      // or quay's edge onto its side face.
+      vEdge = 1.0 - smoothstep(0.05, 0.15, drop);
+      p.y = drop > LEDGE ? plane : sy;
+      // On a deck: the fragment clips at the deck's own edge as well, exactly,
+      // however far apart the quad's vertices are.
+      int di = deckIndexAt(base.xz);
+      if (di >= 0 && base.y > groundHeight(base.xz) + 0.25) {
+        vDeckAB = uDeckAB[di];
+        vDeckHalf = uDeckHalf[di];
+      }
+    } else {
+      p.y = base.y;
+    }
+    #ifndef BLOB_APPLY
+      // Where the cast runs on into shade (a lit walker beside a building's
+      // shadow), that ground has no sun to lose either: fade the cast there
+      // too, per vertex, so it never darkens a shaded pixel twice.
+      if (uSunMapInfo.z > 0.5 && sun > 0.001 && on > 0.5) vLit = sunLitAt(p + n * 0.3 + uSunDir * 0.4);
+    #endif
+    // A little more lift on steep ground so the draped quad never dips under it.
+    transformed = p + vec3(0.0, 0.05 + 0.25 * (1.0 - n.y), 0.0);
+    vWorldXZ = p.xz;
+    vLocal = vec2(along, across);
+    vShape = vec4(len, r0, r1, sun);
+    vContact = rc;
+    // The ground's rise per metre in the blob's own frame, so the fragment can
+    // measure distances along the surface (a circle on a slope, not in plan).
+    vec2 grad = -n.xz / max(n.y, 0.2);
+    vSlope = vec2(dot(grad, away), dot(grad, side));
+  }
   vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
@@ -350,32 +654,131 @@ void main() {
 const BLOB_FRAG = /* glsl */ `
 #include <common>
 #include <fog_pars_fragment>
+// Ground light factor in full shadow: about the sky-lit share (0.34).
+const float SHADE_DEPTH = 0.66;
+#define BLOB_BIG 60000.0
+varying float vEdge;
+varying float vLit;
+varying vec4 vDeckAB;
+varying float vDeckHalf;
+varying vec2 vWorldXZ;
 uniform float uNight;
 uniform float uStrength;
 uniform float uTime;
 varying vec2 vUv;
 varying float vWade;
+varying vec2 vLocal;
+varying vec4 vShape;
+varying float vContact;
+varying vec2 vSlope;
+// Smooth bump: 1 at the centre, 0 with zero slope at x = 1 (gaussian-like, no edge).
+float bump(float x) {
+  float k = max(1.0 - x * x, 0.0);
+  return k * k * k;
+}
 void main() {
-  float r = length(vUv);
   if (vWade > 0.5) {
     // Two soft rings breathing outward around the legs.
+    float r = length(vUv);
     float ring = 1.0 - smoothstep(0.0, 0.09, abs(r - (0.55 + 0.18 * sin(uTime * 3.0))));
     ring = max(ring, (1.0 - smoothstep(0.0, 0.06, abs(r - 0.3))) * 0.6);
-    gl_FragColor = vec4(vec3(0.84, 0.9, 0.88), ring * 0.45 * (1.0 - smoothstep(0.85, 1.0, r)));
+    float a = ring * 0.45 * (1.0 - smoothstep(0.85, 1.0, r));
+    #ifdef USE_FOG
+      a *= 1.0 - hvHazeAmount(vFogDepth);
+    #endif
+    // Apply pass: the water brightens by up to ~1.4x. Min pass: nothing.
+    #ifdef BLOB_APPLY
+      gl_FragColor = vec4(vec3(0.9 * a), 1.0);
+    #else
+      gl_FragColor = vec4(vec3(BLOB_BIG), 1.0);
+    #endif
   } else {
-    float a = (1.0 - smoothstep(0.25, 1.0, r)) * uStrength * (1.0 - 0.5 * uNight);
-    gl_FragColor = vec4(vec3(0.10, 0.11, 0.07), a);
+    // Contact: a small, faint round blob right under the walker, the same in
+    // every pose. It only blends the cast into the feet (no gap at the soles).
+    // Distance along the ground surface (the height change counts), so the
+    // blob stays round on a slope instead of smearing down it.
+    float rise = dot(vSlope, vLocal);
+    float contact = bump(sqrt(dot(vLocal, vLocal) + rise * rise) / vContact) * uStrength * (1.0 - 0.5 * uNight);
+    // Sun: distance to the feet-to-tip segment against a radius that grows
+    // toward the tip. Round caps at both ends, convex everywhere.
+    float len = vShape.x;
+    float t = len > 1e-3 ? clamp(vLocal.x / len, 0.0, 1.0) : 0.0;
+    // Narrower across than along (a body, not a disc); still convex.
+    float dist = length(vec2(vLocal.x - t * len, vLocal.y * 1.3));
+    float sunA = bump(dist / mix(vShape.y, vShape.z, t)) * mix(1.0, 0.5, t) * 0.74 * vShape.w * vLit;
+    // Union of the two (no crease where they meet); faded where held up over a ledge.
+    // vEdge is blended linearly across each triangle; sharpened here so only
+    // the part over the walking surface shows, not a half-faded wash beyond it.
+    float a = (1.0 - (1.0 - contact) * (1.0 - sunA)) * smoothstep(0.7, 1.0, vEdge);
+    // A walker on a deck: nothing past the deck's edge (onto a parapet or its side).
+    if (vDeckHalf > 0.0) {
+      vec2 d = vDeckAB.zw - vDeckAB.xy;
+      float t = dot(vWorldXZ - vDeckAB.xy, d) / max(dot(d, d), 1e-6);
+      float off = length(vWorldXZ - (vDeckAB.xy + d * clamp(t, 0.0, 1.0)));
+      a *= 1.0 - smoothstep(vDeckHalf - 0.35, vDeckHalf - 0.2, off);
+    }
+    // Haze thins the shadow with distance (hvAtmosphere's curve, atmosphere.js).
+    #ifdef USE_FOG
+      a *= 1.0 - hvHazeAmount(vFogDepth);
+    #endif
+    // Min pass: colour untouched (BLOB_BIG is above any HDR value), alpha the
+    // light factor, so the darkest blob at a pixel wins. Apply pass: colour
+    // times that factor (src 0), alpha back to 1. It multiplies the ground, so
+    // it keeps the ground's own colour at noon, at dusk and on snow.
+    #ifdef BLOB_APPLY
+      gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    #else
+      gl_FragColor = vec4(vec3(BLOB_BIG), 1.0 - SHADE_DEPTH * a);
+    #endif
   }
-  #include <fog_fragment>
 }
 `;
+
+// Heading a row asks for, as the vertex shader reads it: the direction of
+// travel when moving, else the stored facing.
+function rowHeading(a, o) {
+  const vx = a[o + 3], vz = a[o + 5];
+  return Math.hypot(vx, vz) > 0.05 ? Math.atan2(vx, vz) : a[o + 15];
+}
+const wrapAngle = (d) => d - Math.PI * 2 * Math.floor((d + Math.PI) / (Math.PI * 2));
+/** CPU twin of easedYaw(): the heading on show at `now`. */
+function shownHeading(from, t0, target, slow, now) {
+  const x = Math.min(1, Math.max(0, (now - t0) / (slow ? 0.4 : 0.25)));
+  return from + wrapAngle(target - from) * (x * x * (3 - 2 * x));
+}
+
+// CPU twin of the held rod (rodVertex, action 8, cast landed, no bob): where its tip is
+// in the figure's own units, forward of the feet (+z) and up. Mirrors the hand
+// (swingX/swingZ about the right shoulder by the fish pose's arm angles) and ROD_LEN
+// along the held angle.
+const ROD = { len: 2.1, hold: 0.55, arm: 0.85, out: 0.12, hand: [-0.30, 0.76, 0.06], shoulder: [-0.29, 1.24, 0] };
+export function rodTip() {
+  const [hx, hy, hz] = ROD.hand, [sx, sy, sz] = ROD.shoulder;
+  // swingX about the shoulder by the arm angle...
+  let dx = hx - sx, dy = hy - sy, dz = hz - sz;
+  const c = Math.cos(ROD.arm), sn = Math.sin(ROD.arm);
+  [dy, dz] = [dy * c + dz * sn, -dy * sn + dz * c];
+  // ...then swingZ by -out.
+  const cz = Math.cos(-ROD.out), sz2 = Math.sin(-ROD.out);
+  [dx, dy] = [dx * cz - dy * sz2, dx * sz2 + dy * cz];
+  return { forward: sz + dz + ROD.len * Math.cos(ROD.hold), up: sy + dy + ROD.len * Math.sin(ROD.hold) };
+}
+const ROD_TIP = rodTip();
+
+/** The water surface under an angler's rod tip, for a row at (x, z) facing `heading`,
+ * drawn at `scale` (row scale times the figure scale): what the line hangs down to. */
+export function fishLineWater(x, z, heading, scale) {
+  const d = ROD_TIP.forward * scale;
+  return surfaceLevelAt(x + Math.sin(heading) * d, z + Math.cos(heading) * d);
+}
 
 // ---------------------------------------------------------------------------
 
 export function createPeople(ctx) {
   const { scene, grade, lights } = ctx;
   const baseGeometry = buildVillagerGeometry();
-  const blobBase = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
+  // Subdivided along its length so a long low-sun blob lies on the slope.
+  const blobBase = new THREE.PlaneGeometry(2, 2, 2, 8).rotateX(-Math.PI / 2);
 
   const lodUniforms = {
     uLodNear: { value: 120 },
@@ -383,6 +786,7 @@ export function createPeople(ctx) {
     // Slightly toy-scaled (~1.9 m) so figures read at the default camera distance.
     uFigureScale: { value: 1.1 },
     uShadowFocus: { value: new THREE.Vector3() },
+    uTurnEase: { value: 1 },
   };
   const paletteUniforms = {
     uSkin: { value: colors(SKIN) },
@@ -405,8 +809,8 @@ export function createPeople(ctx) {
     fragmentColor: 'diffuseColor.rgb = vPersonColor * uTint;\n',
   });
 
-  // Shadow caster (high tier): same pose; only people near the view target
-  // cast, since the shadow map refreshes at a few Hz at most.
+  // Shadow caster (opt-in 'full' people shadows): same pose; only people near
+  // the view target cast, since the shadow map refreshes at a few Hz at most.
   const depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   depthMaterial.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, grade.uniforms, lodUniforms);
@@ -428,18 +832,44 @@ export function createPeople(ctx) {
     uGroundN: grade.uniforms.uGroundN,
     uNight: grade.uniforms.uNight,
     uLodFar: lodUniforms.uLodFar,
-    uStrength: { value: 0.34 },
+    uFigureScale: lodUniforms.uFigureScale,
+    // Shared with the grade, which sets it every frame.
+    uSunDir: grade.uniforms.uSunDir,
+    uSunShadow: { value: 1 },
+    uStrength: { value: 0.26 },
+    uDeckN: { value: 0 },
+    uDeckAB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
+    uDeckHalf: { value: new Array(8).fill(0) },
+    uDeckH: { value: Array.from({ length: 40 }, () => new THREE.Vector4()) },
+    uSunMap: { value: null },
+    uSunMatrix: { value: lights.sun.shadow.matrix },
+    uSunMapInfo: { value: new THREE.Vector3(1, 0, 0) },
   });
-  const blobMaterial = new THREE.ShaderMaterial({
+  const blobOptions = {
     uniforms: blobUniforms,
     vertexShader: BLOB_VERT,
     fragmentShader: BLOB_FRAG,
     transparent: true,
     depthWrite: false,
     fog: true,
+    blending: THREE.CustomBlending,
     polygonOffset: true,
     polygonOffsetFactor: -2,
     polygonOffsetUnits: -2,
+  };
+  // Pass 1: min(dst, src) per channel (blend factors unused): alpha keeps the
+  // darkest light factor, colour is untouched (the src colour is huge).
+  const blobMaterial = new THREE.ShaderMaterial({ ...blobOptions, blendEquation: THREE.MinEquation });
+  // Pass 2: rgb = src * dst + dst * dstAlpha (src 0: dst times the factor; a
+  // ripple's src brightens), alpha = 1. Each pixel is darkened once.
+  const blobApplyMaterial = new THREE.ShaderMaterial({
+    ...blobOptions,
+    defines: { BLOB_APPLY: 1 },
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.DstColorFactor,
+    blendDst: THREE.DstAlphaFactor,
+    blendSrcAlpha: THREE.OneFactor,
+    blendDstAlpha: THREE.ZeroFactor,
   });
 
   const mesh = new THREE.Mesh(new THREE.InstancedBufferGeometry(), material);
@@ -452,18 +882,33 @@ export function createPeople(ctx) {
   const blobs = new THREE.Mesh(new THREE.InstancedBufferGeometry(), blobMaterial);
   blobs.name = 'people-blobs';
   blobs.frustumCulled = false;
-  blobs.renderOrder = 1;
+  // After the ground decals (1, 1.1), before water (2); the two passes run
+  // back to back so nothing blends in between.
+  blobs.renderOrder = 1.5;
   blobs.visible = false;
-  scene.add(mesh, blobs);
+  const blobsApply = new THREE.Mesh(blobs.geometry, blobApplyMaterial);
+  blobsApply.name = 'people-blobs-apply';
+  blobsApply.frustumCulled = false;
+  blobsApply.renderOrder = 1.51;
+  blobsApply.visible = false;
+  scene.add(mesh, blobs, blobsApply);
 
   let stride = STRIDE; // 16, or 20 when the view carries segment ends
   let fadeAttr = null;   // per-row [change time, scale before]
   let prevScale = null;
+  let turnAttr = null;   // per-row [heading shown at the last change, change time, an angler's water level]
+  let turnTarget = null; // per-row heading the row asked for at that change
+  let turnSlow = null;   // per-row 1 when that change was a stander's (slower) turn
   let boundArray = null;
   let boundVersion = -1;
   let buffer = null;
   let count = 0;
   let castShadow = false;
+  // People shadows: 'blob' (sun-aware blob only, the default) or 'full'
+  // (also cast into the shadow map, where the tier has one).
+  let shadowMode = 'blob';
+  let contactOnly = false; // only the round blob under the feet (full shadows, or the low tier)
+  let tierQuality = ctx.quality;
 
   /** (Re)bind the sim's Float32Array as the interleaved instance buffer. */
   function bind(array, version, rowFloats) {
@@ -476,16 +921,31 @@ export function createPeople(ctx) {
         m.needsUpdate = true;
       }
     }
-    if (!!blobMaterial.defines?.SEGMENT_END !== segment) {
-      blobMaterial.defines = { ...(blobMaterial.defines ?? {}) };
-      if (segment) blobMaterial.defines.SEGMENT_END = 1; else delete blobMaterial.defines.SEGMENT_END;
-      blobMaterial.needsUpdate = true;
+    for (const m of [blobMaterial, blobApplyMaterial]) {
+      if (!!m.defines?.SEGMENT_END !== segment) {
+        m.defines = { ...(m.defines ?? {}) };
+        if (segment) m.defines.SEGMENT_END = 1; else delete m.defines.SEGMENT_END;
+        m.needsUpdate = true;
+      }
     }
     const rows = Math.floor(array.length / stride);
     fadeAttr = new THREE.InstancedBufferAttribute(new Float32Array(rows * 2), 2);
     fadeAttr.setUsage(THREE.DynamicDrawUsage);
     prevScale = new Float32Array(rows);
     for (let i = 0; i < rows; i++) prevScale[i] = array[i * stride + 14];
+    // Turns start settled: shown heading = the row's heading, long ago.
+    const turns = new Float32Array(rows * 3);
+    turnTarget = new Float32Array(rows);
+    turnSlow = new Uint8Array(rows);
+    for (let i = 0; i < rows; i++) {
+      const h = rowHeading(array, i * stride);
+      turnTarget[i] = h;
+      turns[i * 3] = h;
+      turns[i * 3 + 1] = -1e4;
+      turns[i * 3 + 2] = lineWater(array, i * stride, h);
+    }
+    turnAttr = new THREE.InstancedBufferAttribute(turns, 3);
+    turnAttr.setUsage(THREE.DynamicDrawUsage);
     buffer = new THREE.InstancedInterleavedBuffer(array, stride);
     buffer.setUsage(THREE.DynamicDrawUsage);
     const attrs = {
@@ -495,6 +955,7 @@ export function createPeople(ctx) {
       iB: new THREE.InterleavedBufferAttribute(buffer, 4, 10),
       iC: new THREE.InterleavedBufferAttribute(buffer, 2, 14),
       iFade: fadeAttr,
+      iTurn: turnAttr,
     };
     if (segment) attrs.iD = new THREE.InterleavedBufferAttribute(buffer, 4, 16);
     const g = new THREE.InstancedBufferGeometry();
@@ -503,12 +964,13 @@ export function createPeople(ctx) {
     const b = new THREE.InstancedBufferGeometry();
     b.setAttribute('position', blobBase.getAttribute('position'));
     b.setIndex(blobBase.getIndex());
-    for (const name of ['iPos', 'iVel', 'iA', 'iC', 'iFade', ...(segment ? ['iD'] : [])]) b.setAttribute(name, attrs[name]);
+    for (const name of ['iPos', 'iVel', 'iA', 'iB', 'iC', 'iFade', ...(segment ? ['iD'] : [])]) b.setAttribute(name, attrs[name]);
     // Disposing the old geometries frees the old GPU buffers.
     mesh.geometry.dispose();
     blobs.geometry.dispose();
     mesh.geometry = g;
     blobs.geometry = b;
+    blobsApply.geometry = b;
     boundArray = array;
     boundVersion = version;
   }
@@ -517,7 +979,7 @@ export function createPeople(ctx) {
     lastView = view;
     const array = view?.people;
     if (!array || !array.length) {
-      mesh.visible = blobs.visible = marker.visible = false;
+      mesh.visible = blobs.visible = blobsApply.visible = marker.visible = false;
       count = 0;
       return;
     }
@@ -536,23 +998,66 @@ export function createPeople(ctx) {
     count = Math.min(view.peopleCount ?? 0, Math.floor(array.length / stride));
     mesh.geometry.instanceCount = count;
     blobs.geometry.instanceCount = count;
-    mesh.visible = blobs.visible = count > 0;
+    mesh.visible = blobs.visible = blobsApply.visible = count > 0;
 
     updateMarker(frame.time);
+    syncTurnEase();
+
+    setDecks(view, frame);
+
+    // Direct-sun share for the blob, every drawn frame: rain dims the sun.
+    blobUniforms.uSunShadow.value = contactOnly ? 0 : Math.min(1, (grade.current?.sunI ?? 2.8) / 2.3);
+    // The sun's shadow map, for the cast's fade in shade. The map can be
+    // recreated (tier change), so look it up each frame; its matrix is the
+    // light's own, which three updates whenever the map re-renders.
+    const shadow = lights.sun.shadow;
+    const map = lights.sun.castShadow && ctx.renderer?.shadowMap?.enabled ? shadow.map?.texture ?? null : null;
+    blobUniforms.uSunMap.value = map;
+    blobUniforms.uSunMapInfo.value.set(shadow.mapSize.x, shadow.bias, map ? 1 : 0);
 
     if (castShadow && count > 0) {
       lodUniforms.uShadowFocus.value.copy(frame.target);
-      // Moving casters: keep the static shadow map refreshing (rate-capped in lights.js).
-      lights.animateFor(0.3, frame.time);
+      // Moving casters: refresh the shadow map with them (every frame on high,
+      // 30 Hz below; lights.js).
+      lights.animateFor(0.3, frame.time, { follow: true });
     }
   }
 
-  /** Note rows that just went indoors or came out, for the door fade. */
+  // The finished bridges nearest the view target, for the blob's surface
+  // (surfaceY above). Redone every couple of seconds (a bridge may have been
+  // finished) or when the view moves on; heights come from the sim's deckProfile.
+  let decksTime = -Infinity, decksAt = null;
+  function setDecks(view, frame) {
+    const list = view.buildings;
+    if (!list) return;
+    const t = frame.target;
+    const moved = !decksAt || (decksAt.x - t.x) ** 2 + (decksAt.z - t.z) ** 2 > 40 * 40;
+    if (!moved && frame.time - decksTime < 2) return;
+    decksTime = frame.time;
+    decksAt = { x: t.x, z: t.z };
+    const decks = list.filter((b) => b.type === 'bridge' && b.a && b.b && (b.built ?? 1) >= 1)
+      .map((b) => ({ b, d: ((b.a.x + b.b.x) / 2 - t.x) ** 2 + ((b.a.z + b.b.z) / 2 - t.z) ** 2 }))
+      .sort((p, q) => p.d - q.d).slice(0, 8);
+    const u = blobUniforms;
+    u.uDeckN.value = decks.length;
+    decks.forEach(({ b }, i) => {
+      u.uDeckAB.value[i].set(b.a.x, b.a.z, b.b.x, b.b.z);
+      // The drawn deck's half-width (footbridges are drawn 1.3 wide, not their record's 2).
+      u.uDeckHalf.value[i] = (b.style ?? b.variant) === 'footbridge' ? 0.65 : (b.width ?? b.d ?? 3) / 2;
+      const h = [];
+      for (let k = 0; k < 20; k++) h.push(deckProfile(b, k / 19));
+      for (let j = 0; j < 5; j++) u.uDeckH.value[i * 5 + j].set(h[j * 4], h[j * 4 + 1], h[j * 4 + 2], h[j * 4 + 3]);
+    });
+  }
+
+  /** Note rows that just went indoors or came out (door fade) or turned (heading ease). */
   function markFades(array, start, end, now) {
     const f = fadeAttr.array;
-    let lo = Infinity, hi = -1;
+    const tr = turnAttr.array;
+    let lo = Infinity, hi = -1, tlo = Infinity, thi = -1;
     for (let i = start; i < end; i++) {
-      const s = array[i * stride + 14];
+      const o = i * stride;
+      const s = array[o + 14];
       const prev = prevScale[i];
       if ((s < 0.01) !== (prev < 0.01)) {
         f[i * 2] = now;
@@ -561,24 +1066,72 @@ export function createPeople(ctx) {
         if (i > hi) hi = i;
       }
       prevScale[i] = s;
+      // Heading change: restart the ease from what the walker shows right
+      // now (mid-turn included), so an interrupted turn never jumps.
+      const h = rowHeading(array, o);
+      // An angler's line hangs to the water under the rod's tip.
+      const w = lineWater(array, o, h);
+      if (w !== tr[i * 3 + 2]) {
+        tr[i * 3 + 2] = w;
+        if (i < tlo) tlo = i;
+        if (i > thi) thi = i;
+      }
+      if (Math.abs(wrapAngle(h - turnTarget[i])) > 0.01) {
+        tr[i * 3] = shownHeading(tr[i * 3], tr[i * 3 + 1], turnTarget[i], turnSlow[i], now);
+        tr[i * 3 + 1] = now;
+        turnTarget[i] = h;
+        turnSlow[i] = Math.hypot(array[o + 3], array[o + 5]) > 0.05 ? 0 : 1;
+        if (i < tlo) tlo = i;
+        if (i > thi) thi = i;
+      }
     }
     if (hi >= lo) {
       fadeAttr.clearUpdateRanges();
       fadeAttr.addUpdateRange(lo * 2, (hi - lo + 1) * 2);
       fadeAttr.needsUpdate = true;
     }
+    if (thi >= tlo) {
+      turnAttr.clearUpdateRanges();
+      turnAttr.addUpdateRange(tlo * 3, (thi - tlo + 1) * 3);
+      turnAttr.needsUpdate = true;
+    }
+  }
+
+  // The water level an angler's line reaches (action 8 rows), else -1e4.
+  function lineWater(array, o, heading) {
+    if (Math.round(array[o + 9]) !== 8) return -1e4;
+    return fishLineWater(array[o], array[o + 2], heading, array[o + 14] * lodUniforms.uFigureScale.value);
+  }
+
+  // Reduced motion keeps the sim's instant turns.
+  function syncTurnEase() {
+    lodUniforms.uTurnEase.value = ctx.reducedMotion ? 0 : 1;
   }
 
   function applyQuality(q) {
-    castShadow = !!q.peopleCast;
+    tierQuality = q;
+    castShadow = shadowMode === 'full' && q.shadowMapSize > 0;
     mesh.castShadow = castShadow;
     const near = q.name === 'low' ? 90 : q.name === 'high' ? 140 : 120;
     lodUniforms.uLodNear.value = near;
     lodUniforms.uLodFar.value = q.name === 'low' ? 200 : q.name === 'high' ? 300 : 260;
-    blobUniforms.uStrength.value = castShadow ? 0.24 : 0.34;
+    // Low tier: the simple round blob only, no cast (and no shadow-map taps).
+    contactOnly = castShadow || q.name === 'low';
+    // Contact strength: faint under the blob cast; a light touch under a real
+    // shadow; a little darker when it is the whole shadow.
+    blobUniforms.uStrength.value = castShadow ? 0.28 : contactOnly ? 0.36 : 0.26;
+    blobUniforms.uSunShadow.value = contactOnly ? 0 : 1;
     lights.markDirty();
   }
   applyQuality(ctx.quality);
+
+  /** 'blob' (default) or 'full' (people also cast into the shadow map). */
+  function setShadowMode(mode) {
+    const next = mode === 'full' ? 'full' : 'blob';
+    if (next === shadowMode) return;
+    shadowMode = next;
+    applyQuality(tierQuality);
+  }
 
   // ---------------------------------------------------------------------
   // CPU mirror of the shader's placement, for picking, the selection marker
@@ -727,13 +1280,15 @@ export function createPeople(ctx) {
   return {
     update,
     applyQuality,
+    setShadowMode,
+    shadowMode: () => shadowMode,
     pick,
     positionOf,
     setSelected,
     selected: () => selectedId,
     count: () => count,
     dispose() {
-      scene.remove(mesh, blobs, marker);
+      scene.remove(mesh, blobs, blobsApply, marker);
       markerGeometry.dispose();
       markerMaterial.dispose();
       mesh.geometry.dispose();
@@ -743,6 +1298,7 @@ export function createPeople(ctx) {
       material.dispose();
       depthMaterial.dispose();
       blobMaterial.dispose();
+      blobApplyMaterial.dispose();
     },
   };
 }

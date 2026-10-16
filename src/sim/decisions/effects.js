@@ -21,7 +21,7 @@ import {weightsFor, levelOf, steadyPush} from '../policies.js';
 import {delta} from '../pressures.js';
 import {setTag} from '../state.js';
 import {addChronicle} from '../chronicle.js';
-import {factionById, moodBand, addFactionStory, factionOf} from '../factions.js';
+import {factionById, moodBand, addFactionStory, factionOf, nudgeMood} from '../factions.js';
 import {addStory} from '../households.js';
 import * as bodies from '../institutions.js';
 import * as docket from '../docket.js';
@@ -434,6 +434,7 @@ export const EFFECTS = {
       if (c.cash < 0) mul(w, 'sell_up', 2);
       if (c.rate === 'high') { mul(w, 'borrow_small', 0.5); mul(w, 'borrow_large', 0.4); }
       if (c.debt > c.monthlyCost * 24) mul(w, 'borrow_large', 0.2);
+      if ((c.losing ?? 0) >= 2) mul(w, 'sell_up', 2);
       return w;
     },
   },
@@ -485,7 +486,7 @@ function applyReactions(state, answers, sweep) {
     const rows = (f.trades ?? []).map((t) => byTrade[t]).filter(Boolean);
     if (!rows.length) continue;
     const mood = rows.reduce((n, p) => n + (p.support ?? 0) * 0.2 - (p.grumble ?? 0) * 0.08 - ((p.protest ?? 0) + (p.strike ?? 0) + (p.leave ?? 0)) * 0.2, 0) / rows.length;
-    f.mood = clamp01(f.mood + mood);
+    nudgeMood(f, clamp01(f.mood + mood), 'reactions');
   }
   if (protestCrowd) {
     const faction = protestCrowd.a.subject.dim === 'trade' ? tradeFaction(protestCrowd.a.subject.value) : undefined;
@@ -539,16 +540,16 @@ const roundProbs = (p) => Object.fromEntries(Object.entries(p).map(([k, v]) => [
 
 const GRIEVANCE_BODY = {
   food: 'agri-council', housing: 'planning', wages: 'union', roads: 'planning', flood: 'river-authority',
-  health: 'health-board', faith: 'parish', schooling: 'school-board', tolls: 'exchange', crime: 'watch',
+  health: 'health-board', faith: 'parish', schooling: 'school-board', tolls: 'exchange', crime: 'watch', eyesores: 'planning',
 };
 const GRIEVANCE_TEXT = {
   food: 'there is not enough food', housing: 'there are not enough homes', wages: 'wages are too low',
   roads: 'the lanes are mud', flood: 'the river floods their homes', health: 'too many people are sick',
   faith: 'the town has lost its faith', schooling: 'their children cannot read', tolls: 'the tolls are too high',
-  crime: 'the streets are not safe',
+  crime: 'the streets are not safe', eyesores: 'their streets are shabby, with empty houses and litter',
 };
 const GRIEVANCE_CATEGORY = {food: 'food', housing: 'land', wages: 'labour', roads: 'infrastructure', flood: 'environment',
-  health: 'health', faith: 'faith', schooling: 'education', tolls: 'trade', crime: 'civic'};
+  health: 'health', faith: 'faith', schooling: 'education', tolls: 'trade', crime: 'civic', eyesores: 'land'};
 
 function applyPetitions(state, answers) {
   for (const a of answers) {
@@ -600,7 +601,7 @@ function grievanceCard(state, faction, grievance, groupName = null) {
           effects: [{deltas: {unrest: -0.03}}, {focus: {body: owner.id, category, boost: 0.6}}]}
         : {key: 'hear', label: 'Hear them and promise action', tradeoff: `The ${owner.name} will bring a plan soon.`,
           effects: [{deltas: {unrest: -0.02}}, {focus: {body: owner.id, category}}]},
-      {key: 'not_now', label: 'Not now', tradeoff: again ? 'They go home angry. They will not forget.' : 'They go home unhappy.', effects: []},
+      {key: 'not_now', label: 'Not now', tradeoff: again ? 'They go home angry. They will remember this.' : 'They go home unhappy.', effects: []},
     ],
   });
 }

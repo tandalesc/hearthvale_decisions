@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { createGround, GROUND_ORIGIN, GROUND_STEP, GROUND_N, GROUND_GLSL, waterLevel } from '../src/render/ground.js';
 import { raycastTerrain } from '../src/render/terrain.js';
 import { generateForest } from '../src/render/trees.js';
-import { heightAt, riverX, setTerrainSeed, terrainSeed, WATER_HALF } from '../src/terrain.js';
+import { heightAt, riverX, setTerrainSeed, terrainSeed, WATER_HALF, bankDistance } from '../src/terrain.js';
 
 test('ground mirror matches heightAt on samples and interpolates between them', () => {
   const g = createGround();
@@ -44,9 +44,10 @@ test('pads flatten a footprint, blend to natural ground and can be removed', () 
   assert.ok(tex.updateRanges.length >= 8 && tex.updateRanges.every((r) => r.start % 4 === 0 && r.count % 4 === 0));
   g.removePad(1);
   assert.ok(Math.abs(g.sample(-40, 30) - heightAt(-40, 30)) < 1e-4, 'natural after removal');
-  // Texture data carries the river offset in G.
-  const k = (Math.round((5 - GROUND_ORIGIN) / GROUND_STEP) * GROUND_N + Math.round((0 - GROUND_ORIGIN) / GROUND_STEP)) * 2;
+  // Texture data carries the river offset in G and the distance to the water in B.
+  const k = (Math.round((5 - GROUND_ORIGIN) / GROUND_STEP) * GROUND_N + Math.round((0 - GROUND_ORIGIN) / GROUND_STEP)) * 4;
   assert.ok(Math.abs(tex.image.data[k + 1] - (0 - riverX(5))) < 1e-4);
+  assert.ok(Math.abs(tex.image.data[k + 2] - bankDistance(0, 5)) < 1e-4);
 });
 
 test('terrain ray can use the ground mirror (pads included)', () => {

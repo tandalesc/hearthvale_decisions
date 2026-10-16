@@ -3,27 +3,36 @@
 // selectUnlocks opens new surfaces (design-visual §8.2, design-systems §9.2).
 //
 // Layouts (data-layout on .ui):
-//   desk   ≥ 1000 px: top bar, left rail + drawer, right dock + binder
-//          (resizable), time strip.
-//   tablet 720–999 px (or short landscape): the binder becomes a side sheet
-//          that opens beside the dock.
-//   phone  < 720 px: bottom sheet with snap points holds every view; its
-//          peek carries a strip of every unlocked view.
+//   desk   ≥ 1000 px: top bar, left rail + drawer, the Council button at the
+//          right edge, time strip. The Council opens as a HUD panel over the
+//          main area (between the rail or drawer and the dock, above the
+//          time strip); it is not a dialog, so the top bar and time strip
+//          stay in reach. The inspector sits at the bottom left.
+//   tablet 720–999 px (or short landscape): the same, a little tighter.
+//   phone  < 720 px: bottom sheet with snap points holds every view, the
+//          Council among them; its peek carries the time controls and a
+//          strip of every unlocked view. A selected thing shows as a card
+//          above the peek.
+// Notices share one stack below the top bar (top left; full width on
+// phones): requests and other news that wants you linger, the town's
+// happenings fade in a few seconds. Opening and closing panels never moves
+// the camera: the scene's insets follow only the fixed chrome.
 import './tokens.css';
 import './layout.css';
 import './components.css';
 import {esc, h, setText, toggleClass} from './dom.js';
 import {bodyIcon, icon, mountSprite} from './icons.js';
-import {ERA_NAMES, cap, theName} from './format.js';
+import {ERA_NAMES, cap, signed, theName} from './format.js';
 import {reduced, setReducedMotion} from './motion.js';
 import {createSheet} from './sheet.js';
 import {createTopbar} from './components/topbar.js';
 import {createTime} from './components/time.js';
 import {createBodyView} from './components/body-view.js';
 import {createRuleBook} from './components/rulebook.js';
+import {createCouncil} from './components/council.js';
 import {createTensions} from './components/tensions.js';
 import {createPeople} from './components/people.js';
-import {createChronicle, createFeed} from './components/chronicle.js';
+import {createChronicle} from './components/chronicle.js';
 import {createPlaces} from './components/places.js';
 import {createInspector} from './components/inspector.js';
 import {createNotices} from './components/notices.js';
@@ -38,6 +47,9 @@ import {explainer, EXPLAINERS} from './components/explainer.js';
 import * as M from './model.js';
 
 const REFRESH_MS = 250;
+// The Chronicle view's lines, a page at a time; the notice stack needs only the latest.
+const CHRONICLE_PAGE = 60;
+const RECENT_LINES = 40;
 const MAJOR_EVENTS = new Set(['fire', 'flood', 'plague', 'riot', 'bust', 'famine', 'blight', 'bridge-collapse', 'drought', 'strike']);
 const SHORT_NAMES = {
   moot: 'Council', 'agri-council': 'Farms', 'trades-guild': 'Guild', exchange: 'Exchange', 'river-authority': 'River',
@@ -52,10 +64,10 @@ const DRAWER_VIEWS = [
   {id: 'tensions', label: 'Tensions', icon: 'tensions', unlock: 'tensions'},
   {id: 'places', label: 'Places', icon: 'map', unlock: 'places'},
 ];
-// Phone strip order after the docket and bodies, and the snap each view opens at.
+// Phone strip order after the Council, and the snap each view opens at.
 const NAV_VIEWS = ['rules', 'people', 'tensions', 'chronicle', 'places'];
-const NAV_SNAP = {moot: 2, rules: 2, chronicle: 2};
-const UNLOCK_NAMES = {places: 'Places', ruleBook: 'The Rule Book', people: 'People', tensions: 'Tensions', overlays: 'The map', bodies: 'Body dashboards', delegation: 'Delegation', debates: 'Debates'};
+const NAV_SNAP = {council: 2, rules: 2, chronicle: 2};
+const UNLOCK_NAMES = {places: 'Places', ruleBook: 'The Rule Book', people: 'People', tensions: 'Tensions', overlays: 'The map', bodies: 'Body dashboards', debates: 'Debates', approval: 'Approval'};
 
 export function createApp(host) {
   const {sim, prefs, audio} = host;
@@ -78,21 +90,26 @@ export function createApp(host) {
     unlocks: () => data.unlocks,
     sound: (name, arg) => audio?.play(name, arg),
     onRule,
-    setDelegated,
+    onBudget,
+    onAdviser,
+    dismissAdviser: (a) => confirmDismissAdviser(a),
     dissolve: (id) => confirmDissolve(id),
-    setStandingOrder: (id, order) => setStandingOrder(id, order),
     onMetric,
     openSettings: () => settings.open(),
     setSpeed: (s) => host.setSpeed(s),
     speed: () => host.speed(),
     lastSpeed: () => host.lastSpeed(),
     toggleMute: () => prefs.set('muted', !prefs.get('muted')),
-    openEraPopover: (anchor) => openPopover(anchor, eraContent(data.era), {label: 'Toward the next age', place: 'above'}),
+    openEraPopover: (anchor, place = 'above') => openPopover(anchor, eraContent(data.era), {label: 'Toward the next age', place}),
     focusDocket,
     inspect: (pick) => M.inspect(safe(() => V.selectInspect?.(host.state(), pick), null)),
     focusWorld: (at) => world?.focus?.(at, 900),
-    openBody: (id) => (layout === 'phone' ? setPhoneTab(id) : openBody(id)),
+    openBody: (id) => openCouncil({page: id}),
     openPlaces: () => (layout === 'phone' ? setPhoneTab('places') : setDrawer('places')),
+    openRuleBook: (category) => openRuleBook(category),
+    openDocket: (opts) => openDocket(opts),
+    shortName: (b) => shortName(b),
+    moreChronicle: () => { chronicleLimit += CHRONICLE_PAGE * 2; refresh(true); },
     onInspectorChange: (open) => onInspectorChange(open),
     narrator: host.narrator ?? null,
     state: () => host.state(),
@@ -115,41 +132,50 @@ export function createApp(host) {
   drawer.append(drawerHead, drawerBody);
   drawerHead.querySelector('button').addEventListener('click', () => setDrawer(null));
 
-  const binder = h('aside.binder.paper', {'aria-label': 'Bodies and docket', id: 'binder'});
-  const binderBar = h('div.binder-bar');
-  const collapseBtn = h('button.icon-btn.collapse-btn', {type: 'button', 'aria-label': 'Tuck the docket away (C)', title: 'Tuck away (C)', 'aria-controls': 'binder', 'aria-expanded': 'true'});
-  collapseBtn.innerHTML = icon('chevron-right');
-  collapseBtn.addEventListener('click', () => setDocked(true));
-  binderBar.append(collapseBtn);
-  const binderBody = h('div.panel-body');
-  // Live reframing while a panel is dragged wider or narrower.
-  let resizeInsetRaf = 0;
-  const reframe = () => {
-    if (!resizeInsetRaf) resizeInsetRaf = requestAnimationFrame(() => { resizeInsetRaf = 0; updateInsets(); });
-  };
-  const resize = createResize({root, panel: binder, prefs, onChange: reframe, label: 'Docket width'});
-  binder.append(binderBar, binderBody, resize.el);
-  const drawerResize = createResize({root, panel: drawer, prefs, onChange: reframe, prefKey: 'drawerWidth', varName: '--drawer-user', edge: 'right', controls: 'drawer', label: 'View width'});
+  // Live reframing while the drawer is dragged wider or narrower is gone:
+  // panels never move the camera. The drawer still resizes.
+  const drawerResize = createResize({root, panel: drawer, prefs, prefKey: 'drawerWidth', varName: '--drawer-user', edge: 'right', controls: 'drawer', label: 'View width'});
   drawer.append(drawerResize.el);
 
-  // The dock: every body's crest, always visible at the right edge.
-  const dockUI = createRailColumn({cls: 'dock', label: 'Bodies', key: 'body', tileClass: 'dock-btn', tipSide: 'left', tip, onPick: pickBody});
+  // The dock: the Council's crest, always at the right edge.
+  const dockUI = createRailColumn({cls: 'dock', label: 'Council', key: 'body', tileClass: 'dock-btn', tipSide: 'left', tip, onPick: () => council.toggle()});
   const dock = dockUI.el;
-  const petitionHost = h('div.petition-host');
 
   const strip = h('footer.timestrip.paper');
   const stripTime = createTime(ctx, 'strip');
   strip.append(stripTime.el);
 
-  const feed = createFeed();
   const inspector = createInspector(ctx);
-  const notices = createNotices();
+  const notices = createNotices({phone: () => layout === 'phone'});
   const moments = createMoments({
     root,
     onMomentOpened: () => { setClean(false); momentPaused = host.speed(); if (momentPaused) host.setSpeed(0); syncLabels(); },
     onMomentClosed: () => { if (momentPaused && !moments.isOpen) host.setSpeed(momentPaused); momentPaused = 0; syncLabels(); },
   });
   let momentPaused = 0;
+  // The Council. The town keeps its pace while it is open; the time controls
+  // stay in reach for a player who wants to stop and think.
+  const council = createCouncil({
+    ...ctx,
+    bodyView: (id) => bodyView(id),
+    onPage: () => refresh(true),
+    onOpen: () => {
+      closePopover();
+      notices.stack.querySelector('[data-key="request"]')?.remove();
+      // Notices wait, hidden, while the Council is open, and come back after.
+      if (layout !== 'phone') notices.setHeld(true);
+      toggleClass(root, 'council-open', true);
+      audio?.play('slide');
+      if (layout === 'phone' && (phoneTab !== 'council' || sheet.index === 0)) setPhoneTab('council', NAV_SNAP.council);
+      refresh(true);
+    },
+    onClose: () => {
+      notices.setHeld(false);
+      toggleClass(root, 'council-open', false);
+      if (layout !== 'phone') audio?.play('tick');
+      refresh(true);
+    },
+  });
   const settings = createSettings({
     root, prefs,
     decisionSettings: () => host.decisions.settings(),
@@ -158,6 +184,7 @@ export function createApp(host) {
     modelEnabled: () => host.decisions.enabled(),
     setModelEnabled: (on) => host.decisions.setEnabled(on),
     renderStats: () => safe(() => world?.stats?.(), null),
+    power: () => safe(() => world?.power?.(), null),
     simMs: () => host.simMs(),
     getIndividualCap: () => host.state()?.settings?.individualCap ?? 2000,
     setIndividualCap: (v) => host.setIndividualCap(v),
@@ -171,6 +198,13 @@ export function createApp(host) {
 
   const sheet = createSheet({onSnap: (i, peekPx) => {
     root.style.setProperty('--peek', `${Math.round(peekPx)}px`);
+    // The selected thing's card sits above the peek: a raised sheet would
+    // cover it, so it closes.
+    if (layout === 'phone' && i > 0 && inspector.open) inspector.hide();
+    if (layout === 'phone' && phoneTab === 'council') {
+      if (i > 0 && !council.isOpen) council.open();
+      else if (i === 0 && council.isOpen) council.close();
+    }
     updateInsets();
     closePopover();
   }});
@@ -179,7 +213,7 @@ export function createApp(host) {
   const nav = createPhoneNav({onPick: onNav});
   sheet.tabs.append(nav.el);
 
-  root.append(vignette, feed.el, inspector.el, topbar.el, rail, drawer, binder, dock, petitionHost, strip, ...notices.hosts, sheet.scrim, sheet.el);
+  root.append(vignette, inspector.el, topbar.el, rail, drawer, council.el, dock, strip, ...notices.hosts, sheet.scrim, sheet.el);
 
   // ---------- views ----------
   const bodyViews = new Map();
@@ -190,8 +224,8 @@ export function createApp(host) {
     tensions: createTensions(ctx),
     places: createPlaces(ctx),
   };
-  let activeBody = 'moot', activeDrawer = null, phoneTab = 'moot', prevPhoneTab = 'moot', overlay = 'none';
-  let docked = prefs.get('dock') === 'collapsed';
+  // phoneTab: the view in the phone sheet.
+  let activeDrawer = null, phoneTab = 'council', overlay = 'none', chronicleLimit = CHRONICLE_PAGE;
   let layout = '', prevUnlocks = null, prevBodies = null, prevEra = null, prevYear = null, seenCards = null, seenEvents = null;
   const fresh = new Set(); // surfaces revealed this session and not yet visited
 
@@ -208,10 +242,6 @@ export function createApp(host) {
     if (next === layout) return false;
     layout = next;
     root.dataset.layout = next;
-    // The player's choice holds at every width; with no choice yet, the
-    // tablet overlay starts tucked away and the desk binder starts open.
-    const pref = prefs.get('dock');
-    setDocked(pref ? pref === 'collapsed' : next === 'tablet', true);
     if (next === 'phone') {
       setDrawer(null, true);
       sheet.snapTo(sheet.index, false);
@@ -223,15 +253,17 @@ export function createApp(host) {
   }
 
   function mountViews() {
+    if (inspector.el.parentNode !== root) root.append(inspector.el);
+    // Notices wait while the desk Council covers the main area (not on phones).
+    notices.setHeld(layout !== 'phone' && council.isOpen);
     if (layout === 'phone') {
       const view = viewFor(phoneTab);
       if (sheet.body.firstChild !== view.el) sheet.body.replaceChildren(view.el);
-      binderBody.replaceChildren();
+      council.el.hidden = false;
       drawerBody.replaceChildren();
     } else {
-      if (inspector.el.parentNode !== root) root.append(inspector.el);
-      const bv = bodyView(activeBody);
-      if (binderBody.firstChild !== bv.el) binderBody.replaceChildren(bv.el);
+      if (council.el.parentNode !== root) root.insertBefore(council.el, dock);
+      council.el.hidden = !council.isOpen;
       if (activeDrawer) {
         const dv = views[activeDrawer];
         if (drawerBody.firstChild !== dv.el) drawerBody.replaceChildren(dv.el);
@@ -241,8 +273,25 @@ export function createApp(host) {
   }
 
   function viewFor(id) {
-    if (id === 'inspect') return inspector;
-    return views[id] ?? bodyView(id);
+    return id === 'council' ? council : views[id] ?? council;
+  }
+
+  // The Rule Book drawer (or phone tab), opened at one area when asked.
+  function openRuleBook(category) {
+    if (!data.unlocks.ruleBook) return;
+    if (layout === 'phone') setPhoneTab('rules', 2);
+    else if (activeDrawer !== 'rules') setDrawer('rules');
+    views.rules.showArea(category ?? 'all');
+  }
+
+  // The Council at a body's page, or at the card asked for. opts: {page, cardId}
+  function openCouncil(opts) {
+    council.open(opts);
+  }
+  // Older callers name a page as a filter: {filter: 'body:<id>', cardId}.
+  function openDocket(opts = {}) {
+    const [kind, id] = String(opts.filter ?? '').split(':');
+    openCouncil({page: kind === 'body' ? id : opts.page, cardId: opts.cardId});
   }
 
   function setDrawer(id, silent) {
@@ -262,95 +311,53 @@ export function createApp(host) {
     refresh(true);
   }
 
-  function setActiveBody(id) {
-    if (activeBody === id) return;
-    activeBody = id;
-    fresh.delete(`body:${id}`);
-    binderBody.scrollTop = 0;
-    mountViews();
-    renderDock();
-    audio?.play('tick');
-    refresh(true);
-  }
-
-  // Dock crests: open the panel to a body; the open body's crest tucks it away.
-  function pickBody(id) {
-    if (!docked && activeBody === id) return setDocked(true);
-    openBody(id);
-  }
-
-  function openBody(id) {
-    if (docked) setDocked(false);
-    setActiveBody(id);
-  }
-
+  // On phones the Council is open while its tab shows in the raised sheet.
   function setPhoneTab(id, snap = 1) {
-    if (phoneTab === 'inspect' && id !== 'inspect' && inspector.open) {
+    if (id !== 'council' && phoneTab === 'council' && council.isOpen) {
       phoneTab = id;
-      inspector.hide();
+      council.close();
     }
     phoneTab = id;
     fresh.delete(id);
-    fresh.delete(`body:${id}`);
     mountViews();
     sheet.body.scrollTop = 0;
     if (sheet.index < snap) sheet.snapTo(snap);
+    else if (id === 'council' && !council.isOpen) council.open();
     renderNav();
     nav.reveal();
     audio?.play('tick');
     refresh(true);
   }
 
-  function setDocked(next, silent) {
-    docked = Boolean(next);
-    toggleClass(root, 'docked', docked);
-    collapseBtn.setAttribute('aria-expanded', String(!docked));
-    if (!silent) {
-      prefs.set('dock', docked ? 'collapsed' : 'open');
-      audio?.play(docked ? 'tick' : 'slide');
-      petitionHost.replaceChildren();
-    }
-    renderDock();
-    insetSig = '';
-    requestAnimationFrame(updateInsets);
-  }
-
-  // The docket on top; every other body below, scrolling when crowded, with
-  // quiet bodies sunk below busy ones (the open body and new ones count as busy).
+  // The dock holds one crest: the Council, with every request it waits on.
   function renderDock() {
     if (layout === 'phone') return;
-    const counts = countByBody();
-    const open = !docked;
-    const docket = {id: 'moot', name: 'The docket', tip: 'Docket', icon: 'seal', count: countByKind(data.cards), pressed: open && activeBody === 'moot', controls: 'binder'};
-    const rest = data.bodies.filter((b) => b.id !== 'moot').map((b) => {
-      const count = counts[b.id] ?? 0, pressed = open && activeBody === b.id, isNew = fresh.has(`body:${b.id}`);
-      return {id: b.id, name: b.name, icon: ctx.bodyIcon(b.id), count, fresh: isNew, pressed, quiet: !count && !pressed, busy: count > 0 || pressed || isNew, controls: 'binder'};
-    });
-    const order = rest.length > 6 ? [...rest.filter((i) => i.busy), ...rest.filter((i) => !i.busy)] : rest;
-    dockUI.update([{items: [docket]}, {items: order, scroll: true}]);
+    const isNew = data.bodies.some((b) => fresh.has(`body:${b.id}`));
+    dockUI.update([{items: [{id: 'council', name: 'The Council (C)', tip: 'Council', icon: 'seal', count: countByKind(data.cards), fresh: isNew, pressed: council.isOpen, controls: 'council'}]}]);
   }
 
   function countByKind(cards) {
     return cards.filter((c) => c.kind !== 'report').length;
   }
 
-  function focusDocket(cardId) {
-    if (layout === 'phone') {
-      if (phoneTab !== 'moot') setPhoneTab('moot');
-      sheet.snapTo(2);
-    } else {
-      openBody('moot');
-      binderBody.scrollTop = 0;
-    }
+  // People, scrolled to its Approval section.
+  function openApproval() {
+    if (layout === 'phone') setPhoneTab('people', 2);
+    else if (activeDrawer !== 'people') setDrawer('people');
     refresh(true);
-    bodyView('moot').docket.focus(cardId);
+    requestAnimationFrame(() => views.people.showApproval());
+  }
+
+  function focusDocket(cardId) {
+    openCouncil(cardId ? {cardId} : undefined);
   }
 
   function onMetric(key) {
+    if (key === 'approval' && data.unlocks.approval) return openApproval();
     if (key === 'people' || key === 'wellbeing') {
       if (data.unlocks.people) return layout === 'phone' ? setPhoneTab('people') : setDrawer('people');
     }
-    if (key === 'food' && data.bodies.some((b) => b.id === 'agri-council')) return layout === 'phone' ? setPhoneTab('agri-council') : openBody('agri-council');
+    if (key === 'food' && data.bodies.some((b) => b.id === 'agri-council')) return openCouncil({page: 'agri-council'});
     focusDocket();
   }
 
@@ -361,15 +368,11 @@ export function createApp(host) {
     const tools = [];
     // On phones the map lives in the sheet's view strip.
     if (u.overlays && layout !== 'phone') tools.push({id: 'map', name: 'Map', icon: 'layers', pressed: overlay !== 'none', fresh: fresh.has('map')});
-    if (typeof world?.home === 'function') tools.push({id: 'home', name: 'Back to the town', icon: 'locate'});
-    if (fsSupported) tools.push({id: 'fullscreen', name: fsElement() ? 'Leave full screen (F)' : 'Full screen (F)', icon: fsElement() ? 'shrink' : 'expand', pressed: Boolean(fsElement())});
     railUI.update([{items: views, scroll: true}, {items: tools}]);
   }
 
   function pickRail(id, el) {
     if (id === 'map') openMap(el);
-    else if (id === 'home') world?.home?.();
-    else if (id === 'fullscreen') toggleFullscreen();
     else setDrawer(id);
   }
 
@@ -386,21 +389,21 @@ export function createApp(host) {
     openPopover(anchor, content, {label: 'Map', place});
   }
 
-  // Phone view strip: the docket, each body, then the drawer views and the map.
+  // Phone view strip: the Council (every body inside it), then the drawer
+  // views and the map.
   function renderNav() {
     if (layout !== 'phone') return;
-    const counts = countByBody();
-    const items = data.bodies.map((b) => (b.id === 'moot'
-      ? {id: 'moot', label: 'Docket', icon: 'seal', count: countByKind(data.cards)}
-      : {id: b.id, label: shortName(b), icon: ctx.bodyIcon(b.id), count: counts[b.id] ?? 0, fresh: fresh.has(`body:${b.id}`)}));
-    if (!items.length) items.push({id: 'moot', label: 'Docket', icon: 'seal', count: 0});
+    const isNew = data.bodies.some((b) => fresh.has(`body:${b.id}`));
+    const items = [{id: 'council', label: 'Council', icon: 'seal', count: countByKind(data.cards), fresh: isNew}];
     for (const id of NAV_VIEWS) {
       const d = DRAWER_VIEWS.find((v) => v.id === id);
       if (data.unlocks[d.unlock]) items.push({id, label: d.label, icon: d.icon, fresh: fresh.has(id)});
     }
     if (data.unlocks.overlays) items.push({id: 'map', label: 'Map', icon: 'layers', fresh: fresh.has('map'), pressed: overlay !== 'none'});
-    if (inspector.open) items.unshift({id: 'inspect', label: 'Selected', icon: 'info'});
-    if (!items.some((i) => i.id === phoneTab)) phoneTab = 'moot';
+    if (!items.some((i) => i.id === phoneTab && i.id !== 'map')) {
+      phoneTab = 'council';
+      mountViews();
+    }
     nav.update(items, phoneTab);
   }
 
@@ -412,6 +415,7 @@ export function createApp(host) {
       return setTimeout(() => openMap(el, 'above'), reducedMs(380));
     }
     if (id === phoneTab && sheet.index > 0) return sheet.snapTo(0);
+    if (id === 'council' && phoneTab === 'council' && council.isOpen) return sheet.snapTo(NAV_SNAP.council);
     setPhoneTab(id, NAV_SNAP[id] ?? 1);
   }
 
@@ -452,6 +456,42 @@ export function createApp(host) {
   }
 
   // ---------- actions ----------
+  // Budgets: strike a plan line, or answer the whole season at once.
+  function onBudget(name, ...args) {
+    const result = host.act(name, ...args);
+    if (result && result.ok === false) {
+      notices.toast(M.actionError(result));
+      return;
+    }
+    audio?.play(name === 'strikeBudgetLine' ? 'tick' : 'chime');
+    refresh(true);
+  }
+
+  // Advisers: hire, mode, see others, let an answer stand.
+  function onAdviser(name, ...args) {
+    const result = host.act(name, ...args);
+    if (result && result.ok === false) {
+      notices.toast(M.actionError(result));
+      return;
+    }
+    audio?.play(name === 'setAdviserMode' ? 'tick' : 'chime');
+    refresh(true);
+  }
+
+  function confirmDismissAdviser(adviser) {
+    if (!adviser) return;
+    confirmDialog({
+      title: `Dismiss ${adviser.name}?`,
+      text: `They are paid half a year's salary (${Math.round(adviser.salary / 2)} coin). The answers they have staged come back to you, and a new slate is drawn.${adviser.standing >= 60 ? ` They are well thought of: the ${adviser.trade === 'farm' ? 'farmers' : 'people of their trade'} will be sore.` : ''}`,
+      actions: [{id: 'dismiss', label: 'Dismiss them', kind: 'danger', run: () => {
+        const result = host.act('dismissAdviser', adviser.id);
+        if (result?.ok === false) return notices.toast(M.actionError(result));
+        notices.toast(`${adviser.name} is dismissed.`);
+        refresh(true);
+      }}],
+    });
+  }
+
   function onRule(card, option) {
     const result = host.act('rule', card.id, option.key);
     if (result && result.ok === false) {
@@ -459,15 +499,6 @@ export function createApp(host) {
       return;
     }
     audio?.play(card.kind === 'report' ? 'tick' : 'chime');
-    refresh(true);
-  }
-
-  function setDelegated(bodyId, on, limit) {
-    const result = host.act('setDelegated', bodyId, on, limit);
-    if (result && result.ok === false) return notices.toast(M.actionError(result));
-    const name = ctx.bodyName(bodyId);
-    notices.toast(on ? `${cap(theName(name))} now runs its own affairs.` : `You took back ${theName(name)}'s affairs.`);
-    audio?.play('chime');
     refresh(true);
   }
 
@@ -479,9 +510,10 @@ export function createApp(host) {
     if (prevUnlocks) {
       for (const [key, on] of Object.entries(unlocks)) {
         if (!on || prevUnlocks[key]) continue;
-        const target = {ruleBook: 'rules', people: 'people', tensions: 'tensions', overlays: 'map', places: 'places'}[key];
+        const target = {ruleBook: 'rules', people: 'people', tensions: 'tensions', overlays: 'map', places: 'places', approval: 'people'}[key];
         if (target) fresh.add(target);
-        if (UNLOCK_NAMES[key]) {
+        if (key === 'approval') notices.nudge(`New: ${UNLOCK_NAMES[key]}`, {icon: 'hand', onClick: openApproval});
+        else if (UNLOCK_NAMES[key]) {
           notices.nudge(`New: ${UNLOCK_NAMES[key]}`, {icon: 'spark', onClick: () => target && target !== 'map' && (layout === 'phone' ? setPhoneTab(target) : setDrawer(target))});
         }
       }
@@ -507,7 +539,11 @@ export function createApp(host) {
     if (prevYear != null && top.year > prevYear) {
       const entry = [...data.chronicle].reverse().find((e) => e.kind === 'year');
       const text = entry?.text?.replace(/^Year \d+ ends\.\s*/, '') ?? '';
-      notices.banner(`Year ${prevYear} ends`, text || `Year ${top.year} begins.`, {key: 'year', icon: 'scroll'});
+      // From Borough the year's end also says where your standing is.
+      const ap = unlocks.approval && Number.isFinite(top.approval)
+        ? `Approval ${top.approval}%${Number.isFinite(top.approvalChange) ? ` (${top.approvalChange === 0 ? '±0' : signed(top.approvalChange)})` : ''}.` : '';
+      notices.banner(`Year ${prevYear} ends`, [text || `Year ${top.year} begins.`, ap].filter(Boolean).join(' '),
+        {key: 'year', icon: 'scroll', onClick: ap ? openApproval : undefined});
       if (top.era >= 2) audio?.play('bell', Math.max(1, top.era));
     }
     prevYear = top.year;
@@ -529,49 +565,99 @@ export function createApp(host) {
       const added = cards.filter((c) => !seenCards.has(c.id));
       if (added.length) {
         audio?.play('chime');
+        // New requests never pause the town: they wait in the Council.
         announce(added);
-        if (host.speed() >= 3 && prefs.get('pauseOnSession') && !moments.isOpen) {
-          host.setSpeed(0);
-          notices.toast('Paused for new requests. Press Space to go on.');
-        }
       }
     }
     seenCards = new Set(cardIds);
+    announceSeason(data.season);
+    announceSlate(data.advisers);
   }
 
-  // New cards never open a panel or take focus. A petitioner chip slides out
-  // of the dock unless the open panel already shows the card's docket (then
-  // the card simply animates in); on phone a pill sits above the peek.
+  // New cards never open a panel or take focus: a request notice lingers in
+  // the stack (one at a time, "+2" for the rest) unless the Council is open
+  // already (then the card simply animates in). It opens the Council at the
+  // new card. The camera stays where the player left it.
+  // Budget season opens with every body's card at once: one notice for the
+  // season (it opens the season's page), never one per budget, so the
+  // stack's other news is not pushed out.
+  let seasonSaid = null;
+  function announceSeason(season) {
+    if (!season?.open || seasonSaid === season.year) return;
+    seasonSaid = season.year;
+    const n = season.total;
+    notices.major({key: 'budget-season', icon: 'coin', title: `Budget season: ${n === 1 ? 'one body brings its budget' : `${n} bodies bring their budgets`}`,
+      text: `For year ${season.year}. Unanswered, each keeps last year's figure.`, onClick: () => openCouncil({page: 'budgets'})});
+  }
+
+  // The bench: one notice when a seat opens or a slate is ready (it opens the
+  // Advisers page), with what emptied the seat if one was left.
+  let slateSaid = null;
+  function announceSlate(adv) {
+    const key = adv?.slate ? `${adv.slate.seatId}:${adv.slate.year}:${adv.slate.candidates.map((c) => c.id).join()}` : null;
+    if (!key || key === slateSaid) return;
+    // The bench opens at a year's turn: it waits until the year's notice has gone,
+    // so the two never push each other (or anything else) out of the stack.
+    if (notices.stack.querySelector('.notice-major[data-key="year"]:not([data-leaving])')) return;
+    const first = slateSaid == null && !adv.seats.some((x) => x.adviser);
+    slateSaid = key;
+    const gone = adv.gone?.at(-1);
+    const why = gone && gone.year >= (data.top?.year ?? 0) - 1 && !first ? `${gone.name} has ${gone.why === 'dismissed' ? 'been dismissed' : gone.why}. ` : '';
+    notices.major({key: 'advisers', icon: 'quill', eyebrow: first ? 'Advisers' : 'The advisers\' bench',
+      title: first ? 'The council takes on advisers' : 'A seat on the bench is open',
+      text: `${why}Choose from ${adv.slate.candidates.length} townsfolk.`, onClick: () => openCouncil({page: 'advisers'})});
+  }
+
   function announce(added) {
+    // Budgets have their season's notice; cards an adviser will answer wait in the Council.
+    added = added.filter((c) => c.kind !== 'budget' && !c.advice?.act);
+    if (!added.length) return;
+    if (council.isOpen && layout !== 'phone') return;
+    if (council.isOpen && layout === 'phone' && sheet.index > 0) return;
     const first = added[0];
     const name = ctx.bodyName(first.from);
     const more = added.length > 1 ? added.length - 1 : 0;
-    const open = () => openCard(first);
-    const inView = !docked && (activeBody === 'moot' || activeBody === first.from);
-    if (layout !== 'phone' && !inView) {
-      notices.nudge('', {
-        key: 'docket', host: petitionHost, ms: 8000, onClick: open,
-        render: () => {
-          const chip = h('button.petition.paper', {type: 'button'});
-          chip.innerHTML = `<span class="seal-icon">${icon(ctx.bodyIcon(first.from))}</span><span class="petition-text"><b>${esc(cap(name))} asks</b><span>${esc(first.title)}</span></span>${more ? `<span class="badge">+${more}</span>` : ''}`;
-          return chip;
-        },
-        onExpire: async (chip) => {
-          chip.classList.add('is-tucking');
-          await new Promise((r) => setTimeout(r, reducedMs(260)));
-          chip.remove();
-          (dockUI.tile(first.from) ?? dockUI.tile('moot'))?.animate?.([{transform: 'scale(1)'}, {transform: 'scale(1.18)'}, {transform: 'scale(1)'}], {duration: reducedMs(420)});
-        },
-      });
-    } else if (layout === 'phone' && !(phoneTab === 'moot' && sheet.index > 0)) {
-      notices.nudge(`${cap(name)} asks: ${first.title}${more ? ` (+${more})` : ''}`, {key: 'docket', icon: 'seal', onClick: open});
-    }
+    notices.major({key: 'request', icon: ctx.bodyIcon(first.from), eyebrow: `${cap(name)} asks`, title: first.title, badge: more ? `+${more}` : '', onClick: () => openCard(first)});
   }
 
   function openCard(card) {
-    const at = (frameView?.attention ?? []).find((a) => a.bodyId === card.from) ?? card.place;
-    if (at && Number.isFinite(at.x)) world?.focus?.({x: at.x, z: at.z}, 900);
     focusDocket(card.id);
+  }
+
+  // The town's happenings: each new chronicle line passes through the stack
+  // as a short-lived note. Year ends and moments have notices of their own.
+  let seenLine = null;
+  function passHappenings(chronicle) {
+    const key = (e) => e?.key ?? `${e?.year}|${e?.text}`;
+    const last = key(chronicle.at(-1));
+    if (seenLine == null || !chronicle.length) { seenLine = last ?? ''; return; }
+    if (last === seenLine) return;
+    let i = chronicle.length - 1;
+    while (i >= 0 && key(chronicle[i]) !== seenLine) i--;
+    // The last line seen has scrolled out of the window: show only the newest.
+    const added = i < 0 ? chronicle.slice(-1) : chronicle.slice(i + 1);
+    seenLine = last;
+    // Event lines a council is already raising as a card, and lines that only
+    // repeat a lingering notice (a year's end, a moment), are not shown twice.
+    const raised = new Set();
+    for (const c of data.cards) {
+      if (String(c.templateId ?? '').startsWith('event:')) raised.add(c.templateId.slice(6));
+      for (const s of c.subjects ?? []) if (String(s).startsWith('event:')) raised.add(s.slice(6));
+      if (c.data?.event) raised.add(c.data.event);
+    }
+    for (const e of added.slice(-3)) {
+      if (e.kind === 'year' || e.kind === 'moment') continue;
+      if (e.refs?.event && raised.has(e.refs.event)) continue;
+      // Budgets: the season has its own notice, your answers fold their cards
+      // away, and the year's lapses are many at once: only a body's own
+      // spending passes through as news.
+      if (e.refs?.budgetSeason || (e.refs?.budget && (e.kind === 'decision' || e.refs.lapsed))) continue;
+      // An adviser's answer passes only when you would otherwise miss it (the Council closed).
+      if (e.refs?.adviserAnswer && council.isOpen) continue;
+      if (e.refs?.advisers === 'unlocked' || e.refs?.advisers === 'hired') continue;
+      if (notices.echoes(e.text)) continue;
+      notices.minor({kind: e.kind, text: e.text, onClick: () => (layout === 'phone' ? setPhoneTab('chronicle', NAV_SNAP.chronicle) : activeDrawer !== 'chronicle' && setDrawer('chronicle'))});
+    }
   }
 
   function lastMoment(state) {
@@ -605,6 +691,8 @@ export function createApp(host) {
       if (insetSig !== zero) { insetSig = zero; world.setSceneInsets({top: 0, right: 0, bottom: 0, left: 0}); }
       return;
     }
+    // Only the chrome that is always there frames the scene, so opening,
+    // closing or resizing a panel never moves the camera.
     const W = innerWidth, H = innerHeight;
     const tb = topbar.el.getBoundingClientRect();
     const insets = {top: Math.round(tb.bottom), right: 0, bottom: 0, left: 0};
@@ -615,13 +703,8 @@ export function createApp(host) {
       insets.bottom = Math.round(H - st.top);
       const rr = rail.getBoundingClientRect();
       insets.left = rail.hidden ? 0 : Math.round(rr.right);
-      // An open desk drawer reframes the scene too.
-      if (layout === 'desk' && activeDrawer) insets.left = Math.round(drawer.offsetLeft + drawer.offsetWidth);
-      // The desk panel reframes the scene; the tablet one floats over it.
-      // offsetLeft ignores the slide transform, so the camera moves once.
       const d = dock.getBoundingClientRect();
-      if (layout === 'desk' && !docked) insets.right = Math.round(W - binder.offsetLeft);
-      else insets.right = d.width ? Math.round(W - d.left) : 0;
+      insets.right = d.width ? Math.round(W - d.left) : 0;
     }
     const sig = JSON.stringify(insets);
     if (sig === insetSig) return;
@@ -644,7 +727,9 @@ export function createApp(host) {
     if (!key || key === 'textSize') document.documentElement.dataset.text = prefs.get('textSize');
     if (!key || key === 'theme') applyTheme();
     if (!key || key === 'quality') world?.setQuality?.(prefs.get('quality'));
+    if (!key || key === 'batterySaver') world?.setBatterySaver?.(prefs.get('batterySaver'));
     if (!key || key === 'dayCycle') world?.setDayCycle?.(prefs.get('dayCycle'));
+    if (!key || key === 'peopleShadows') world?.setPeopleShadows?.(prefs.get('peopleShadows'));
     if (key === 'muted') refresh(true);
   }
   prefs.onChange(applyPrefs);
@@ -685,7 +770,7 @@ export function createApp(host) {
     if (!bodies.some((b) => b.id === 'moot')) bodies.unshift({id: 'moot', kind: 'moot', name: 'The Council', metrics: [], rules: []});
     const eraRaw = safe(() => V.selectEraProgress(state), null);
     const era = M.era(eraRaw && {...eraRaw, year: eraRaw.year ?? top.year, floorYear: eraRaw.floorYear ?? (Number.isFinite(eraRaw.yearsToFloor) && eraRaw.yearsToFloor > 0 ? top.year + eraRaw.yearsToFloor : undefined)});
-    const chronicle = M.chronicle(safe(() => V.selectChronicle(state, {limit: 200}), []) ?? []);
+    const chronicle = M.chronicle(safe(() => V.selectChronicle(state, {limit: RECENT_LINES}), []) ?? []);
     const events = safe(() => V.selectEvents?.(state), []) ?? [];
     const centres = safe(() => V.selectCentres?.(state), null);
     const liveCentres = (centres?.centres ?? []).filter((c) => !c.mergedInto);
@@ -695,15 +780,16 @@ export function createApp(host) {
       factionsAt = now;
       factionNames = Object.fromEntries((safe(() => V.selectFactions(state), []) ?? []).map((f) => [f.id, f.name]));
     }
-    data = {top, unlocks, cards, bodies, era, chronicle, events, centres, here: liveCentres.length >= 2 ? centreUnderCamera(liveCentres) : null};
-    if (!bodies.some((b) => b.id === activeBody)) activeBody = 'moot';
+    const season = unlocks.budgets ? safe(() => V.selectBudgetSeason?.(state), null) : null;
+    const advisers = unlocks.advisers ? safe(() => V.selectAdvisers?.(state), null) : null;
+    data = {top, unlocks, cards, bodies, era, chronicle, events, centres, season, advisers, here: liveCentres.length >= 2 ? centreUnderCamera(liveCentres) : null};
 
     detectChanges(state);
     topbar.update(top, unlocks, data.here ? liveCentres.find((c) => c.id === data.here) : null);
     const timeData = {speed: host.speed(), top, era, muted: prefs.get('muted')};
     if (layout === 'phone') peekTime.update(timeData); else stripTime.update(timeData);
     renderDock();
-    feed.update(chronicle);
+    passHappenings(chronicle);
     renderRail();
     renderNav();
     updateViews(state);
@@ -717,37 +803,70 @@ export function createApp(host) {
       season: top.season, night: nightBeat ? 1 : 0, wind: Math.hypot(...(state.weather?.wind ?? [0.3, 0])),
       population: top.people, festival: (state.worldEvents ?? []).some((e) => e.kind === 'festival' || e.kind === 'market'),
       building: (state.projects ?? []).length, running: host.speed() > 0,
+      yearT: frameView?.time?.yearT, era: top.era, rain: state.weather?.rain, snow: state.weather?.snow,
+      centres: liveCentres, world,
     });
   }
 
   function updateViews(state) {
     const phone = layout === 'phone';
-    const visible = phone ? [phoneTab] : [activeBody, activeDrawer].filter(Boolean);
-    let ruleBook = null;
-    const needRules = visible.includes('rules') || (data.unlocks.ruleBook && visible.some((v) => bodyViews.has(v) || data.bodies.some((b) => b.id === v)));
-    // The Rule Book view lists rules in force; standing orders need every open category.
+    const visible = phone ? [phoneTab] : [activeDrawer].filter(Boolean);
+    // The Council shows one body's page at a time (the Town Council's too);
+    // on phones it is drawn whenever its tab is the sheet's.
+    const councilShown = council.isOpen || (phone && phoneTab === 'council');
+    if (councilShown && council.page) visible.push(council.page);
+    let rules = null;
+    const needRules = visible.includes('rules') || councilShown;
+    // The Rule Book view lists rules in force; the Council names every open area.
     let allCats = [];
     if (needRules) {
       const raw = safe(() => V.selectRuleBook(state), []) ?? [];
-      ruleBook = M.ruleBook(raw);
+      rules = M.ruleBook(raw);
       allCats = raw.filter((c) => c.open !== false).map((c) => ({id: c.id, name: c.name ?? c.title}));
     }
+    if (councilShown) {
+      // Area names for every category the cards use, with the rules in force.
+      const inForce = new Map((rules ?? []).map((c) => [c.id, c]));
+      council.update({
+        cards: data.cards,
+        bodies: data.bodies,
+        cats: allCats.map((c) => ({...c, policies: inForce.get(c.id)?.policies ?? []})),
+        phone,
+        unlockedRules: Boolean(data.unlocks.ruleBook),
+        unlocks: data.unlocks,
+        fresh,
+        season: data.season,
+        advisers: data.advisers,
+      });
+      fresh.delete(`body:${council.page}`);
+    }
     const ruleIndex = {};
-    for (const cat of ruleBook ?? []) for (const p of cat.policies ?? []) ruleIndex[p.id] = p;
+    for (const cat of rules ?? []) for (const p of cat.policies ?? []) ruleIndex[p.id] = p;
+    // Closed, the Chronicle starts again from its latest page.
+    if (!visible.includes('chronicle')) chronicleLimit = CHRONICLE_PAGE;
     for (const id of visible) {
-      if (id === 'inspect') continue;
-      if (id === 'rules') views.rules.update(ruleBook);
-      else if (id === 'people') views.people.update(data.top, safe(() => V.selectFactions(state), []) ?? [], {show: data.unlocks.compass, compass: data.unlocks.compass ? safe(() => V.selectCompass?.(state), null) : null});
-      else if (id === 'chronicle') views.chronicle.update(data.chronicle, {show: data.unlocks.endPreview, summary: data.unlocks.endPreview ? safe(() => V.selectEndPreview?.(state), null) : null, centres: (data.centres?.centres ?? []).filter((c) => !c.mergedInto).map((c) => ({id: c.id, name: c.name}))});
+      if (id === 'council') continue;
+      if (id === 'rules') views.rules.update(rules);
+      else if (id === 'people') {
+        views.people.update(data.top, safe(() => V.selectFactions(state), []) ?? [], {
+          show: data.unlocks.compass, compass: data.unlocks.compass ? safe(() => V.selectCompass?.(state), null) : null,
+          showApproval: Boolean(data.unlocks.approval), approval: data.unlocks.approval ? safe(() => V.selectApproval?.(state), null) : null,
+        });
+      }
+      else if (id === 'chronicle') {
+        const lines = M.chronicle(safe(() => V.selectChronicle(state, {limit: chronicleLimit}), []) ?? []);
+        const total = state.chronicle?.entries?.length ?? lines.length;
+        views.chronicle.update(lines, {show: data.unlocks.endPreview, summary: data.unlocks.endPreview ? safe(() => V.selectEndPreview?.(state), null) : null, centres: (data.centres?.centres ?? []).filter((c) => !c.mergedInto).map((c) => ({id: c.id, name: c.name})), earlier: total > lines.length});
+      }
       else if (id === 'tensions') views.tensions.update(M.tensions(safe(() => V.selectTensions(state), [])));
       else if (id === 'places') views.places.update(data.centres, data.here);
       else {
         const body = data.bodies.find((b) => b.id === id);
         const purse = id === 'moot' && data.unlocks.budget ? safe(() => V.selectBudget?.(state), null) : null;
-        const categories = allCats;
-        if (body) bodyView(id).update(body, {cards: data.cards, unlocks: data.unlocks, ruleIndex, phone, purse, categories});
+        if (body) bodyView(id).update(body, {cards: data.cards, unlocks: data.unlocks, ruleIndex, purse});
       }
     }
+    if (councilShown) council.fit();
   }
 
   // ---------- input ----------
@@ -756,14 +875,18 @@ export function createApp(host) {
     const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName);
     if (e.key === 'Escape') {
       if (clean) return setClean(false);
-      if (moments.isOpen || settings.isOpen) return;
+      // Open dialogs (title cards, settings, the Rule Book) handle Esc
+      // themselves; this catches it when focus is somewhere else.
+      if (moments.isOpen) return moments.close();
+      if (settings.isOpen) return settings.close();
       closePopover();
       if (confirmLayer) return closeConfirm();
       if (inspector.open) return inspector.hide();
+      if (council.isOpen && layout !== 'phone') return council.close();
       if (activeDrawer) return setDrawer(null);
-      if (layout === 'tablet' && !docked) return setDocked(true);
       if (layout === 'phone' && sheet.index > 0) return sheet.snapTo(0);
-      return;
+      // With nothing else open, Esc puts away the notices on screen.
+      return notices.dismissAll();
     }
     if (typing || settings.isOpen || moments.isOpen || confirmLayer) return;
     if (clean && !/^[hH ]$/.test(e.key) && e.code !== 'Space') return;
@@ -772,13 +895,14 @@ export function createApp(host) {
       host.setSpeed(host.speed() ? 0 : host.lastSpeed());
     } else if (e.key === '1') host.setSpeed(1);
     else if (e.key === '2') host.setSpeed(3);
-    else if (e.key === '3') host.setSpeed(8);
+    else if (e.key === '3') host.setSpeed(5);
     else if (e.key === 'h' || e.key === 'H') setClean(!clean);
     else if ((e.key === 'f' || e.key === 'F') && fsSupported) toggleFullscreen();
-    else if (e.key === 'c' || e.key === 'C') {
-      if (layout === 'phone') focusDocket();
-      else setDocked(!docked);
+    else if (/^[cCdD]$/.test(e.key)) {
+      if (layout === 'phone') return phoneTab === 'council' && sheet.index > 0 ? sheet.snapTo(0) : setPhoneTab('council', NAV_SNAP.council);
+      return council.toggle();
     }
+    else if ((e.key === 'r' || e.key === 'R') && data.unlocks.ruleBook) return layout === 'phone' ? setPhoneTab('rules', 2) : setDrawer('rules');
     else return;
     refresh(true);
   });
@@ -804,19 +928,8 @@ export function createApp(host) {
     // The renderer highlights the selection (a brighter building, a marker).
     world?.select?.(open ? inspector.target : null);
     if (!open) world?.follow?.(null);
-    if (layout === 'phone') {
-      if (open && phoneTab !== 'inspect') {
-        prevPhoneTab = phoneTab;
-        phoneTab = 'inspect';
-        mountViews();
-        sheet.snapTo(1);
-      } else if (!open && phoneTab === 'inspect') {
-        phoneTab = prevPhoneTab;
-        mountViews();
-        sheet.snapTo(0);
-      }
-      renderNav();
-    }
+    // On phones the card floats above the peek: lower the sheet to show it.
+    if (layout === 'phone' && open && sheet.index > 0) sheet.snapTo(0);
     updateInsets();
   }
 
@@ -868,17 +981,10 @@ export function createApp(host) {
         const result = host.act('dissolveBody', bodyId);
         if (result === false || result?.ok === false) return notices.toast(M.actionError(result));
         notices.toast(`${cap(name)} is no more.`);
-        setActiveBody('moot');
+        council.setPage('moot');
         refresh(true);
       }}],
     });
-  }
-
-  function setStandingOrder(bodyId, order) {
-    const result = host.act('setStandingOrder', bodyId, order);
-    if (result === false || result?.ok === false) return notices.toast(M.actionError(result));
-    audio?.play('tick');
-    refresh(true);
   }
 
   function closeConfirm() {
@@ -941,7 +1047,18 @@ export function createApp(host) {
     if (e.clientX < edge || e.clientY < edge || e.clientX > innerWidth - edge || e.clientY > innerHeight - edge) offerRestore();
   });
 
+  // A quiet note when the world starts saving power by itself (unplugged
+  // with 'On battery', or a low battery), not when the player chose Always.
+  let unbindPower = null, wasSaving = false;
   function bindWorld() {
+    unbindPower?.();
+    wasSaving = safe(() => world?.power?.()?.saving, false);
+    unbindPower = world?.onPowerChange?.((p) => {
+      if (p.saving && !wasSaving && p.mode !== 'always') {
+        notices.toast(p.lowBattery ? 'Battery low: the town draws less to save power.' : 'On battery: Battery saver is on. Change it in Settings → Display.', 6000);
+      }
+      wasSaving = p.saving;
+    }) ?? null;
     world?.onPick?.((pick) => {
       if (pick && (pick.buildingId != null || pick.personId != null)) {
         inspector.show(normalisePick(pick));
@@ -973,14 +1090,17 @@ export function createApp(host) {
     notices,
     focusDocket,
     get layout() { return layout; },
-    get docked() { return docked; },
-    setDocked,
     setClean,
     get clean() { return clean; },
     toggleFullscreen,
     inspector,
     confirmNewTown,
-    openView: (id) => (layout === 'phone' ? setPhoneTab(id) : DRAWER_VIEWS.some((d) => d.id === id) ? setDrawer(id) : setActiveBody(id)),
+    openView: (id) => (id === 'docket' || id === 'council' ? openCouncil() : DRAWER_VIEWS.some((d) => d.id === id) ? (layout === 'phone' ? setPhoneTab(id) : setDrawer(id)) : openCouncil({page: id})),
+    council,
+    docket: council,
+    openCouncil,
+    openDocket,
+    openRuleBook,
     sheet,
     settings,
   };

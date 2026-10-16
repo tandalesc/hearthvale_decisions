@@ -45,15 +45,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .ui {
-  /* The dock is always there on desk and tablet; the panel opens beside it.
-     --binder-user is the dragged width, clamped to the layout's limits (the
-     time strip keeps at least 420 px). */
+  /* The rail and the dock are always there on desk and tablet. The drawer
+     opens beside the rail (--drawer-user is its dragged width); the Council
+     fills the main area between them. */
   --dock-w: 52px;
   --rail-w: var(--dock-w);
-  --drawer-max: min(600px, 40vw, calc(100vw - var(--rail-w) - var(--dock-w) - var(--binder-w) - var(--gap) * 6 - var(--safe-l) - var(--safe-r) - 160px));
+  --drawer-max: min(600px, 40vw, calc(100vw - var(--rail-w) - var(--dock-w) - var(--gap) * 6 - var(--safe-l) - var(--safe-r) - 360px));
   --drawer-w: clamp(300px, var(--drawer-user, clamp(320px, 26vw, 380px)), var(--drawer-max));
-  --binder-max: min(720px, 55vw, calc(100vw - var(--dock-w) - var(--rail-w) - var(--gap) * 5 - var(--safe-l) - var(--safe-r) - 420px));
-  --binder-w: clamp(320px, var(--binder-user, clamp(360px, 29vw, 432px)), var(--binder-max));
+  /* Where the open scene starts on the left: past the rail, or the drawer. */
+  --left-occ: calc(var(--gap) * 2 + var(--rail-w) + var(--safe-l));
+  --right-occ: calc(var(--gap) * 2 + var(--dock-w) + var(--safe-r));
   position: fixed;
   inset: 0;
   pointer-events: none;
@@ -61,7 +62,8 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   transition: color var(--t-moment) ease;
 }
 .ui > * { pointer-events: auto; }
-.ui > .vignette, .ui > .feed { pointer-events: none; }
+.ui > .vignette, .ui > .notice-stack { pointer-events: none; }
+.ui.drawer-open { --left-occ: calc(var(--gap) * 3 + var(--rail-w) + var(--drawer-w) + var(--safe-l)); }
 
 /* Paper glass sheets with a quiet grain. */
 .paper {
@@ -117,7 +119,8 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   position: fixed;
   top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
   left: calc(var(--gap) * 2 + var(--rail-w) + var(--safe-l));
-  bottom: calc(var(--strip-h) + var(--gap) * 2 + var(--safe-b));
+  /* As tall as its view needs (an early chronicle is a few lines), up to the time strip. */
+  max-height: calc(100dvh - var(--safe-t) - var(--top-h) - var(--strip-h) - var(--gap) * 4 - var(--safe-b));
   width: var(--drawer-w);
   display: flex;
   flex-direction: column;
@@ -130,58 +133,55 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .drawer.is-open { opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
 
-/* ---------- Binder (right panel, beside the dock) ---------- */
-.binder {
+/* ---------- The Council (main area, desk and tablet) ----------
+   A HUD panel, not a dialog: between the rail (or the open drawer) and the
+   dock, below the top bar and above the time strip, so both stay in reach.
+   Very wide screens cap its width and keep it beside the dock. */
+.dk {
+  /* Sized to what it shows (council.js fit): one column of cards is a modest
+     card beside the dock, two or three columns grow toward the whole area;
+     its height follows the content, up to the time strip. */
+  --dk-w: 1400px;
   position: fixed;
   top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
-  right: calc(var(--gap) * 2 + var(--dock-w) + var(--safe-r));
-  /* The binder hugs its content and grows with the town, up to the screen. */
-  max-height: calc(100dvh - var(--safe-t) - var(--top-h) - var(--gap) * 3 - var(--safe-b));
-  width: var(--binder-w);
-  display: flex;
-  flex-direction: column;
+  right: var(--right-occ);
+  width: min(var(--dk-w), calc(100vw - var(--left-occ) - var(--right-occ)));
+  max-height: calc(100dvh - var(--safe-t) - var(--top-h) - var(--strip-h) - var(--gap) * 4 - var(--safe-b));
   z-index: var(--z-chrome);
-  transition: transform var(--t-slow) var(--ease-out), opacity var(--t-slow) var(--ease-out);
+  box-shadow: var(--shadow-lift), var(--sheet-edge);
 }
-/* The dock: a slim column of body crests at the right edge, always there.
-   Tucked away, the binder slides in under it. */
+.dk:not(.has-index):not(.has-side) { --dk-w: 560px; }
+.dk.has-index:not(.has-side), .dk:not(.has-index).has-side { --dk-w: 1040px; }
+/* The dock: the Council's crest at the right edge, always there. */
 .dock {
   position: fixed;
   top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
   right: calc(var(--gap) + var(--safe-r));
   width: var(--dock-w);
-  max-height: calc(100dvh - var(--safe-t) - var(--top-h) - var(--gap) * 3 - var(--safe-b));
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 4px 0;
   z-index: calc(var(--z-chrome) + 3);
 }
-.ui.docked .binder {
-  transform: translateX(calc(100% + var(--gap) * 2 + var(--dock-w)));
-  opacity: 0;
-  visibility: hidden;
-  transition: transform var(--t-slow) var(--ease-in), opacity var(--t-base) var(--ease-in), visibility 0s linear var(--t-slow);
-}
-.petition-host {
-  position: fixed;
-  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
-  right: calc(var(--gap) * 2 + var(--dock-w) + var(--safe-r));
-  z-index: var(--z-notice);
-  display: flex;
-  justify-content: flex-end;
-  pointer-events: none;
-}
-/* With the panel open, the chip slides out beside it. */
-.ui:not(.docked) .petition-host { right: calc(var(--gap) * 3 + var(--dock-w) + var(--binder-w) + var(--safe-r)); }
 .ui.is-resizing, .ui.is-resizing * { cursor: col-resize !important; user-select: none; -webkit-user-select: none; }
+/* Drawer and Council side by side tile the main area: the Council meets the
+   drawer, and the drawer's grip sits in the gap between them, so one drag
+   moves the shared edge. */
+/* Beside an open drawer the Council tiles: it meets the drawer (both as tall as they need). */
+.ui.drawer-open .dk { left: var(--left-occ); width: auto; }
+.ui.council-open .drawer { z-index: calc(var(--z-chrome) + 1); }
+.ui.council-open .drawer .panel-resize[data-edge="right"] { right: calc(var(--gap) / -2 - 8px); }
 
 /* ---------- Time strip ---------- */
 .timestrip {
   position: fixed;
   left: calc(var(--gap) + var(--safe-l));
   bottom: calc(var(--gap) + var(--safe-b));
-  width: min(700px, calc(100vw - var(--binder-w) - var(--dock-w) - var(--gap) * 4 - var(--safe-l) - var(--safe-r)));
+  /* As wide as its contents (pause and speed, a short age bar, the season,
+     sound), never wider than the room beside the dock. */
+  width: max-content;
+  max-width: calc(100vw - var(--dock-w) - var(--gap) * 3 - var(--safe-l) - var(--safe-r));
   height: var(--strip-h);
   z-index: var(--z-chrome);
   display: flex;
@@ -189,63 +189,54 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   padding: 0 4px;
 }
 
-/* ---------- Chronicle feed & inspector (bottom-left) ---------- */
-.feed, .inspector {
+/* ---------- Inspector (bottom-left) ---------- */
+.inspector {
   position: fixed;
-  left: calc(var(--gap) * 2 + var(--rail-w) + var(--safe-l));
+  left: var(--left-occ);
   bottom: calc(var(--strip-h) + var(--gap) * 2 + var(--safe-b));
-  width: min(380px, calc(100vw - var(--binder-w) - var(--dock-w) - var(--rail-w) - var(--gap) * 6));
+  width: min(380px, calc(100vw - var(--left-occ) - var(--right-occ)));
   z-index: var(--z-float);
 }
-.ui.drawer-open .feed { opacity: 0; }
 
-/* ---------- Notices ---------- */
-.nudge-host {
-  position: fixed;
-  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2 + 6px);
-  right: calc(var(--binder-w) + var(--dock-w) + var(--gap) * 3 + var(--safe-r));
-  z-index: var(--z-notice);
-  display: flex;
-  justify-content: flex-end;
-  pointer-events: none;
-}
-.banner-host {
+/* ---------- Notices ----------
+   One stack at the top left of the open scene, beside the rail (or the
+   drawer), under the top bar: lingering majors above, fading happenings
+   below. Over the open Council it steps aside to the top right of the
+   panel's cards. Toasts: top centre of the open scene. */
+.notice-stack {
   position: fixed;
   top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
-  left: 50%;
-  transform: translateX(-50%);
+  left: var(--left-occ);
+  width: min(400px, calc(100vw - var(--left-occ) - var(--right-occ)));
   z-index: var(--z-notice);
-  pointer-events: none;
-  width: min(520px, calc(100vw - 32px));
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  transition: left var(--t-base) var(--ease-out), opacity var(--t-base) ease;
 }
-.ui.docked .nudge-host { right: calc(var(--dock-w) + var(--gap) * 2 + var(--safe-r)); }
-.ui[data-layout="desk"] .banner-host { left: calc((100vw - var(--binder-w) - var(--dock-w) - var(--gap) * 2) / 2 + var(--rail-w) / 2); }
-.ui[data-layout="desk"].docked .banner-host { left: calc((100vw - var(--dock-w) - var(--gap)) / 2 + var(--rail-w) / 2); }
+/* Held while the Council is open: hidden, timers stopped (notices.setHeld). */
+.notice-stack.is-held { opacity: 0; visibility: hidden; pointer-events: none; }
+.toasts {
+  position: fixed;
+  top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
+  left: calc((var(--left-occ) + 100vw - var(--right-occ)) / 2);
+  transform: translateX(-50%);
+  z-index: var(--z-toast);
+  pointer-events: none;
+  width: min(460px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+/* Over the Council or a dialog, toasts rise from the bottom instead of covering its head. */
+.ui:is(.council-open, :has(> .settings, > .confirm-layer, > .moment-layer)) .toasts { top: auto; bottom: calc(var(--strip-h) + var(--gap) * 3 + var(--safe-b)); }
 
 /* ---------- Phone sheet (hidden on desk/tablet) ---------- */
 .sheet, .sheet-scrim { display: none; }
 
 /* ======================= Tablet ======================= */
-.ui[data-layout="tablet"] {
-  --binder-max: min(720px, 55vw, calc(100vw - var(--rail-w) - var(--dock-w) - var(--gap) * 5 - var(--safe-l) - var(--safe-r)));
-  --binder-w: clamp(min(320px, var(--binder-max)), var(--binder-user, 380px), var(--binder-max));
-}
-.ui[data-layout="tablet"] .binder {
-  max-height: calc(100dvh - var(--safe-t) - var(--top-h) - var(--strip-h) - var(--gap) * 4 - var(--safe-b));
-  box-shadow: var(--shadow-lift), var(--sheet-edge);
-  z-index: calc(var(--z-chrome) + 2);
-}
-.ui[data-layout="tablet"] .timestrip {
-  width: auto;
-  right: calc(var(--gap) * 2 + var(--dock-w) + var(--safe-r));
-  max-width: 760px;
-}
-.ui[data-layout="tablet"] .feed,
-.ui[data-layout="tablet"] .inspector { width: min(360px, calc(100vw - var(--rail-w) - var(--dock-w) - var(--gap) * 5)); }
-.ui[data-layout="tablet"] .nudge-host { right: calc(var(--gap) * 2 + var(--dock-w) + var(--safe-r)); top: auto; bottom: calc(var(--strip-h) + var(--gap) * 2 + var(--safe-b)); }
-.ui[data-layout="tablet"]:not(.docked) .nudge-host { opacity: 0; }
+
 
 /* Short screens: tighten vertical rhythm. */
 @media (max-height: 520px) {
@@ -258,33 +249,31 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   --gap: 10px;
   --peek: calc(116px + var(--safe-b)); /* the sheet sets the measured value */
 }
-.ui[data-layout="phone"] .binder,
 .ui[data-layout="phone"] .drawer,
 .ui[data-layout="phone"] .timestrip,
-.ui[data-layout="phone"] .dock,
-.ui[data-layout="phone"] .petition-host { display: none; }
+.ui[data-layout="phone"] .dock { display: none; }
 .ui[data-layout="phone"] .topbar { padding: 0 4px 0 8px; gap: 8px; }
-.ui[data-layout="phone"] .feed {
+/* A selected thing: a solid card above the peek, as tall as it needs. */
+.ui[data-layout="phone"] .inspector {
   left: calc(var(--gap) + var(--safe-l));
   right: calc(var(--gap) + var(--safe-r));
   width: auto;
+  top: auto;
   bottom: calc(var(--peek) + var(--gap));
+  max-height: calc(100dvh - var(--peek) - var(--safe-t) - var(--top-h) - var(--gap) * 4);
 }
-.ui[data-layout="phone"] .inspector {
-  left: calc(var(--gap) + var(--safe-l) + var(--rail-w) + var(--gap));
+.ui[data-layout="phone"] .notice-stack {
+  left: calc(var(--gap) + var(--safe-l));
   right: calc(var(--gap) + var(--safe-r));
   width: auto;
   top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2);
-  bottom: auto;
 }
-.ui[data-layout="phone"] .nudge-host {
-  right: calc(var(--gap) + var(--safe-r));
-  left: calc(var(--gap) + var(--safe-l));
-  top: auto;
-  bottom: calc(var(--peek) + var(--gap));
-  justify-content: center;
-}
-.ui[data-layout="phone"] .banner-host { top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2); }
+/* With the sheet raised, notices wait under it; the town's news is in the Chronicle. */
+.ui[data-layout="phone"]:not([data-sheet="0"]) .notice-stack { opacity: 0; pointer-events: none; }
+.ui[data-layout="phone"]:not([data-sheet="0"]) .notice-stack * { pointer-events: none; }
+.ui[data-layout="phone"] .toasts { left: 50%; top: auto; bottom: calc(var(--peek) + var(--gap)); }
+.ui[data-layout="phone"]:has(> .inspector:not([hidden])) .toasts { top: calc(var(--safe-t) + var(--top-h) + var(--gap) * 2); bottom: auto; }
+.ui[data-layout="phone"][data-sheet="2"] .toasts { top: calc(var(--safe-t) + 6px); bottom: auto; }
 
 .ui[data-layout="phone"] .sheet {
   display: flex;
