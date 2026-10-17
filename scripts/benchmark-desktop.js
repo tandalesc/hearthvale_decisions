@@ -1,0 +1,52 @@
+// Offline desktop city profile: fixed high quality, normal motion, 1x speed,
+// battery saver off, emulated mains power/full battery, blob villager shadows, and all model API requests blocked.
+// Runs one isolated browser context per DPR/variant and saves JSON, CPU profiles,
+// and screenshots. Actual pixel ratio remains subject to the high tier's cap.
+//
+// node scripts/benchmark-desktop.js --label=city --dprs=1,2 --out=/tmp/city-profile
+// node scripts/benchmark-desktop.js --label=close --dprs=2 --distance=120 --pan=1
+// Optional before/current pairing (same browser): --variants=before,current
+// --baseline-ref=COMMIT, or --baseline-dir=DIR containing original
+// paths-before.js and sim-roads-before.js. Only those two modules are substituted.
+// Reject frame-time comparisons when measured RAF cadence or settings differ.
+// Other options: --warmup=8000 --duration=16000 --port=5213 --chrome=PATH.
+import {chromium} from '@playwright/test';
+import {createServer} from 'vite';
+import {writeFileSync,mkdirSync,readFileSync,existsSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {tmpdir} from 'node:os';
+import {execFileSync} from 'node:child_process';
+const opts=Object.fromEntries(process.argv.slice(2).map(x=>x.replace(/^--/,'').split('=')));
+const out=resolve(opts.out??resolve(tmpdir(),'hearthvale-desktop-perf')),label=opts.label??'baseline',duration=Number(opts.duration??16000),warmup=Number(opts.warmup??8000);
+mkdirSync(out,{recursive:true});
+const variants=(opts.variants??opts.variant??'current').split(',');let sourceVariant=variants[0];
+const originals=new Map([[resolve('src/render/paths.js'),resolve(opts['baseline-dir']??out,'paths-before.js')],[resolve('src/sim/roads.js'),resolve(opts['baseline-dir']??out,'sim-roads-before.js')]]);
+const beforeSources=new Map();
+if(variants.includes('before'))for(const [file,snapshot]of originals){beforeSources.set(file,opts['baseline-ref']?execFileSync('git',['show',`${opts['baseline-ref']}:${file.slice(resolve('.').length+1)}`],{encoding:'utf8'}):readFileSync(snapshot,'utf8'));}
+const server=await createServer({plugins:[{name:'performance-original-source',enforce:'pre',load(id){if(sourceVariant!=='before')return null;return beforeSources.get(id.split('?')[0])??null;}}],configFile:resolve('vite.config.js'),logLevel:'error',server:{host:'127.0.0.1',port:Number(opts.port??5213),strictPort:false,hmr:false,watch:null}});await server.listen();
+const base=`http://127.0.0.1:${server.config.server.port}`;
+const macChrome='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const chrome=opts.chrome??process.env.CHROME_PATH??(existsSync(macChrome)?macChrome:undefined);
+const browser=await chromium.launch({executablePath:chrome,headless:true,args:[...(process.platform==='darwin'?['--use-angle=metal']:[]),'--enable-gpu','--ignore-gpu-blocklist','--enable-webgl','--disable-background-timer-throttling','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows']});
+const results=[];
+function cpuSummary(profile){const nodes=new Map(profile.nodes.map(n=>[n.id,n])),parents=new Map();for(const n of profile.nodes)for(const id of n.children??[])parents.set(id,n.id);const self=new Map(),total=new Map();for(let i=0;i<(profile.samples??[]).length;i++){const id=profile.samples[i],ms=(profile.timeDeltas?.[i]??0)/1000;self.set(id,(self.get(id)??0)+ms);for(let q=id;q!=null;q=parents.get(q))total.set(q,(total.get(q)??0)+ms);}return [...nodes.values()].map(n=>({name:n.callFrame.functionName||'(anonymous)',url:n.callFrame.url,line:n.callFrame.lineNumber+1,selfMs:+(self.get(n.id)??0).toFixed(2),totalMs:+(total.get(n.id)??0).toFixed(2)})).sort((a,b)=>b.selfMs-a.selfMs).slice(0,65);}
+try{for(const variant of variants){sourceVariant=variant;server.moduleGraph.invalidateAll();const runLabel=variants.length>1?`${label}-${variant}`:label;for(const dpr of (opts.dprs??'1,2').split(',').map(Number)){
+ const ctx=await browser.newContext({viewport:{width:1440,height:900},deviceScaleFactor:dpr});const page=await ctx.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.route('**/api/**',r=>r.fulfill({status:503,body:'{}'}));
+ await page.addInitScript(()=>{
+ Object.defineProperty(navigator,'getBattery',{configurable:true,value:async()=>({charging:true,level:1,addEventListener(){},removeEventListener(){}})});
+ localStorage.setItem('hearthvale-model-enabled','false');localStorage.setItem('hearthvale-ui',JSON.stringify({quality:'high',batterySaver:'off',dayCycle:'seasonal',motion:'full',moments:'never',muted:true,peopleShadows:'blob'}));localStorage.setItem('hearthvale-ui-seen',JSON.stringify(['explain:docket','explain:rules','explain:people','explain:chronicle','explain:tensions','explain:overlays','explain:council']));
+ const raf=window.requestAnimationFrame.bind(window);window.__perf={active:false,rafIntervals:[],frameCpu:[],worldCpu:[],uiCpu:[],stats:[],draws:0,last:null};window.requestAnimationFrame=fn=>raf(time=>{if(fn.name!=='frame')return fn(time);const p=window.__perf,start=performance.now();if(p.active){if(p.last!==null)p.rafIntervals.push(time-p.last);p.last=time;}const result=fn(time);if(p.active)p.frameCpu.push(performance.now()-start);return result;});
+ });
+ await page.goto(`${base}/?fixture=city`);await page.waitForFunction(()=>window.hearthvale?.renderer==='real',null,{timeout:60000});
+ const initial=await page.evaluate(settings=>{const h=window.hearthvale;h.world.setQuality('high');h.world.setBatterySaver('off');h.setSpeed(1);if(settings.distance){const center=h.world.camera.controls.target.clone();h.world.camera.home(center.x,center.z,settings.distance);if(settings.pan){const due=h.world.frameDue;let start=null;h.world.frameDue=(time,dt)=>{start??=time;h.world.camera.home(center.x+10*Math.sin((time-start)*.25),center.z+6*Math.sin((time-start)*.17),settings.distance);return due(time,dt);};}}const p=window.__perf;const update=h.world.update;h.world.update=function(...args){const t=performance.now();const r=update.apply(this,args);if(p.active){p.worldCpu.push(performance.now()-t);p.draws++;}return r;};const ui=h.app.update;h.app.update=function(...args){const t=performance.now();const r=ui.apply(this,args);if(p.active)p.uiCpu.push(performance.now()-t);return r;};const gl=h.world.internals.renderer.getContext(),ext=gl.getExtension('WEBGL_debug_renderer_info');return {renderer:gl.getParameter(gl.RENDERER),vendor:gl.getParameter(gl.VENDOR),unmasked:ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):null,people:h.state().people.length,pop:h.state().indicators.pop,buildings:h.state().buildings.length,stats:h.view(),speed:h.speed(),power:h.world.power(),camera:h.world.camera.camera.position.toArray(),target:h.world.camera.controls.target.toArray()};},{distance:Number(opts.distance??0),pan:opts.pan==='1'});
+ const loadedSource=await page.evaluate(async()=>({pointCapsule:(await (await fetch('/src/render/paths.js')).text()).includes('Node caps and yard discs'),componentReuse:(await (await fetch('/src/sim/roads.js')).text()).includes('function structuralComponents')}));
+ await page.waitForTimeout(warmup);const cdp=await ctx.newCDPSession(page);await cdp.send('Profiler.enable');await cdp.send('Profiler.setSamplingInterval',{interval:1000});await cdp.send('Profiler.start');
+ await page.evaluate(()=>{const p=window.__perf;p.active=true;p.started=performance.now();const s=window.hearthvale.state();p.sampleStart={tick:s.time.tick,acc:s.time.acc,year:s.time.year,month:s.time.month,pop:s.indicators.pop,people:s.people.length,buildings:s.buildings.length,moving:s.people.filter(p=>p.speed>0).length,routes:s.people.filter(p=>p.task?.route?.length).length,roadsVersion:s.roads.version};p.timer=setInterval(()=>p.stats.push({...window.hearthvale.view(),speed:window.hearthvale.speed(),tick:window.hearthvale.state().time.tick}),250);});
+ await page.waitForTimeout(duration);const data=await page.evaluate(()=>{const p=window.__perf;p.active=false;clearInterval(p.timer);const quant=(a)=>{const s=[...a].sort((x,y)=>x-y);return {count:s.length,meanMs:a.reduce((x,y)=>x+y,0)/(a.length||1),p50Ms:s[Math.floor(s.length*.5)],p95Ms:s[Math.floor(s.length*.95)],maxMs:s.at(-1)};};return {sampleStart:p.sampleStart,durationMs:performance.now()-p.started,raf:quant(p.rafIntervals),frameCpu:quant(p.frameCpu),worldCpu:quant(p.worldCpu),uiCpu:quant(p.uiCpu),draws:p.draws,stats:p.stats,final:{speed:window.hearthvale.speed(),power:window.hearthvale.world.power(),tick:window.hearthvale.state().time.tick,people:window.hearthvale.state().people.length,view:window.hearthvale.view()}};});
+ if(data.stats.some(s=>s.saving||s.tier!=='high'||s.pixelRatio!==Math.min(dpr,1.75)||s.speed!==1))throw new Error('Benchmark quality, power or speed changed during sampling; reject this run.');
+ const {profile}=await cdp.send('Profiler.stop');await cdp.detach();writeFileSync(`${out}/${runLabel}-dpr${dpr}.cpuprofile`,JSON.stringify(profile));
+ const topCpu=cpuSummary(profile);const stageMeans={};for(const s of data.stats)for(const[k,v]of Object.entries(s.cpu??{}))stageMeans[k]=(stageMeans[k]??0)+v/data.stats.length;
+ const row={browserVersion:browser.version(),label:runLabel,variant,dpr,loadedSource,settings:{viewport:[1440,900],quality:'high',warmupMs:warmup,sampleMs:duration,cameraDistance:Number(opts.distance??0)||'overview',cameraPan:opts.pan==='1',batteryEnvironment:'emulated charging/full battery',decisionModel:false,batterySaver:'off',speed:1},initial,...data,stageMeans,topCpu,errors};results.push(row);writeFileSync(`${out}/${label}.json`,JSON.stringify(results,null,2));console.log(JSON.stringify({label:runLabel,variant,dpr,initial,row:{raf:data.raf,frameCpu:data.frameCpu,worldCpu:data.worldCpu,uiCpu:data.uiCpu,stageMeans,final:data.final,errors},topCpu:topCpu.slice(0,25)},null,2));
+ await page.screenshot({path:`${out}/${runLabel}-dpr${dpr}.png`});await ctx.close();
+}}}finally{await browser.close();await server.close();}

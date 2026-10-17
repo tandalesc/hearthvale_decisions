@@ -1961,11 +1961,13 @@ export function createProps(ctx) {
       }
       // Bridges, walls and street furniture: rebuilt on change, at most once a
       // second (paving creeps cell by cell during works).
-      const bs = bridgeSignature(view);
-      if (bs !== bridgeSig && time - lastBridgeBuild > 1) {
-        bridgeSig = bs;
-        lastBridgeBuild = time;
-        rebuildBridges(view);
+      if (time - lastBridgeBuild > 1) {
+        const bs = bridgeSignature(view);
+        if (bs !== bridgeSig) {
+          bridgeSig = bs;
+          lastBridgeBuild = time;
+          rebuildBridges(view);
+        }
       }
 
       let glowsDirty = false;

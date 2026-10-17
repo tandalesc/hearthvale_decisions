@@ -1,0 +1,491 @@
+{
+  "date": "2026-10-16",
+  "scope": "Profile-guided CPU optimizations for large cities on desktop; preserves simulation results and graphics.",
+  "baseline": {
+    "branch": "main",
+    "commit": "4bf9a75320982c7e4d2647265e3a469166f77374",
+    "priorLocalChangesRetained": [
+      "src/render/props.js",
+      "src/sim/render-view.js",
+      "tests/render-props.test.js",
+      "tests/render-view.test.js",
+      "benchmarks/safe-render-optimizations.json"
+    ],
+    "candidateSourceSHA256": {
+      "paths-before.js": "d9e48afa339fa1dbcafd1b4049848371feab0a6467933c8e4de8f6fba0b6825b",
+      "sim-roads-before.js": "4265cc26301b3b0f400ccfc8ae0df5afffbe32b500b968a56ec63801a82eae82"
+    },
+    "fullSourceAndTestsSnapshot": "/tmp/hearthvale-desktop-perf-20261016/baseline-source-tests.tgz"
+  },
+  "retainedChanges": [
+    "Rasterize zero-length path capsules without projecting onto a segment. Same square root, tie rules and pixel values.",
+    "Read node widths from a Float64 lookup of the existing tier/wear/planned/towpath key after each field scan.",
+    "Reuse structural-grid component labels only when dimensions and every rewritten stored Float32 cost retain exactly the same cost < Infinity result. Preserve all other cache invalidation."
+  ],
+  "hardware": {
+    "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M5 Pro, Unspecified Version)",
+    "node": "v24.14.0",
+    "platform": "macOS-27.0.1-arm64-arm-64bit"
+  },
+  "primaryExperiment": {
+    "method": "One sequential before/current pair in the same Chrome process, isolated contexts, real city fixture, camera distance120 and deterministic gentle pan. Original two candidate modules substituted through Vite for before; all other code/settings unchanged. CDP CPU profiler active equally in both.",
+    "before": {
+      "label": "close-pair-before",
+      "variant": "before",
+      "dpr": 2,
+      "settings": {
+        "viewport": [
+          1440,
+          900
+        ],
+        "quality": "high",
+        "warmupMs": 8000,
+        "sampleMs": 16000,
+        "cameraDistance": 120,
+        "cameraPan": true,
+        "batteryEnvironment": "emulated charging/full battery",
+        "decisionModel": false,
+        "batterySaver": "off",
+        "speed": 1
+      },
+      "loadedSource": {
+        "pointCapsule": false,
+        "componentReuse": false
+      },
+      "durationMs": 16003.5,
+      "raf": {
+        "count": 478,
+        "meanMs": 33.47154811715481,
+        "p50Ms": 33.30000000000109,
+        "p95Ms": 33.400000000001455,
+        "maxMs": 66.70000000000073
+      },
+      "frameCpu": {
+        "count": 479,
+        "meanMs": 5.282045930312919,
+        "p50Ms": 3.399999976158142,
+        "p95Ms": 13.600000023841858,
+        "maxMs": 80
+      },
+      "worldCpu": {
+        "count": 479,
+        "meanMs": 3.017954071030985,
+        "p50Ms": 2.600000023841858,
+        "p95Ms": 9.600000023841858,
+        "maxMs": 18.400000035762787
+      },
+      "uiCpu": {
+        "count": 479,
+        "meanMs": 0.09665970824705535,
+        "p50Ms": 0,
+        "p95Ms": 0.800000011920929,
+        "maxMs": 1.0999999642372131
+      },
+      "draws": 479,
+      "stageMeans": {
+        "grade": 0.018437500000000013,
+        "roads": 1.7567187499999997,
+        "buildings": 0.0325,
+        "people": 0.07453125,
+        "trees": 0.08937500000000001,
+        "decals": 0.034999999999999955,
+        "particles": 0.005000000000000001,
+        "props": 0.2204687499999999,
+        "decor": 0.17281249999999998,
+        "labels": 0.012656250000000008,
+        "lights": 0.004843750000000001,
+        "render": 0.59640625
+      },
+      "sampleStart": {
+        "tick": 55270,
+        "acc": 0.09985,
+        "year": 92,
+        "month": 1,
+        "pop": 5059,
+        "people": 2000,
+        "buildings": 640,
+        "moving": 1594,
+        "routes": 1998,
+        "roadsVersion": 16551
+      },
+      "final": {
+        "speed": 1,
+        "power": {
+          "saving": false,
+          "chosen": false,
+          "lowBattery": false,
+          "unplugged": false,
+          "batteryKnown": true,
+          "mode": "off"
+        },
+        "tick": 55351,
+        "people": 2000,
+        "view": {
+          "fps": 30,
+          "frameMs": 3.87,
+          "drawCalls": 105,
+          "triangles": 2341217,
+          "tier": "high",
+          "saving": false,
+          "refreshHz": 30,
+          "pixelRatio": 1.75,
+          "buildings": 639,
+          "instances": 3166,
+          "people": 2000,
+          "cpu": {
+            "grade": 0.02,
+            "roads": 2.32,
+            "buildings": 0.03,
+            "people": 0.08,
+            "trees": 0.11,
+            "decals": 0,
+            "particles": 0,
+            "props": 0.6,
+            "decor": 0.1,
+            "labels": 0.01,
+            "lights": 0,
+            "render": 0.59
+          },
+          "simMs": 2.700841779861691,
+          "layout": "desk"
+        }
+      },
+      "errors": []
+    },
+    "after": {
+      "label": "close-pair-current",
+      "variant": "current",
+      "dpr": 2,
+      "settings": {
+        "viewport": [
+          1440,
+          900
+        ],
+        "quality": "high",
+        "warmupMs": 8000,
+        "sampleMs": 16000,
+        "cameraDistance": 120,
+        "cameraPan": true,
+        "batteryEnvironment": "emulated charging/full battery",
+        "decisionModel": false,
+        "batterySaver": "off",
+        "speed": 1
+      },
+      "loadedSource": {
+        "pointCapsule": true,
+        "componentReuse": true
+      },
+      "durationMs": 16004.800000011921,
+      "raf": {
+        "count": 478,
+        "meanMs": 33.47133891213389,
+        "p50Ms": 33.30000000000109,
+        "p95Ms": 33.400000000001455,
+        "maxMs": 66.79999999999927
+      },
+      "frameCpu": {
+        "count": 479,
+        "meanMs": 4.889144048312512,
+        "p50Ms": 3.400000035762787,
+        "p95Ms": 12,
+        "maxMs": 74.5
+      },
+      "worldCpu": {
+        "count": 479,
+        "meanMs": 2.8866388317438654,
+        "p50Ms": 2.599999964237213,
+        "p95Ms": 8.700000047683716,
+        "maxMs": 17.19999998807907
+      },
+      "uiCpu": {
+        "count": 479,
+        "meanMs": 0.0995824635651017,
+        "p50Ms": 0,
+        "p95Ms": 0.800000011920929,
+        "maxMs": 1.5
+      },
+      "draws": 479,
+      "stageMeans": {
+        "grade": 0.017301587301587297,
+        "roads": 1.613174603174603,
+        "buildings": 0.036666666666666695,
+        "people": 0.06809523809523807,
+        "trees": 0.08555555555555555,
+        "decals": 0.040476190476190464,
+        "particles": 0.00587301587301587,
+        "props": 0.22936507936507927,
+        "decor": 0.16333333333333325,
+        "labels": 0.011746031746031739,
+        "lights": 0.004920634920634917,
+        "render": 0.6014285714285713
+      },
+      "sampleStart": {
+        "tick": 55270,
+        "acc": 0.08314999999999968,
+        "year": 92,
+        "month": 1,
+        "pop": 5059,
+        "people": 2000,
+        "buildings": 640,
+        "moving": 1592,
+        "routes": 1996,
+        "roadsVersion": 16551
+      },
+      "final": {
+        "speed": 1,
+        "power": {
+          "saving": false,
+          "chosen": false,
+          "lowBattery": false,
+          "unplugged": false,
+          "batteryKnown": true,
+          "mode": "off"
+        },
+        "tick": 55351,
+        "people": 2000,
+        "view": {
+          "fps": 30,
+          "frameMs": 2.45,
+          "drawCalls": 105,
+          "triangles": 2341217,
+          "tier": "high",
+          "saving": false,
+          "refreshHz": 30,
+          "pixelRatio": 1.75,
+          "buildings": 639,
+          "instances": 3166,
+          "people": 2000,
+          "cpu": {
+            "grade": 0.01,
+            "roads": 1.47,
+            "buildings": 0.03,
+            "people": 0.07,
+            "trees": 0.1,
+            "decals": 0.01,
+            "particles": 0,
+            "props": 0.06,
+            "decor": 0.1,
+            "labels": 0,
+            "lights": 0,
+            "render": 0.59
+          },
+          "simMs": 2.2563842956620137,
+          "layout": "desk"
+        }
+      },
+      "errors": []
+    },
+    "observedReductionsPercent": {
+      "mainFrameMeanCpu": 7.44,
+      "mainFrameP95Cpu": 11.76,
+      "worldMeanCpu": 4.35,
+      "roadsStageMeanCpu": 8.17
+    },
+    "sampledSelfCpuMs": {
+      "before": {
+        "capsule": 244.07,
+        "drawTile": 62.4,
+        "components": 61.3
+      },
+      "after": {
+        "capsule": 208.11,
+        "drawTile": 56.27,
+        "components": 1.25
+      }
+    },
+    "frameRateConclusion": "No FPS improvement claimed. Both measured about30Hz RAF with p50=33.3ms and p95=33.4ms.",
+    "caveats": [
+      "This is one paired observation, not a statistical performance guarantee. CDP sampling and timing instrumentation were enabled in both runs.",
+      "Live simulation timing differs slightly:1594 vs1592 moving walkers and1998 vs1996 routes at sample start. Both start at tick55270, pop5059,2000 walkers,640 buildings and roadsVersion16551; both end tick55351 with639 buildings.",
+      "The browser Battery API is emulated as plugged in/full battery for this desktop benchmark. Actual host power/OS scheduling still affects CPU timings and RAF. Production battery behavior is unchanged."
+    ]
+  },
+  "discardedExperiments": {
+    "reason": "The physical host crossed into low-battery behavior, changing RAF cadence and sometimes the actual pixel-ratio cap despite the Off saver preference. Those unmatched overview runs are not used for before/after frame-time conclusions.",
+    "labels": [
+      "baseline",
+      "after1",
+      "before2",
+      "after2"
+    ]
+  },
+  "exactOutputValidation": {
+    "pathTextures": {
+      "comparisons": 381,
+      "method": "Paired original/current field updates on identical roads. Full texture bytes, returned dirty rectangles and pending queue lengths equal after every full/budgeted/tier/wear/planned/towpath update.",
+      "cases": [
+        {
+          "name": "town",
+          "checks": 44,
+          "textureBytes": 4718592
+        },
+        {
+          "name": "city",
+          "checks": 81,
+          "textureBytes": 4718592
+        },
+        {
+          "name": "synthetic-seed1",
+          "checks": 32,
+          "textureBytes": 51200
+        },
+        {
+          "name": "synthetic-seed2",
+          "checks": 32,
+          "textureBytes": 51200
+        },
+        {
+          "name": "synthetic-seed3",
+          "checks": 32,
+          "textureBytes": 51200
+        },
+        {
+          "name": "synthetic-seed4",
+          "checks": 32,
+          "textureBytes": 51200
+        },
+        {
+          "name": "synthetic-seed5",
+          "checks": 32,
+          "textureBytes": 51200
+        },
+        {
+          "name": "synthetic-seed6",
+          "checks": 32,
+          "textureBytes": 51200
+        },
+        {
+          "name": "synthetic-seed7",
+          "checks": 32,
+          "textureBytes": 51200
+        },
+        {
+          "name": "synthetic-seed8",
+          "checks": 32,
+          "textureBytes": 51200
+        }
+      ],
+      "durableOracle": "tests/render-path-field.test.js: nine immutable pre-optimization main hashes covering full/budgeted redraws, mixed tiers/wear/planned/towpath flags, unchanged updates and replacement of the tier array."
+    },
+    "structuralGrid": {
+      "checks": 48,
+      "reused": 46,
+      "invalidated": 2,
+      "beforeMedianMs": 0.7243330000000014,
+      "afterMedianMs": 0.05545900000004167,
+      "reductionPct": 92.34343872223943,
+      "beforeMs": [
+        0.8599999999999,
+        0.9427500000000464,
+        3.241542000000095,
+        2.58466599999997,
+        0.6972079999999323,
+        0.7430840000000671,
+        0.6791249999999991,
+        0.7393749999999955,
+        0.7243330000000014,
+        5.309000000000083,
+        0.011167000000000371,
+        0.7416249999999991,
+        2.08562500000005,
+        0.0009159999999610591,
+        0.00037500000007639755,
+        0.7008749999999964,
+        0.00045799999998052954,
+        0.7071670000000267,
+        0.731708000000026,
+        0.7154580000000124,
+        0.7595830000000205,
+        4.312708999999927,
+        0.7296249999999418,
+        0.0007080000000314612,
+        0.7313339999999471,
+        0.00041699999997035775,
+        0.7289580000000342,
+        0.7223750000000564,
+        0.9479999999999791,
+        0.76887499999998,
+        6.215832999999975,
+        0.7176249999999982,
+        0.6559999999999491,
+        0.6700829999999769,
+        0.0006250000000136424,
+        0.7363329999999451,
+        0.0004999999999881766,
+        0.6722919999999704,
+        0.6635420000000067,
+        2.747333000000026,
+        0.006499999999959982,
+        0.0006660000000238142
+      ],
+      "afterMs": [
+        0.11679100000003473,
+        0.05983299999991232,
+        0.10158400000000256,
+        2.543042000000014,
+        0.04112499999996544,
+        0.049042000000099506,
+        0.04800000000000182,
+        0.03462500000000546,
+        0.05470900000000256,
+        4.444707999999991,
+        0.008500000000026375,
+        0.055000000000063665,
+        2.2374580000000606,
+        0.009584000000018023,
+        0.0003749999999627107,
+        0.05804200000000037,
+        0.00045799999998052954,
+        0.06354099999998652,
+        0.07529200000010405,
+        0.06366700000000947,
+        0.05924999999990632,
+        4.306459000000018,
+        0.0625840000000153,
+        0.0004999999999881766,
+        0.05412499999999909,
+        0.00041699999997035775,
+        0.06362500000000182,
+        0.06966600000009748,
+        0.0810830000000351,
+        0.05895800000007512,
+        1.7042079999999942,
+        0.04095900000004349,
+        0.055749999999989086,
+        0.048042000000009466,
+        0.0003749999999627107,
+        0.05545900000004167,
+        0.0003329999999550637,
+        0.03033299999992778,
+        0.027333999999996195,
+        1.6276659999999765,
+        0.0013750000000527507,
+        0.0005419999999958236
+      ],
+      "method": "Actual city structuralGrid+components after paired identical tier edits, full rebuilds and building insertion/removal; exact cost/water/nodes/labels and representative complete findRoute outputs."
+    },
+    "structuralMicrobenchmarkCaveat": "The ~92% median reduction applies only to isolated structuralGrid+components under this city mutation sequence, which includes some no-op edits. It is not overall navigation or game performance.",
+    "durableStructuralRegression": "tests/structural-components.test.js covers exact labels/routes, cost-only patch/full rebuild reuse, barrier insertion/removal invalidation and dimension safety."
+  },
+  "validation": {
+    "focusedTests": "2/2 pass",
+    "fullNodeSuite": "391/395 pass; same four upstream failures already reproduced on unmodified main during integration.",
+    "existingFailingTests": [
+      "hill-town drawn walker/foundation collision",
+      "T-junction inside corner fill",
+      "towpath lane boundary",
+      "walkers at1x footprint/water invariant"
+    ],
+    "build": "pass",
+    "browser": "Real Metal renderer; no page errors in either primary profile. Fixed high quality, saving=false and pixelRatio1.75 checked throughout both samples.",
+    "logsDirectory": "/tmp/hearthvale-desktop-perf-20261016"
+  },
+  "reproduce": {
+    "desktopPair": "node scripts/benchmark-desktop.js --label=close-pair --variants=before,current --baseline-ref=4bf9a75 --dprs=2 --distance=120 --pan=1 --out=/tmp/hearthvale-desktop-repro",
+    "overview": "node scripts/benchmark-desktop.js --label=city --dprs=1,2 --out=/tmp/hearthvale-desktop-repro",
+    "focusedTests": "node --test tests/render-path-field.test.js tests/structural-components.test.js",
+    "fullTests": "npm test",
+    "build": "npm run build",
+    "rawProfilesAndPairedOracleScripts": "/tmp/hearthvale-desktop-perf-20261016"
+  }
+}

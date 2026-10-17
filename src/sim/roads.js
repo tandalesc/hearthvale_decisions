@@ -1008,6 +1008,12 @@ function patchFootprints(state, prev, key, tick) {
 const structuralCache = new WeakMap();
 const structuralDirty = new WeakMap();   // roads -> cells whose tier changed since the build
 
+// Region labels depend only on grid dimensions and cost < Infinity, not the
+// cost of walking through each open cell. Reuse them only while that stays true.
+function structuralComponents(grid) {
+  return grid?.W === GRID_W && grid?.H === GRID_H && grid.comp?.length === CELLS ? grid.comp : undefined;
+}
+
 export function structuralGrid(state) {
   ensureRoads(state);
   const r = state.roads;
@@ -1026,9 +1032,13 @@ export function structuralGrid(state) {
   const cost = new Float32Array(CELLS);
   const wcode = new Uint8Array(CELLS);
   const ctx = structuralContext(state);
-  for (let i = 0; i < CELLS; i++) structuralCell(ctx, i, cost, wcode);
+  let comp = structuralComponents(prev);
+  for (let i = 0; i < CELLS; i++) {
+    structuralCell(ctx, i, cost, wcode);
+    if (comp && (cost[i] < Infinity) !== (prev.cost[i] < Infinity)) comp = undefined;
+  }
   const nodes = nodesFor(r, prev, structuralNodeDirty);
-  grid = owned({ key: `${base}:${r.version}`, bucket: base, base, roads: r, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height, ...nodes }, r);
+  grid = owned({ key: `${base}:${r.version}`, bucket: base, base, roads: r, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height, ...nodes, comp }, r);
   structuralCache.set(state, grid);
   structuralDirty.set(r, new Set());
   return grid;
@@ -1075,6 +1085,7 @@ function structuralCell({ r, t, adj, fp, fords }, i, cost, wcode) {
 // into a copy: anything cached on the old grid object stays with it.
 function patchStructural(state, prev, dirty, nodeDirty) {
   const cost = prev.cost.slice(), wcode = prev.water.slice();
+  let comp = structuralComponents(prev);
   const nodes = nodeDirty.size ? patchedNodes(state.roads, prev, nodeDirty) : { nodeX: prev.nodeX, nodeZ: prev.nodeZ, nodeLinks: prev.nodeLinks };
   const ctx = structuralContext(state);
   for (const i of dirty) {
@@ -1082,10 +1093,14 @@ function patchStructural(state, prev, dirty, nodeDirty) {
     for (let dz = -1; dz <= 1; dz++)
       for (let dx = -1; dx <= 1; dx++) {
         const x = cx + dx, z = cz + dz;
-        if (x >= 0 && z >= 0 && x < GRID_W && z < GRID_H) structuralCell(ctx, z * GRID_W + x, cost, wcode);
+        if (x >= 0 && z >= 0 && x < GRID_W && z < GRID_H) {
+          const i = z * GRID_W + x;
+          structuralCell(ctx, i, cost, wcode);
+          if (comp && (cost[i] < Infinity) !== (prev.cost[i] < Infinity)) comp = undefined;
+        }
       }
   }
-  return { ...prev, key: `${prev.base}:${state.roads.version}`, cost, water: wcode, ...nodes, comp: undefined, coarse: undefined, blockCost: undefined };
+  return { ...prev, key: `${prev.base}:${state.roads.version}`, cost, water: wcode, ...nodes, comp, coarse: undefined, blockCost: undefined };
 }
 
 // ---------------------------------------------------------------- crossings

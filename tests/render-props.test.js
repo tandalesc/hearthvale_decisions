@@ -1,10 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Geo, buildFoot, buildEmbankment, buildCrossing } from '../src/render/props.js';
+import { Geo, buildFoot, buildEmbankment, buildCrossing, createProps } from '../src/render/props.js';
+import * as THREE from 'three';
+import {createGrade} from '../src/render/grade.js';
 import { riverX, heightAt, WATER_HALF } from '../src/terrain.js';
 import { BRIDGE_DECK } from '../src/sim/people.js';
 
 const ys = (g) => g.p.filter((_, i) => i % 3 === 1);
+
+test('street furniture rebuilds after the one-second boundary and ground changes', () => {
+  const scene = new THREE.Scene();
+  let groundVersion = 1;
+  const props = createProps({scene, grade: createGrade(), heightAt, ground: {version: () => groundVersion}});
+  const view = {era: 0, roads: {version: 1}, buildings: [], bridges: [], lamps: [], projects: []};
+  const mesh = scene.getObjectByName('props').children[0];
+  const update = (time) => props.update(view, {time, target: new THREE.Vector3()});
+  try {
+    update(0);
+    const first = mesh.geometry;
+    view.roads.version++;
+    update(0.5);
+    update(1);
+    assert.equal(mesh.geometry, first, 'the exact boundary remains throttled');
+    update(1.001);
+    const second = mesh.geometry;
+    assert.notEqual(second, first, 'a pending road change is rendered after the boundary');
+    update(2.002);
+    assert.equal(mesh.geometry, second, 'unchanged furniture keeps its geometry');
+    groundVersion++;
+    update(2.003);
+    assert.notEqual(mesh.geometry, second, 'new ground pads re-seat the same furniture');
+  } finally {
+    props.dispose();
+  }
+});
 
 test('footbridge: a narrow plank walkway at the walkers deck height', () => {
   const g = new Geo();

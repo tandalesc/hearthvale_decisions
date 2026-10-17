@@ -247,11 +247,13 @@ function writeRow(buf, stride, i, p, state, now, speed, lag) {
   const y = walkerY(state, x, z);
   // Vertical speed: from here to the current waypoint, so ramps and decks are followed.
   let vy = 0;
+  let segmentOnDeck = false;
   if (hasWaypoint) {
     // Aim at the waypoint, or one re-anchor step ahead on a deck (people.DECK_STEP).
     const wx = route[seg], wz = route[seg + 1];
     const dist = Math.hypot(wx - x, wz - z);
-    const step = crossesDeck(state, x, z, wx, wz) ? Math.min(dist, DECK_STEP) : dist;
+    segmentOnDeck = crossesDeck(state, x, z, wx, wz);
+    const step = segmentOnDeck ? Math.min(dist, DECK_STEP) : dist;
     if (step > 1e-3) vy = ((walkerY(state, x + ((wx - x) * step) / dist, z + ((wz - z) * step) / dist) - y) * p.speed) / step;
   }
   const simNow = state.time.tick * TICK_SECONDS + lag;
@@ -272,13 +274,13 @@ function writeRow(buf, stride, i, p, state, now, speed, lag) {
   buf[o + 13] = p.look.hat;
   buf[o + 14] = p.indoor ? 0 : 0.9 + 0.2 * hashUnit(p.id);
   buf[o + 15] = seg === p.task?.seg || !hasWaypoint ? p.heading : Math.atan2(vx, vz);
-  if (stride === PERSON_STRIDE_EXTENDED) writeSegmentEnd(buf, o, p, x, z, seg, now, speed, live, state);
+  if (stride === PERSON_STRIDE_EXTENDED) writeSegmentEnd(buf, o, p, x, z, seg, now, speed, live, state, segmentOnDeck);
   return live && route && seg + 3 < route.length ? 1 : 0;
 }
 
 // The current waypoint and when the walker gets there (renderer clock). The shader
 // stops extrapolating at t1, so a late row update never carries a walker past a corner.
-function writeSegmentEnd(buf, o, p, x, z, seg, now, speed, live, state) {
+function writeSegmentEnd(buf, o, p, x, z, seg, now, speed, live, state, segmentOnDeck) {
   const route = p.task?.route;
   const ahead = live && route && seg + 1 < route.length;
   if (ahead) {
@@ -291,7 +293,8 @@ function writeSegmentEnd(buf, o, p, x, z, seg, now, speed, live, state) {
     buf[o + 17] = x;
     buf[o + 18] = z;
   }
-  const onDeck = ahead ? crossesDeck(state, x, z, route[seg], route[seg + 1]) : deckAt(state, x, z);
+  // The height calculation already sampled this same segment for a live walker.
+  const onDeck = ahead ? segmentOnDeck : deckAt(state, x, z);
   buf[o + 19] = onDeck ? 1 : 0;
 }
 

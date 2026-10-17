@@ -1,0 +1,251 @@
+{
+  "date": "2026-10-16",
+  "scope": "Performance changes ported onto latest main; prior timing results retained explicitly as historical evidence.",
+  "currentMainIntegration": {
+    "baseCommit": "4bf9a75320982c7e4d2647265e3a469166f77374",
+    "branch": "main",
+    "backupStash": "e9b9d7dc3a36b2f35950fe51c583a196e00179b5",
+    "backupDirectory": "/tmp/hearthvale-latest-integration-20261016",
+    "port": "Reuse the already sampled bridge deck result for upstream resolved route segment; preserve new corner traversal and row renewal. Preserve the strict props cooldown gate.",
+    "validation": {
+      "focusedNodeTests": "5/5 pass",
+      "fullNodeSuite": "389/393 pass. Existing failing tests: hill-town drawn walkers/foundation collision; T-junction corner fill; towpath bank lane; walkers at 1x. All four test names also fail when the exact unmodified main render-view and props sources are loaded via a read-only module hook. The final walker symptom varies with scheduling.",
+      "build": "pass",
+      "offlineBrowserSmoke": "pass: installed Chrome with Metal ANGLE, city game and renderer dev page; real renderer, nonzero draw calls, no page or renderer errors. Decision model disabled and /api requests blocked. Startup smoke is not a performance measurement.",
+      "mainBeforeAfterEquivalence": {
+        "walkerRows": "Exact complete Float32Array, dirty ranges and building events match across moving city, dense long routes and routes crossing sub-tick corners: 3 workloads x 2 row strides x 36 updates.",
+        "props": {
+          "method": "City fixture: SHA256 of all geometry attributes, indices, instance transforms and visibility after each update; bridge style/progress/removal plus road/ground changes, strict cooldown boundary. At least three distinct geometry hashes required.",
+          "frames": [
+            {
+              "time": 0,
+              "hash": "fe80b20536f29d22585aa4b07449b8482774fc672a23247bcbf4ce5a27ca5385"
+            },
+            {
+              "time": 0.016,
+              "hash": "fe80b20536f29d22585aa4b07449b8482774fc672a23247bcbf4ce5a27ca5385"
+            },
+            {
+              "time": 0.5,
+              "hash": "fe80b20536f29d22585aa4b07449b8482774fc672a23247bcbf4ce5a27ca5385"
+            },
+            {
+              "time": 1,
+              "hash": "fe80b20536f29d22585aa4b07449b8482774fc672a23247bcbf4ce5a27ca5385"
+            },
+            {
+              "time": 1.001,
+              "hash": "77b655735aac980d9e4ce50c712d654722b19f08dab192152be6e508b8252a05"
+            },
+            {
+              "time": 1.5,
+              "hash": "77b655735aac980d9e4ce50c712d654722b19f08dab192152be6e508b8252a05"
+            },
+            {
+              "time": 2.002,
+              "hash": "d4761e5f5600fe1ed88c2537cb8222c018fffa33b79ed83c01aafd3b8e5233a4"
+            },
+            {
+              "time": 2.003,
+              "hash": "d4761e5f5600fe1ed88c2537cb8222c018fffa33b79ed83c01aafd3b8e5233a4"
+            },
+            {
+              "time": 2.5,
+              "hash": "fa620d90dde012387293d45629d897589e369dde74627a4aa679a9bef9b0e9eb"
+            },
+            {
+              "time": 3.004,
+              "hash": "11e1a103db00c5b324a23f4b6ed7b30f7ce4cd506b755056e7db74f866739d75"
+            }
+          ]
+        }
+      },
+      "unmodifiedMainReproduction": {
+        "command": "node --import /tmp/hearthvale-latest-integration-20261016/load-unmodified-main.mjs --test --test-name-pattern='a hill town|a T-junction|a towpath follows|at 1x' tests/foundations.test.js tests/paths.test.js tests/walkers.test.js",
+        "result": "All 4 existing failing tests reproduced (0/4 pass).",
+        "log": "/tmp/hearthvale-latest-integration-20261016/unmodified-main-failures.log"
+      }
+    },
+    "performanceTiming": "No timings claimed for the integrated main code.",
+    "originalMainSourceHashes": {
+      "render-view-main-original.js": "2953188f013276e93b3e233b313558432710ef420c500c5cddc68c44bb95b745",
+      "props-main-original.js": "ea9ad73897f981fd74fe630deeb37c26f946195ec51049766e68b0ec46f4a9e1"
+    },
+    "finalState": "main at origin/main 4bf9a75320982c7e4d2647265e3a469166f77374, with only the five performance code/test/evidence paths uncommitted; original full working tree preserved in the backup stash."
+  },
+  "historicalPreMain": {
+    "date": "2026-10-16",
+    "scope": "Two local CPU optimizations; preserves the pre-existing uncommitted working tree.",
+    "changes": [
+      "Reuse the current route segment deck sample for vertical velocity and the extended walker row deck flag.",
+      "Evaluate the bridge/street-furniture signature only when its existing strict greater-than-one-second rebuild cooldown permits rebuilding."
+    ],
+    "runtime": {
+      "node": "v24.14.0",
+      "platform": "macOS-27.0.1-arm64-arm-64bit",
+      "architecture": "arm64"
+    },
+    "walkerSync": {
+      "method": "Alternating original/current within one Node process; 30 warmup + 15 x 20 forced-rewrite syncs per version. Same state; complete Float32Array equality for 16/20-float rows and 4 speeds over 36 syncs.",
+      "results": [
+        {
+          "name": "moving-city",
+          "people": 2000,
+          "moving": 54,
+          "beforeMedianMs": 0.3258375000000001,
+          "afterMedianMs": 0.3220812500000022,
+          "reductionPct": 1.152798557562562,
+          "beforeRoundsMs": [
+            0.3168646000000024,
+            0.32110835000000293,
+            0.32259375000000434,
+            0.3227437500000008,
+            0.32321665000000055,
+            0.32435834999999996,
+            0.3257937499999969,
+            0.3258375000000001,
+            0.3312542000000008,
+            0.3323062499999992,
+            0.33282294999999634,
+            0.3331562500000018,
+            0.33553750000000376,
+            0.34093335000000025,
+            0.34207289999999946
+          ],
+          "afterRoundsMs": [
+            0.31299789999999916,
+            0.3146500000000003,
+            0.3154500000000041,
+            0.3173417000000029,
+            0.3175896000000023,
+            0.3187354000000028,
+            0.31968749999999774,
+            0.3220812500000022,
+            0.32244790000000306,
+            0.32275000000000204,
+            0.32275414999999724,
+            0.3250999999999976,
+            0.3277166999999963,
+            0.33663960000000087,
+            0.35000210000000037
+          ]
+        },
+        {
+          "name": "dense-long-routes",
+          "people": 2000,
+          "moving": 2000,
+          "beforeMedianMs": 1.9451832999999965,
+          "afterMedianMs": 1.3000270999999999,
+          "reductionPct": 33.16685887648726,
+          "beforeRoundsMs": [
+            1.8977207999999905,
+            1.913704150000001,
+            1.9151354500000024,
+            1.9252707999999985,
+            1.9283458499999937,
+            1.936749999999995,
+            1.9440145500000086,
+            1.9451832999999965,
+            1.9485312499999963,
+            1.9554000000000087,
+            1.9648916499999927,
+            1.966202050000004,
+            1.9966895500000077,
+            2.0028458000000002,
+            2.006372950000002
+          ],
+          "afterRoundsMs": [
+            1.2648207999999954,
+            1.2751250000000027,
+            1.2772500000000035,
+            1.2811437500000011,
+            1.284066699999994,
+            1.2901562500000068,
+            1.2935375000000022,
+            1.3000270999999999,
+            1.300272899999993,
+            1.3013395500000002,
+            1.302237500000001,
+            1.3120416500000034,
+            1.324977100000001,
+            1.3309791499999961,
+            1.350512500000002
+          ]
+        }
+      ]
+    },
+    "equivalence": {
+      "walkerRows": "Complete Float32Array, dirty range and building event equality against the pre-change source: both 16- and 20-float row formats, speeds 0/0.5/1/8 over 36 updates on each workload.",
+      "props": {
+        "method": "City fixture: SHA256 of all geometry attributes, indices, instance transforms and visibility after each update; bridge style/progress/removal plus road/ground changes, strict cooldown boundary. At least three distinct geometry hashes required.",
+        "frames": [
+          {
+            "time": 0,
+            "hash": "5dc7ed14d2e5dd5d01ff77fe7a1fe29569d384b8291af42cdff1d9213fe995da"
+          },
+          {
+            "time": 0.016,
+            "hash": "5dc7ed14d2e5dd5d01ff77fe7a1fe29569d384b8291af42cdff1d9213fe995da"
+          },
+          {
+            "time": 0.5,
+            "hash": "5dc7ed14d2e5dd5d01ff77fe7a1fe29569d384b8291af42cdff1d9213fe995da"
+          },
+          {
+            "time": 1,
+            "hash": "5dc7ed14d2e5dd5d01ff77fe7a1fe29569d384b8291af42cdff1d9213fe995da"
+          },
+          {
+            "time": 1.001,
+            "hash": "6b5aca7b3c7d643e957a3af58ae091aafc0235668bfa2d1bc5c44047debf4f3e"
+          },
+          {
+            "time": 1.5,
+            "hash": "6b5aca7b3c7d643e957a3af58ae091aafc0235668bfa2d1bc5c44047debf4f3e"
+          },
+          {
+            "time": 2.002,
+            "hash": "fc090f6ec582f44cba354c22b649813d72f0a24d075785206e0d47b2e8ed940a"
+          },
+          {
+            "time": 2.003,
+            "hash": "fc090f6ec582f44cba354c22b649813d72f0a24d075785206e0d47b2e8ed940a"
+          },
+          {
+            "time": 2.5,
+            "hash": "03c58196fd79086d5fadc8c03555f1d6cee9b6af50590af3487facbd8c92a245"
+          },
+          {
+            "time": 3.004,
+            "hash": "73b7f0f8094ff52c3a23fa0c1991ec9aaf53a228a9a3498031beca17333c0f7a"
+          }
+        ]
+      }
+    },
+    "caveats": [
+      "These are CPU sync microbenchmarks, not total frame-rate or GPU measurements.",
+      "Both sync versions run in alternating order within the same process with identical state; speed alternates 1/0.5 to force row rewrites.",
+      "The loaded city after 60 simulation ticks has only 54 moving walkers out of 2000. Its measured ~1% difference is too small to claim a practical improvement.",
+      "Dense workload assigns all 2000 walkers synthetic long segments, alternating a real city bridge and a 40-unit nearby ground route. Its gain illustrates the redundant sampling cost under heavy movement.",
+      "The props cooldown skips signature scans immediately after a rebuild; unchanged scenes beyond the cooldown retain their original scan frequency."
+    ],
+    "baselineSources": {
+      "render-view-original.js": "6b09a858f8d98f116a2d2511cde63586b76539f1e938872614dd43fa6e25b942",
+      "props-original.js": "a5fcad29cc9bd7cac776c82455af56af7854956c94fa62db0ccef2311143ca20"
+    },
+    "scratchReproduction": {
+      "directory": "/tmp/hearthvale-perf-pass",
+      "walkerCommand": "node /tmp/hearthvale-perf-pass/compare-render-view.mjs",
+      "propsCommand": "node /tmp/hearthvale-perf-pass/compare-props.mjs"
+    },
+    "validation": {
+      "focusedNodeTests": "5/5 pass",
+      "build": "pass",
+      "baselineNodeSuite": "263/264 pass; existing walkers 1x wet-position failure: 132 samples, person 914 at x=-17.496160076744005 z=9.970983714744577",
+      "finalNodeSuite": "266/266 pass (45.55 seconds). The earlier baseline wet-walker failure did not recur; movement logic was not changed.",
+      "browserSmoke": "Pass: installed Chrome with Metal ANGLE, city live game and renderer dev page; real renderer and no page/renderer errors. Decision model disabled and all /api routes blocked.",
+      "logsDirectory": "/tmp/hearthvale-perf-pass"
+    },
+    "applicability": "Historical measurements on battery snapshot 1e1d3e9 plus the original performance changes, BEFORE integrating main 4bf9a75. These timing numbers do not measure the current main code."
+  }
+}

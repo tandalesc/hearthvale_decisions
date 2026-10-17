@@ -66,6 +66,16 @@ export function halfWidth(tier, bucket) {
   return PATH_HALF[tier] * (0.88 + 0.12 * bucket);
 }
 
+// The scan's key includes every input to a node's width. Keep the calculation
+// in double precision, as when it was repeated for each link and tile.
+const NODE_HALF = new Float64Array(256);
+for (let key = 0; key < NODE_HALF.length; key++) {
+  const tier = (key >> 2) & 7;
+  if (tier < 1 || tier >= PATH_HALF.length) continue;
+  const half = halfWidth(tier, key & 3);
+  NODE_HALF[key] = key & 0x20 ? TOW_HALF[tier] : key & 0x40 ? Math.max(half, PLANNED_HALF) : half;
+}
+
 /**
  * createPathField({W, H, cell, ox, oz}) -> {data, TW, TH, update(roads, budget) -> rows|null}
  * data: Uint8Array(TW * TH * 2), RG per texel. ox, oz: the grid's world origin.
@@ -96,12 +106,7 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
     return 0x80 | (isPlanned(roads, i) ? 0x40 : 0) | (isLane(roads, i) ? 0x20 : 0) | (t << 2) | wearBucket(t, roads.wear[i]);
   }
 
-  function nodeHalf(roads, i) {
-    const t = roads.tier[i];
-    if (isLane(roads, i)) return TOW_HALF[t];
-    const h = halfWidth(t, wearBucket(t, roads.wear[i]));
-    return isPlanned(roads, i) ? Math.max(h, PLANNED_HALF) : h;
-  }
+  const nodeHalf = (i) => NODE_HALF[key[i]];
 
   function markTilesAround(cx, cz) {
     const tx0 = Math.max(0, Math.floor((cx - MARGIN) / PATH_TILE)), tx1 = Math.min(tilesX - 1, Math.floor((cx + MARGIN) / PATH_TILE));
@@ -156,6 +161,24 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
     const lz = Math.max(0, Math.floor(Math.min(Az, Bz) - reach)), hz = Math.min(SW - 1, Math.ceil(Math.max(Az, Bz) + reach));
     if (lx > hx || lz > hz) return;
     const dx = Bx - Ax, dz = Bz - Az;
+    // Node caps and yard discs have no segment to project onto.
+    if (dx === 0 && dz === 0) {
+      for (let z = lz; z <= hz; z++) {
+        const pz = z + 0.5 - Az;
+        const pz2 = pz * pz;
+        let o = z * SW + lx;
+        for (let x = lx; x <= hx; x++, o++) {
+          const px = x + 0.5 - Ax;
+          const v = hw - Math.sqrt(px * px + pz2) * s;
+          const cur = sv[o];
+          if (v > cur + 0.004 || (v >= cur - 0.004 && tier > st[o])) {
+            sv[o] = v;
+            st[o] = tier;
+          }
+        }
+      }
+      return;
+    }
     const len2 = dx * dx + dz * dz;
     const inv = len2 > 1e-9 ? 1 / len2 : 0;
     for (let z = lz; z <= hz; z++) {
@@ -234,14 +257,14 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
         const ti = tier[i];
         const links = nl[i];
         if (!ti || !links) continue;   // a lone worn cell draws no strip
-        const hi = nodeHalf(roads, i);
+        const hi = nodeHalf(i);
         // Forward links only (directions 4..7: east and the row below), so each
         // pair is drawn once per tile pass.
         for (let d = 4; d < 8; d++) {
           if (!(links & (1 << d))) continue;
           const j = (z + LINK_DZ[d]) * W + x + LINK_DX[d];
           const tj = tier[j];
-          const hj = nodeHalf(roads, j);
+          const hj = nodeHalf(j);
           const hw = ti === tj ? (hi + hj) / 2 : ti < tj ? hi : hj;
           capsule(nx[i], nz[i], nx[j], nz[j], hw, Math.min(ti, tj));
         }
