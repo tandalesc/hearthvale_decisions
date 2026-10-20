@@ -3,7 +3,7 @@
 // cost of each view. Used for the before/after shots in docs/media.
 //
 //   node scripts/fidelity-shots.js --out DIR [--prefix fidelity-after] [--tier high]
-//        [--only town-summer,city-dusk] [--port 5231]
+//        [--only town-summer,city-dusk] [--port 5231] [--dpr 1.25] [--noshot]
 //
 // Starts its own Vite server from the current directory (no HMR), so it can run
 // against another checkout by running it from there.
@@ -16,6 +16,7 @@ const args = Object.fromEntries(process.argv.slice(2).map((a) => a.replace(/^--/
 const out = resolve(args.out ?? 'test-results/fidelity');
 const prefix = args.prefix ?? 'shot';
 const tier = args.tier ?? 'high';
+const dpr = Number(args.dpr ?? 1.25);
 const only = args.only ? new Set(args.only.split(',')) : null;
 const CHROME = process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
@@ -43,29 +44,43 @@ const rows = [];
 try {
   for (const [name, q] of Object.entries(SHOTS)) {
     if (only && !only.has(name)) continue;
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1.25 });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: dpr });
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(`${url}/src/render/dev/render-dev.html?${q}&tier=${tier}&hud=0&freeze=1&speed=0`);
     await page.waitForFunction(() => window.__frames?.() > 30, null, { timeout: 60000 }).catch(() => {});
     await page.waitForTimeout(Number(args.wait ?? 5000));
-    const stats = await page.evaluate(() => {
+    // GPU time per drawn frame (EXT_disjoint_timer_query_webgl2), and the
+    // frame's CPU time, over 90 forced frames; medians.
+    const stats = await page.evaluate(async () => {
       const w = window.__world, v = window.__view;
       const gl = w.internals.renderer.getContext();
+      const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2');
       const px = new Uint8Array(4);
-      const t = [];
-      for (let i = 0; i < 40; i++) {
+      const cpu = [], queries = [];
+      for (let i = 0; i < 90; i++) {
         w.requestFrame();
+        const q = ext ? gl.createQuery() : null;
+        if (q) gl.beginQuery(ext.TIME_ELAPSED_EXT, q);
         const a = performance.now();
         w.update(v, performance.now() / 1000, 1 / 60);
+        cpu.push(performance.now() - a);
+        if (q) { gl.endQuery(ext.TIME_ELAPSED_EXT); queries.push(q); }
         gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-        t.push(performance.now() - a);
+        await new Promise((r) => setTimeout(r, 0));
       }
-      t.sort((a, b) => a - b);
+      await new Promise((r) => setTimeout(r, 200));
+      const gpu = [];
+      for (const q of queries) {
+        if (gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) && !gl.getParameter(ext.GPU_DISJOINT_EXT)) gpu.push(gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6);
+        gl.deleteQuery(q);
+      }
+      const med = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? Math.round(s[s.length >> 1] * 100) / 100 : null; };
+      const p95 = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? Math.round(s[Math.floor(s.length * 0.95)] * 100) / 100 : null; };
       const s = w.stats();
-      return { syncedMs: Math.round(t[20] * 100) / 100, drawCalls: s.drawCalls, triangles: s.triangles, tier: s.tier };
+      return { gpuMs: med(gpu), gpuP95: p95(gpu), cpuMs: med(cpu), drawCalls: s.drawCalls, triangles: s.triangles, tier: s.tier };
     });
-    await page.screenshot({ path: `${out}/${prefix}-${name}.jpg`, type: 'jpeg', quality: 82 });
+    if (!args.noshot) await page.screenshot({ path: `${out}/${prefix}-${name}.jpg`, type: 'jpeg', quality: 82 });
     rows.push({ name, ...stats, errors: errors.slice(0, 3).join(' | ') });
     await page.close();
   }
