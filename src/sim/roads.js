@@ -409,8 +409,34 @@ export function footprints(state) {
   });
   list.forEach((b, k) => stampWalls(fp, b, keepOpen, outlines[k]));
   for (const c of keepOpen) unsealWay(fp, c);
+  noteChangedTiles(fp, footprintCache.get(state));
   footprintCache.set(state, fp);
   return fp;
+}
+
+// Which parts of the map a footprint build changed, for walkers' skirt memos
+// (skirtMemo): tiles of NEAR_TILE cells, each stamped with the generation of the last
+// build in which some cell of it got a different near list (other pieces, or the same
+// ones in another order). Kept per lineage of builds for one state, in memory only.
+const NEAR_TILE = 8;
+const TILES_W = Math.ceil(GRID_W / NEAR_TILE), TILES_H = Math.ceil(GRID_H / NEAR_TILE);
+function noteChangedTiles(fp, prev) {
+  if (!prev?.tileGen) {
+    fp.gen = 1;
+    fp.tileGen = new Int32Array(TILES_W * TILES_H).fill(1);
+    return;
+  }
+  const gen = (fp.gen = prev.gen + 1), tileGen = (fp.tileGen = prev.tileGen);
+  for (let c = 0; c < CELLS; c++) {
+    const a = prev.nearAt[c], b = fp.nearAt[c];
+    if (!a && !b) continue;
+    if (a && b) {
+      const la = prev.near[a - 1], lb = fp.near[b - 1];
+      if (la.length === lb.length && la.every((r, i) => r === lb[i])) continue;
+    }
+    const x = c % GRID_W, z = (c - x) / GRID_W;
+    tileGen[Math.floor(z / NEAR_TILE) * TILES_W + Math.floor(x / NEAR_TILE)] = gen;
+  }
 }
 
 // A way in that drawn pieces have closed into a small pocket (an old wing built across
@@ -647,10 +673,39 @@ export function outlineClear(state, x, z) {
   const fp = footprints(state);
   const c = cellIndex(Math.floor((x - ORIGIN_X) / CELL), Math.floor((z - ORIGIN_Z) / CELL));
   if (c < 0) return false;
-  const k = fp.nearAt[c];
-  if (!k) return true;
-  for (const r of fp.near[k - 1]) if (inRect(r, x, z, PERSON_MARGIN)) return false;
+  const list = nearIn(fp, c);
+  if (!list) return true;
+  for (const r of list) if (inRect(r, x, z, PERSON_MARGIN)) return false;
   return true;
+}
+
+// The pieces of cell c's near list that reach into the cell itself by a walker's margin,
+// in list order; null when none do. Near lists are stamped from bounding boxes grown by
+// the wall reach, so most of a list misses the cell, and a point in the cell can only be
+// inside these: the walker tests below give the same answers from the shorter list.
+// (A separating-axis test of the piece, grown by the margin, against the cell square,
+// both a millionth of a unit generous.) Worked out once per cell per footprint build.
+const NEAR_EPS = 1e-6;
+function nearIn(fp, c) {
+  const q = fp.nearAt[c];
+  if (!q) return null;
+  const at = (fp.nearInAt ??= new Int32Array(CELLS));
+  let k = at[c];
+  if (k === 0) {
+    const i = c % GRID_W, j = (c - i) / GRID_W;
+    const mx = ORIGIN_X + (i + 0.5) * CELL, mz = ORIGIN_Z + (j + 0.5) * CELL, h = CELL / 2 + NEAR_EPS;
+    let list = null;
+    for (const r of fp.near[q - 1]) {
+      const hx = r.hx + PERSON_MARGIN + NEAR_EPS, hz = r.hz + PERSON_MARGIN + NEAR_EPS;
+      const ac = Math.abs(r.c), as = Math.abs(r.s), dx = mx - r.x, dz = mz - r.z;
+      if (Math.abs(dx) > ac * hx + as * hz + h || Math.abs(dz) > as * hx + ac * hz + h) continue;
+      if (Math.abs(dx * r.c - dz * r.s) > hx + (ac + as) * h || Math.abs(dx * r.s + dz * r.c) > hz + (ac + as) * h) continue;
+      (list ??= []).push(r);
+    }
+    if (list) { (fp.nearIn ??= []).push(list); k = fp.nearIn.length; } else k = -1;
+    at[c] = k;
+  }
+  return k > 0 ? fp.nearIn[k - 1] : null;
 }
 
 // No water anywhere along the leg (every half unit, and its ends)?
@@ -661,16 +716,37 @@ function legDry(ax, az, bx, bz) {
 }
 
 // A leg's interior samples (every SKIRT_STEP) clear of the drawn pieces near it?
+// Samples in a cell with no pieces near it are skipped in a run (sameCellRun), so a
+// long leg through open cells costs a few lookups per cell, not per sample.
 const SKIRT_STEP = 0.25;
 function legClearOfOutlines(fp, ax, az, bx, bz) {
   const n = Math.ceil(Math.hypot(bx - ax, bz - az) / SKIRT_STEP);
+  const sx = (bx - ax) / n, sz = (bz - az) / n;
   for (let k = 1; k < n; k++) {
     const x = ax + ((bx - ax) * k) / n, z = az + ((bz - az) * k) / n;
-    const c = cellIndex(Math.floor((x - ORIGIN_X) / CELL), Math.floor((z - ORIGIN_Z) / CELL));
-    const q = c >= 0 ? fp.nearAt[c] : 0;
-    if (q) for (const r of fp.near[q - 1]) if (inRect(r, x, z, PERSON_MARGIN)) return false;
+    const cx = Math.floor((x - ORIGIN_X) / CELL), cz = Math.floor((z - ORIGIN_Z) / CELL);
+    const c = cellIndex(cx, cz);
+    const list = c >= 0 ? nearIn(fp, c) : null;
+    if (list) {
+      for (const r of list) if (inRect(r, x, z, PERSON_MARGIN)) return false;
+    } else {
+      k += sameCellRun(x, z, cx, cz, sx, sz);
+    }
   }
   return true;
+}
+
+// How many of the next samples (x + j * sx, z + j * sz for j = 1, 2, ...) are sure to
+// fall in the same cell (cx, cz) as (x, z): a margin of a whole sample and a millionth
+// of a unit keeps rounding in the samples' own arithmetic from ever crossing an edge.
+const RUN_EPS = 1e-6;
+function sameCellRun(x, z, cx, cz, sx, sz) {
+  const along = (p, s, c, origin) => {
+    if (s === 0) return Infinity;
+    const room = (s > 0 ? (c + 1) * CELL + origin - p : p - (c * CELL + origin)) - RUN_EPS;
+    return room > 0 ? Math.floor(room / Math.abs(s)) - 1 : 0;
+  };
+  return Math.max(0, Math.min(along(x, sx, cx, ORIGIN_X), along(z, sz, cz, ORIGIN_Z)));
 }
 
 // The leg's deepest sample inside a piece (grown by a walker's margin): {r, lx, lz}
@@ -681,9 +757,9 @@ function deepestHit(fp, ax, az, bx, bz) {
   for (let k = 1; k < n; k++) {
     const x = ax + ((bx - ax) * k) / n, z = az + ((bz - az) * k) / n;
     const c = cellIndex(Math.floor((x - ORIGIN_X) / CELL), Math.floor((z - ORIGIN_Z) / CELL));
-    const q = c >= 0 ? fp.nearAt[c] : 0;
-    if (!q) continue;
-    for (const r of fp.near[q - 1]) {
+    const list = c >= 0 ? nearIn(fp, c) : null;
+    if (!list) continue;
+    for (const r of list) {
       const dx = x - r.x, dz = z - r.z;
       const lx = dx * r.c - dz * r.s, lz = dx * r.s + dz * r.c;
       const d = Math.min(r.hx + PERSON_MARGIN - Math.abs(lx), r.hz + PERSON_MARGIN - Math.abs(lz));
@@ -703,7 +779,9 @@ const SKIRT_PAD = 0.1;
 const SKIRT_DEPTH = 3;
 // keep(x, z): points never moved or added (people.js: a bridge deck and its approaches).
 // Legs over water (fords, decks) are left as they are, and no new leg gets wet.
-export function skirtOutlines(state, route0, keep = null) {
+// report (optional): report.near is set when some interior waypoint is within a
+// walker's margin of a piece (whether or not it moved); see skirtMemo.
+export function skirtOutlines(state, route0, keep = null, report = null) {
   let route = route0;
   if (!route || route.length < 4) return route;
   const fp = footprints(state);
@@ -713,15 +791,21 @@ export function skirtOutlines(state, route0, keep = null) {
   for (let k = 2; k + 3 < route.length; k += 2) {
     const x = route[k], z = route[k + 1];
     const c = cellIndex(Math.floor((x - ORIGIN_X) / CELL), Math.floor((z - ORIGIN_Z) / CELL));
-    const q = c >= 0 ? fp.nearAt[c] : 0;
-    if (!q || keep?.(x, z)) continue;
+    const list = c >= 0 ? nearIn(fp, c) : null;
+    if (!list) continue;
+    if (report && !report.near && list.some((r) => inRect(r, x, z, PERSON_MARGIN))) report.near = true;
+    if (keep?.(x, z)) continue;
     const px0 = route[k - 2], pz0 = route[k - 1], nx = route[k + 2], nz = route[k + 3];
-    if (!legDry(px0, pz0, x, z) || !legDry(x, z, nx, nz)) continue;
-    for (const r of fp.near[q - 1]) {
+    // Both legs must be dry for the point to move; asked only once a piece is in reach
+    // (most waypoints by a building are already clear of it).
+    let dry = null;
+    for (const r of list) {
       const dx = x - r.x, dz = z - r.z;
       const lx = dx * r.c - dz * r.s, lz = dx * r.s + dz * r.c;
       const px = r.hx + PERSON_MARGIN - Math.abs(lx), pz = r.hz + PERSON_MARGIN - Math.abs(lz);
       if (px <= 0 || pz <= 0) continue;
+      dry ??= legDry(px0, pz0, x, z) && legDry(x, z, nx, nz);
+      if (!dry) break;
       const ux = px < pz ? (lx < 0 ? -1 : 1) * (r.hx + PERSON_MARGIN + SKIRT_PAD) : lx;
       const uz = px < pz ? lz : (lz < 0 ? -1 : 1) * (r.hz + PERSON_MARGIN + SKIRT_PAD);
       const qx = r.x + ux * r.c + uz * r.s, qz = r.z - ux * r.s + uz * r.c;
@@ -743,6 +827,46 @@ export function skirtOutlines(state, route0, keep = null) {
     out.push(bx, bz);
   }
   return out ?? route;
+}
+
+// A memo for a walk skirtOutlines has just left as it was, with no waypoint near any
+// piece (report.near unset): from flat index `from` on, every waypoint is out of reach
+// of every piece and every leg is clear of them (or wet, and so left be). That stays
+// true, whatever happens elsewhere, while the cells those legs sample keep the same near
+// lists: skirtStillClear then only needs the leg from where the walker now stands.
+// Pass the same route object, unchanged in length, and a `from` no later than the
+// walker's segment. (Legs sample the cells inside their bounding box; one cell of
+// margin on it covers rounding at cell edges.)
+export function skirtMemo(state, route, from) {
+  const fp = footprints(state);
+  const tiles = [];
+  const seen = new Set();
+  const tile = (v, origin, max) => Math.max(0, Math.min(max - 1, Math.floor((v - origin) / (CELL * NEAR_TILE))));
+  for (let k = from; k + 3 < route.length; k += 2) {
+    const x0 = Math.min(route[k], route[k + 2]) - CELL, x1 = Math.max(route[k], route[k + 2]) + CELL;
+    const z0 = Math.min(route[k + 1], route[k + 3]) - CELL, z1 = Math.max(route[k + 1], route[k + 3]) + CELL;
+    for (let tz = tile(z0, ORIGIN_Z, TILES_H), tz1 = tile(z1, ORIGIN_Z, TILES_H); tz <= tz1; tz++)
+      for (let tx = tile(x0, ORIGIN_X, TILES_W), tx1 = tile(x1, ORIGIN_X, TILES_W); tx <= tx1; tx++) {
+        const t = tz * TILES_W + tx;
+        if (!seen.has(t)) { seen.add(t); tiles.push(t); }
+      }
+  }
+  return { gen: fp.gen, tileGen: fp.tileGen, length: route.length, from, tiles };
+}
+
+// skirtOutlines would leave [x, z, ...route from flat index seg] as it is, known from
+// the memo without walking the route: the memo still holds (no tile it covers changed
+// since) and the first leg, from (x, z), is clear or wet. False means "not known" (do
+// the full skirtOutlines). A memo that holds is moved up to the current build.
+export function skirtStillClear(state, memo, route, seg, x, z) {
+  const fp = footprints(state);
+  if (!memo || memo.tileGen !== fp.tileGen || memo.length !== route.length || seg < memo.from || seg + 1 >= route.length) return false;
+  if (memo.gen !== fp.gen) {
+    for (const t of memo.tiles) if (fp.tileGen[t] > memo.gen) return false;
+    memo.gen = fp.gen;
+  }
+  if (!fp.near.length) return true;
+  return legClearOfOutlines(fp, x, z, route[seg], route[seg + 1]) || !legDry(x, z, route[seg], route[seg + 1]);
 }
 
 // Points (pushed onto out) that take the leg a -> b round the pieces it cuts: by the
@@ -922,8 +1046,11 @@ export function navGrid(state, { fresh = false } = {}) {
 }
 
 function cellCost(state, i, fp, adj, fords = fordsNearBridges(state)) {
-  const r = state.roads;
-  const t = terrainGrid();
+  return cellCostOf(state.roads, terrainGrid(), i, fp, adj, fords);
+}
+
+// cellCost with the roads and terrain grid looked up once by the caller (whole-grid loops).
+function cellCostOf(r, t, i, fp, adj, fords) {
   const w = t.water[i];
   if (w) return isBridge(r, i) ? TIER_COST[r.tier[i]] : w === 2 ? (fords[i] ? FORD_NEAR_BRIDGE_COST : FORD_COST) : Infinity;
   if (fp.walls[i] || tooSteep(t, i)) return Infinity;
@@ -969,7 +1096,8 @@ function owned(grid, r) { nodeOwner.set(grid, r); return grid; }
 
 function buildNavGrid(state, key, bucket, tick, prev) {
   const r = state.roads;
-  const { water } = terrainGrid();
+  const t = terrainGrid();
+  const { water } = t;
   const adj = adjacencyOf(r);
   const fp = footprints(state);
   const fords = fordsNearBridges(state);
@@ -977,7 +1105,7 @@ function buildNavGrid(state, key, bucket, tick, prev) {
   const wcode = new Uint8Array(CELLS);
   for (let i = 0; i < CELLS; i++) {
     wcode[i] = water[i] ? (isBridge(r, i) ? 3 : water[i]) : 0;
-    cost[i] = cellCost(state, i, fp, adj, fords);
+    cost[i] = cellCostOf(r, t, i, fp, adj, fords);
   }
   const nodes = nodesFor(r, prev, navNodeDirty);
   return owned({ key, bucket, tick, footprintsOnly: false, fp, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, passCap: DOOR_COST, passOpen: TIER_COST[0], water: wcode, height: terrainGrid().height, ...nodes }, r);

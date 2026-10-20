@@ -242,6 +242,7 @@ export function createDecisionClient(options = {}) {
     inFlight++;
     inFlightQuestions += batch.length;
     counters.sent += batch.length;
+    sentInWindow(t);   // drop entries over a second old (only the manual ceiling reads them)
     sentLog.push({at: t, count: batch.length});
     for (const entry of batch) inFlightByKey.set(entry.key, entry);
     for (const group of groups) noteState(group[0].stateKey, t);
@@ -321,6 +322,7 @@ export function createDecisionClient(options = {}) {
     lastBatch = batch.length;
     batchEma = batchEma ? batchEma * 0.8 + batch.length * 0.2 : batch.length;
     groupsEma = groupsEma ? groupsEma * 0.8 + groups.length * 0.2 : groups.length;
+    while (completions.length && t - completions[0].at >= WINDOW_MS) completions.shift();
     completions.push({at: t, count: batch.length});
     batch.forEach((entry, i) => {
       if (gen !== generation || latest.has(entry.key) && latest.get(entry.key) !== entry.seq) {

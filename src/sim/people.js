@@ -16,7 +16,7 @@ import {rng, hash32, hashUnit} from './rng.js';
 import {decide, findHook} from './hooks.js';
 import {byId, cellIndex, lookFor, nextId, BRIDGE} from './state.js';
 import {monthIndex} from './clock.js';
-import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, walkerGrid, standPoint, FLAG} from './roads.js';
+import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG} from './roads.js';
 import {halfWidth, wearBucket} from '../render/paths.js';   // the drawn path widths (pure, no renderer state)
 import {findRoute, cellsToWaypoints} from '../navigation.js';
 import {projectSite} from './buildings.js';
@@ -1058,12 +1058,30 @@ function checkFootprints(state, now) {
 // A walk under way when something new is drawn by it (a plinth, steps or a wing on a
 // building just placed or changed): the rest of the route goes round it, as a fresh
 // route would (roads.js skirtOutlines). Untouched when nothing is in the way.
+// Most walks are far from what changed: a walk found clear once keeps a memo (roads.js
+// skirtMemo), and while it holds only the leg from where the walker stands is checked,
+// with exactly the result the whole walk would give. Memos live outside the state
+// (never saved), so a restored town does the full check once and agrees.
+// One scratch list for the rest of each walk: skirtOutlines hands back a new array when
+// it changes anything, and the scratch itself is never kept.
+const skirtMemos = new WeakMap();   // task -> memo for task.route
+const restScratch = [];
+const skirtReport = {near: false};
 function reskirt(state, p, now) {
   const task = p.task, route = task.route;
-  const rest = [p.x, p.z];
+  const memo = skirtMemos.get(task);
+  if (memo && memo.route === route && skirtStillClear(state, memo.clear, route, task.seg, p.x, p.z)) return;
+  const rest = restScratch;
+  rest.length = 0;
+  rest.push(p.x, p.z);
   for (let k = task.seg; k < route.length; k++) rest.push(route[k]);
-  const out = skirtOutlines(state, rest, deckKeep(state));
-  if (out === rest) return;
+  skirtReport.near = false;
+  const out = skirtOutlines(state, rest, deckKeep(state), skirtReport);
+  if (out === rest) {
+    if (skirtReport.near) skirtMemos.delete(task);
+    else skirtMemos.set(task, {route, clear: skirtMemo(state, route, task.seg)});
+    return;
+  }
   task.route = out;
   task.seg = 2;
   setVelocity(state, p, task, now);
