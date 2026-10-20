@@ -1,3 +1,34 @@
+# Fidelity pass (2026-10-20)
+
+Rendering only; the simulation is untouched. Before/after views: `docs/media/fidelity-before-*.jpg` and `fidelity-after-*.jpg` (`scripts/fidelity-shots.js`).
+
+**What was added, per tier** (named in `src/render/quality.js`):
+
+| | Low | Medium | High |
+|---|---|---|---|
+| Ground cover (`groundcover.js`): meadow grass in clumps, long grass on neglected land, reeds, bracken; wildflowers only in tended gardens and wildflower meadows | none | grass | grass + flowers |
+| Denser woods (`trees.js`): offset second pass, species stands, saplings at the edges, understorey | none | 30 % | all |
+| Lived-in yards (`decor.js`): woodpiles, washing lines (in on wet days), vegetable plots by season, barrels and crates, handcarts, hay after harvest | none | yes | yes |
+| Weather detail: puddles that mirror the sky, rain rings on water, wind waves over crops | none | yes | yes |
+| Valley mist (`mist.js`): dawn, autumn, damp and cold nights, over water and low ground | none | none | yes |
+
+Also fixed on every tier: tree trunks and limbs were wound inside out.
+
+**Cost control.** Everything is instanced and placed on the GPU or in existing batches. New draw calls on High: two ground-cover meshes and one mist mesh. The extra woods trees skip the shadow map; the existing tree-contact decal pass draws them a soft sun-cast shadow instead. They do appear in the river mirror. The trees' road-clearing scan reads precomputed cells and runs at most about three times a second.
+
+**Measured.** `scripts/benchmark-desktop.js` (now with GPU timer queries), High, DPR 2, baseline `6312629` against this branch. Runs alternated, with the order swapped between pairs. Medians are shown. The machine was heavily shared during these runs (load average 7 to 14), so treat them as rough.
+
+| | frame CPU p95 | GPU mean | GPU p95 |
+|---|---:|---:|---:|
+| city fixture, 1×, close pan, before → after | 10.6 → 11.1 ms | 5.69 → 6.29 ms | 6.81 → 8.07 ms |
+| year-165 town, 5×, overview, before → after | 42.2 → 46.9 ms | 6.94 → 8.88 ms | 11.6 → 11.2 ms |
+
+- On the city fixture GPU time rose by about 10 % and frame CPU p95 by about 5 %.
+- On the year-165 town, GPU time rose by about 13 % in an earlier, quieter set of five pairs (6.15 → 6.96 ms). That set was run before the extra woods trees went back into the river mirror. The last set, run under heavier load, shows +28 %.
+- Low draws the same draw calls and triangle counts as before (for example, 53 calls and 770,448 triangles in the town view). It adds no passes. Its only shader change is a branch on a uniform that stays off.
+
+---
+
 # Release tuning pass (2026-10-20)
 
 Baseline: `fd6e048`. Raw numbers: `benchmarks/release-tuning.json`.
