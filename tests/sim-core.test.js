@@ -487,24 +487,34 @@ test('performance: stepTick at 3,000 walkers stays under budget', () => {
   const s = fixtureState('city');
   setIndividualCap(s, 3000);
   assert.equal(s.people.length, 3000);
-  // Routes come from the planner, as in play; in the browser its A* runs in a worker,
-  // so only stepTick itself is timed.
-  const routes = createRoutePlanner({worker: false});
+  // Routes come from the planner, as in play; in the browser its A* runs in a worker
+  // and every route arrives, so here the planner's full slice cap runs each tick
+  // (a clock that never advances). Only stepTick itself is timed.
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
   const services = {routes};
   for (let i = 0; i < 100; i++) {   // warm up
     stepTick(s, 0.1, services);
     routes.tick?.(s);
   }
+  // CPU time of this process, measured against a fixed reference job (serialising
+  // this city) in the same run: a busy or slower machine stretches both alike, so
+  // the budget holds anywhere and still catches a stepTick that got twice as slow.
+  // (On an M5 Pro, quiet: stepTick about 0.065 of the reference on average, 0.25 at p95.)
+  const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
+  const reference = () => { const t = cpuMs(); for (let k = 0; k < 3; k++) serialize(s); return (cpuMs() - t) / 3; };
+  const ref0 = reference();
   const times = [];
   for (let i = 0; i < 600; i++) {
-    const t0 = performance.now();
+    const t0 = cpuMs();
     stepTick(s, 0.1, services);
-    times.push(performance.now() - t0);
+    times.push(cpuMs() - t0);
     routes.tick?.(s);
   }
+  const ref = (ref0 + reference()) / 2;
   times.sort((a, b) => a - b);
   const mean = times.reduce((a, b) => a + b, 0) / times.length;
   const p95 = times[Math.floor(times.length * 0.95)];
-  assert.ok(mean < 4, `mean ${mean.toFixed(2)} ms`);
-  assert.ok(p95 < 8, `p95 ${p95.toFixed(2)} ms`);
+  const msg = (what, v, limit) => `${what} ${v.toFixed(2)} ms of CPU, ${(v / ref).toFixed(3)} of the reference (${ref.toFixed(1)} ms); limit ${limit}`;
+  assert.ok(mean < 0.12 * ref, msg('mean', mean, 0.12));
+  assert.ok(p95 < 0.45 * ref, msg('p95', p95, 0.45));
 });

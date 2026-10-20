@@ -112,7 +112,7 @@ test('new buildings prune only the cached routes they block', () => {
 
 test('the cooperative planner writes flat routes into tasks and walkers wear them', () => {
   const s = blank();
-  const planner = createRoutePlanner({ worker: false });
+  const planner = createRoutePlanner({ worker: false, clock: () => 0 });
   assert.equal(planner.stats.mode, 'cooperative');
   const people = [0, 1, 2].map(k => ({ id: k + 1, x: -140 + k, z: -60, task: { kind: 'work', elapsed: 0 } }));
   const goal = { x: -80, z: -30 };
@@ -138,7 +138,7 @@ test('the cooperative planner writes flat routes into tasks and walkers wear the
 
 test('unreachable goals block the task instead of walking through walls', () => {
   const s = blank();
-  const planner = createRoutePlanner({ worker: false });
+  const planner = createRoutePlanner({ worker: false, clock: () => 0 });
   // A goal sealed inside a ring of buildings.
   for (const [dx, dz] of [[-8, 0], [8, 0], [0, -8], [0, 8], [-8, -8], [8, 8], [-8, 8], [8, -8]]) {
     addBuildingRecord(s, { type: 'workshop', x: -100 + dx, z: 50 + dz, w: 8, d: 8, rot: 0 });

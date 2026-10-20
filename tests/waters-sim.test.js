@@ -45,7 +45,7 @@ for (const archetype of ARCHETYPES) {
     const wet = homes.filter((b) => floodAt(s, b.x, b.z) > 0).length;
     assert.ok(wet <= 0.25 * homes.length, `${wet} of ${homes.length} buildings on the floodplain`);
 
-    const routes = createRoutePlanner({ worker: false });
+    const routes = createRoutePlanner({ worker: false, clock: () => 0 });
     const { water } = terrainGrid();
     const deep = [];
     for (let tick = 0; tick < 600; tick++) {

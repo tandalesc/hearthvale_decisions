@@ -409,7 +409,7 @@ test('without a Worker the cooperative planner still gets walkers to their desti
   const { createState, stepTick } = await import('../src/sim/index.js');
   const { createRoutePlanner } = await import('../src/route-planner.js');
   const s = createState(4817);
-  const routes = createRoutePlanner({ worker: false });
+  const routes = createRoutePlanner({ worker: false, clock: () => 0 });
   assert.equal(routes.stats.mode, 'cooperative');
   const arrived = new Set();
   const start = new Map(s.people.map(p => [p.id, { x: p.x, z: p.z }]));
@@ -437,7 +437,7 @@ test('navigation copes with a state that has no roads yet', async () => {
   const s = { buildings: [], people: [], time: { tick: 0, month: 0, year: 0 } };
   assert.doesNotThrow(() => navGrid(s));
   assert.ok(s.roads?.wear, 'roads are created on demand');
-  const planner = createRoutePlanner({ worker: false });
+  const planner = createRoutePlanner({ worker: false, clock: () => 0 });
   let route;
   assert.ok(planner.plan(s, -100, 0, -80, 10, r => (route = r)));
   for (let i = 0; i < 200 && route === undefined; i++) planner.tick(s, 5);
@@ -1153,7 +1153,7 @@ test('walkers in a town use the bridges and never stand in deep water', async ()
   // Walkers re-drawn on load got straight-line routes before any planner
   // existed; start them afresh so every route comes from the planner.
   for (const p of s.people) p.task = null;
-  const routes = createRoutePlanner({ worker: false });
+  const routes = createRoutePlanner({ worker: false, clock: () => 0 });
   const bridges = () => s.buildings.filter(b => b.type === 'bridge' && (b.built ?? 1) >= 1);
   assert.ok(bridges().length > 0, 'the town has a bridge');
   const { water } = terrainGrid();

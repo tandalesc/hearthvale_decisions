@@ -108,6 +108,9 @@ test('anglers line a calm reach, spaced out, facing the water with rods out; pai
   const s = freshTown();
   setTime(s, 4);
   const {target, ids} = sendAll(s, 'fishing', 8);
+  // The reach as it was when chosen: the town grows during the run, and places
+  // (named by position) can be built over.
+  const reach = placeIndex(s).byId.get(target.id);
   run(s, 500);
   const here = out(s, ids, 'fishing');
   assert.ok(here.length >= 4, `anglers on the bank (${here.length})`);
@@ -126,8 +129,6 @@ test('anglers line a calm reach, spaced out, facing the water with rods out; pai
       assert.ok(d >= (here[i].householdId === here[j].householdId ? 0.7 : 2.5), `anglers ${here[i].id}, ${here[j].id} ${d.toFixed(2)} apart`);
     }
   // The reach chosen is among the calmer ones near the walker.
-  const idx = placeIndex(s);
-  const reach = idx.byId.get(target.id);
   assert.ok(reach.calm >= 0.3, `a calm reach (${reach.calm.toFixed(2)})`);
 });
 
@@ -228,7 +229,7 @@ test('a bridge holds only a few at its rails, its middle stays clear and traffic
   const sent = s.people.slice().sort((p, q) => Math.hypot(p.x - deck.x, p.z - deck.z) - Math.hypot(q.x - deck.x, q.z - deck.z)).slice(0, 15);
   for (const p of sent) { goOut(s, p, {...target}); p.task.dwellFor = 1e6; }
   const ids = new Set(sent.map((p) => p.id));
-  const routes = createRoutePlanner({worker: false});
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
   const crossers = new Set(), elsewhere = new Map();
   let most = 0, closest = Infinity, samples = 0;
   const onDeck = (p) => deckAt(s, p.x, p.z)?.bridge === bridge;

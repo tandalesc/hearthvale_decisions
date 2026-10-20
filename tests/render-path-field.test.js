@@ -42,19 +42,20 @@ function snapshots(createPathField) {
   return hashes;
 }
 
-// Immutable pre-optimization main (4bf9a75) output: texture bytes, dirty rects,
-// and pending queue order across mixed tiers, wear, paving/towpaths, budgeted
-// redraws, unchanged updates, and replacement of the tier array.
+// Golden output: texture bytes, dirty rects, and pending queue order across
+// mixed tiers, wear, paving/towpaths, budgeted redraws, unchanged updates, and
+// replacement of the tier array. Regenerated when the busy-yard fill stopped
+// filling inside corners and towpath bands (tests/paths.test.js covers both).
 const EXPECTED = [
-  'fbf78f2567bd61a45aa0a750b23c1a021c41e7436d8c77cebf6f71e4e076907f',
-  '880edafd179054333dd4cd32908cffde31a53b3c8ec3b66acde5d056f3b4d4ac',
-  '648d901a7f4101801fb9fc2779d337fad4e969d565177ab9c98f8e79016aadd6',
-  '8441303cbbf449e20bb0929ebc3e75689c9a3b1f465d2c893764bc6aeaa657c5',
-  '5530aa603744cbbd597c979b34c26e3bc035b2edf027a22dfc5fe818fcabdc54',
-  'dab0434db5fe2ea8ff1f530ccee28baa1cb837f1efbed11853b8079d29ecaddd',
-  'dab0434db5fe2ea8ff1f530ccee28baa1cb837f1efbed11853b8079d29ecaddd',
-  '5ec4e9c74bf46ab88d3c823e524bad0a3219a3e1e7509a07632a808e0a9398cd',
-  '29aff630aad1b4ba2591bb1e74778909321f1e8801d9e8fbcb0cefb599a87c69'
+  'd5804a8086a57105d77a2cc2302ce3be9d0bcc1b661580a1c019ad808220e3f7',
+  '121eb3d74992684308b1af42e9ee1328f014628f3c9301e4b4e136517b91c5c7',
+  '77821a910fc7f253b3985b9a9b4717e5277592a58b4ec398f67f22d70c7698d5',
+  'fe7625c57ca155cdad44e779d55aa62aa73688ee7b7a11debff8c814a1fb213b',
+  'bc587a269340a5b3dad3fc65eee09aa76f37806460b31d1ef351a024da590812',
+  '7513b8496cb91b374bfc4f78edb635eaaea1d97a8403f988979d5b085f451f6b',
+  '7513b8496cb91b374bfc4f78edb635eaaea1d97a8403f988979d5b085f451f6b',
+  'cca16ed79407d73d7c2015d2a9d3e84053a0507ee01cb730ffb7ed891224d228',
+  'cc33638efc91f0aa45a89d555d887f0ad83f12e9ee22f387f9a47f670322058e'
 ];
 
 test('path field keeps the original pixels and incremental updates', () => {

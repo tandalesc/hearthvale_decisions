@@ -206,6 +206,7 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
   const SLACK = 0.35;
   const HOLE_RING = 5;      // of 8 neighbours on the path: the cell between is drawn as path
   const HOLE_HALF = 0.75;   // its disc, in cells: reaches the corners it shares
+  const TOWPATH_FLAG = 16;  // roads.planned bit (sim/roads.js FLAG.TOWPATH)
   function fillInterior() {
     const D = SQRT2;
     for (let i = 0; i < SW * SW; i++) dist[i] = sv[i] > 0 ? 1e6 : 0;
@@ -272,21 +273,33 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
       }
     }
     // A busy yard: strips between nodes (and a 2x2 lump's single node) leave
-    // grass between them, a grid of green squares. Any cell, path or grass,
-    // with most of its neighbours on the path is drawn solid, at its own tier
-    // or the lowest around it, so the yard reads as one worn ground. Edges
-    // keep the strips' smooth shape. Drawing only: nodes and routes untouched.
+    // grass between them, a grid of green squares. A path cell with most of
+    // its neighbours on the path, or a grass cell with path on two opposite
+    // sides (N and S, or E and W) and most neighbours on the path, is drawn
+    // solid at its own tier or the lowest around it, so the yard reads as one
+    // worn ground. The inside corner of a bend or a T has path on two
+    // adjacent sides only and stays grass. Towpaths are left out: they are
+    // drawn as one even lane however deep their cells are laid. Edges keep
+    // the strips' smooth shape. Drawing only: nodes and routes untouched.
+    const planned = roads.planned;
+    const onPath = (j) => tier[j] && !(planned?.[j] & TOWPATH_FLAG);
     for (let z = Math.max(1, az0); z <= Math.min(H - 2, az1); z++) {
       for (let x = Math.max(1, ax0); x <= Math.min(W - 2, ax1); x++) {
         const i = z * W + x;
+        if (planned?.[i] & TOWPATH_FLAG) continue;
         let ring = 0, low = tier[i] || 9;
         for (let d = 0; d < 8; d++) {
-          const tj = tier[i + LINK_DZ[d] * W + LINK_DX[d]];
-          if (!tj) continue;
+          const j = i + LINK_DZ[d] * W + LINK_DX[d];
+          if (!onPath(j)) continue;
           ring++;
-          if (tj < low) low = tj;
+          if (tier[j] < low) low = tier[j];
         }
-        if (ring >= HOLE_RING) capsule(x + 0.5, z + 0.5, x + 0.5, z + 0.5, HOLE_HALF * cell, tier[i] || low);
+        if (ring < HOLE_RING) continue;
+        if (!tier[i]) {
+          const across = (onPath(i - W) && onPath(i + W)) || (onPath(i - 1) && onPath(i + 1));
+          if (!across) continue;
+        }
+        capsule(x + 0.5, z + 0.5, x + 0.5, z + 0.5, HOLE_HALF * cell, tier[i] || low);
       }
     }
     fillInterior();

@@ -24,7 +24,7 @@ test('seats sit on the drawn benches, two to a bench, and parks add lawn spots',
 test('leisure visitors take free seats inside, facing the way the seat faces', () => {
   const s = fixtureState('town');
   for (const c of parkCandidates(s)) designatePark(s, c);
-  const routes = createRoutePlanner({worker: false});
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
   let seated = 0, onBench = 0;
   for (let t = 0; t < 900; t++) {
     routes.tick?.(s);
