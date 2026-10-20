@@ -24,6 +24,7 @@ export function createTopbar(ctx) {
     </div>
     <div class="metrics" role="group" aria-label="The town at a glance"></div>
     <div class="topbar-end"><button class="icon-btn settings-btn" aria-label="Settings" title="Settings">${icon('settings')}</button></div>`;
+  el.querySelector('.brand h1').textContent = ctx.townName?.() || 'Hearthvale';
   const host = el.querySelector('.metrics');
   const nodes = {};
   for (const m of METRICS) {
@@ -53,6 +54,11 @@ export function createTopbar(ctx) {
   return {
     el,
     update(top, unlocks, here) {
+      // The town's own name, chosen on the main menu; older towns are Hearthvale.
+      const name = ctx.townName?.() || 'Hearthvale';
+      const h1 = el.querySelector('.brand h1');
+      setText(h1, name);
+      setAttr(h1, 'title', name);
       setText(el.querySelector('.when'), dateLine(top.year, top.month));
       const dy = el.querySelector('.dc-year');
       if (dy.dataset.y !== String(top.year ?? 0)) {

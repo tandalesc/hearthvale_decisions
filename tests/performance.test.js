@@ -17,7 +17,9 @@ function harness(options={}){
  const h={t:0,timers:[],calls:[]};
  const timers={setTimeout(fn,ms){const timer={at:h.t+ms,fn};h.timers.push(timer);return timer;},clearTimeout(timer){const i=h.timers.indexOf(timer);if(i>=0)h.timers.splice(i,1);}};
  const fetch=(url,opts)=>new Promise(resolve=>h.calls.push({url,body:JSON.parse(opts.body),resolve,at:h.t}));
- h.client=createDecisionClient({fetch,now:()=>h.t,timers,...options});
+ // These tests drive the request pipeline with repeated questions, so the answer
+ // cache is off here (tests/decision-load.test.js covers it).
+ h.client=createDecisionClient({fetch,now:()=>h.t,timers,cacheSize:0,...options});
  h.advance=async ms=>{const end=h.t+ms;for(;;){h.timers.sort((a,b)=>a.at-b.at);const next=h.timers[0];if(!next||next.at>end)break;h.timers.shift();h.t=next.at;next.fn();await settle();}h.t=end;await settle();};
  h.reply=async(call,{status=200,answer=()=>({kind:'routine',choice:'work',confidence:.25,probabilities:uniform}),latency=0}={})=>{h.t+=latency;const data=status===200?{model:'fixture',answers:Object.fromEntries(questionsOf(call).map(q=>[q.id,answer(q)]))}:{retryAfterMs:250};call.resolve({ok:status===200,status,json:async()=>data,headers:{get:()=>null}});await settle();};
  h.ask=(id,extra={},context=ctx)=>h.client.ask('routine',id,context,{state:town,...extra});

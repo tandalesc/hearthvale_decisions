@@ -78,6 +78,9 @@
   font-variation-settings: 'opsz' 48, 'SOFT' 50;
   letter-spacing: -0.01em;
   white-space: nowrap;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .brand .date {
   display: flex;
@@ -767,6 +770,8 @@ button.bud-row:hover { background: var(--paper-3); }
 /* One speed button that steps 1× → 3× → 5×; quiet while paused. */
 .seg button.speed { min-width: 52px; font-variant-numeric: tabular-nums; }
 .seg button.speed[aria-pressed="false"] { color: var(--muted); }
+/* The device cannot keep up with this speed: the title says what it reaches. */
+.seg button.speed.lagging { color: var(--rust); text-decoration: underline dotted; text-underline-offset: 3px; }
 .era-progress {
   /* A short bar, not the strip's whole width. */
   flex: 0 1 260px;

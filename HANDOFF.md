@@ -47,6 +47,21 @@ The player is the town's deliberative leadership ("System 2"). They never place 
     - Homes: now measured by the share of empty homes. Households only form where a home exists, so homelessness is always 0.
 - Population decisions use overlapping slices with linear pooling (`src/decision-pool.js`) and refinement where slices disagree. The client (`src/decision-client.js`) coalesces, groups by state, and backs off; a failed question falls back to local rules.
 
+### Decision load and high speeds (October 2026)
+
+Measured headless with a mock 100 ms service (real sim and client). The scratch script is not committed. Questions sent a second at 1×: town 1,193 → 11.5, city 1,189 → 23. City at 5×: 1,791 → 62; at 10×: 104; at 20×: 194.
+- **Walker refresh had no limit.** `fillThroughput` asked every visible walker again the moment an answer landed. Refinement and individual questions now share a real-time budget (`FILL_PER_SEC` 8, burst 32). A walker is asked again only when their question would change (a need band, trade, district) or a game month has passed. At most 96 people are scanned per tick.
+- **Exact-answer caches.**
+  - The browser client (`cacheSize` 8192, LRU) answers a byte-identical (kind, state, context, allowed) at once. Asker ids are not part of the key, so walkers with the same question share it. `reset()` clears it.
+  - The proxy (`createAnswerCache`, 50k) shares answers across players.
+  - Both are lossless: the model returns a distribution and the game samples it.
+- **Proxy limits** (`createLimits`, off by default): `DECISIONS_CLIENT_QPS` per address and `DECISIONS_DAILY_CAP` per UTC day. They count only questions sent upstream. Past a limit the player gets 429 or 503, and the town falls back to local rules. Set both for a public deployment.
+- **Speeds 10× and 20×** (keys 4 and 5).
+  - `stepTick(…, {until})` is a frame budget (`SIM_BUDGET_MS` 10 in main.js). No tick starts once the budget is spent, or when the last tick says the next would overrun. Backlog is capped at 1 sim second, so a slow device runs the town slower instead of stuttering. The ticks and outcome are unchanged, and a test checks this.
+  - The speed button turns rust with a dotted underline and says "Running at about N×" when the device reaches less than 80% of the chosen speed.
+  - `services.rate` (sim seconds per real second) shortens the sweep wait above 5× to about a month and a quarter of game time. Late answers fall back to local rules.
+  - Measured on this Mac (headless Chrome, Metal): hamlet 20× reaches 20×, city 10× reaches 10×, city 20× reaches about 14–17×. Per-tick cost in a city (route delivery) is the limit.
+
 ## LLM prose (narrator)
 
 `server/narrator.js` streams from `ramblerun/Reasoning-AI` with `enable_thinking: false`. It writes inspector notes, card prose, year-end chronicle lines and the end page. Replies are validated and fall back to template text. Notes are cached by a material-facts key and saved with the game. A note never changes under the reader; a refresh lights up when the facts change.
@@ -136,7 +151,18 @@ The sim is deterministic: one seeded RNG, and model answers are applied in key o
 
 ## Saves
 
-Saved to **IndexedDB, gzip-compressed** (`src/save-store.js`): 0.4 s after a ruling, every 30 s, on hide or pagehide, and before a Vite reload. Only the newest tab writes. Old saves load with this session's changes; landscaping is seeded when an old save loads.
+Saved to **IndexedDB, gzip-compressed** (`src/save-store.js`): 0.4 s after a ruling, every 30 s, on hide or pagehide, and before a Vite reload. Only the newest tab playing a town writes it. Old saves load with this session's changes; landscaping is seeded when an old save loads.
+
+**Several towns per device (save slots).** The database is version 2: `saves` holds each town's gzip under a slot id, and `meta` holds a small record per slot (name, year, people, era, seed, valley, `savedAt`, and a JPEG `thumb` of the world canvas captured right after a drawn frame). The single pre-slot save keeps the key `current` and gets a record the first time towns are listed. The legacy localStorage save becomes its own slot. A town's name is `state.townName` (absent in older saves, which show as "Hearthvale").
+
+## Main menu
+
+`src/ui/menu/` runs before the sim and renderer finish loading (main.js loads them in the background):
+- **Continue** (the last town played, over its own picture), **New town**, **Your towns** (play, rename, export, delete), **Settings** (a subset of the in-game settings), **About**, and **Import a town file**.
+- **New town:** a name, a seed (code, number or any word), a landscape (the seed's own, or any of `waters.js` ARCHETYPES, or "River only" = terrain version 1), a crowd size (`settings.individualCap` 800/2000/4000), and the decision-model switch.
+- The valley map is sampled in a worker (`valley-worker.js`) from `terrain.js`, the same terrain the game builds. It is drawn as a contour sheet (`valley-map.js`). Water edges come from `bankDistance`, so rivers are smooth below the sample spacing.
+- **Skipping the menu:** `?fixture=…` and `?play=1` go straight to a town (`play=1` continues the last one or starts a new one). The browser test helper adds `play=1`. Deliberate reloads (new town, import, "Choose a valley") leave an intent in sessionStorage (`hearthvale-boot`), so the menu is skipped or opens on the right screen. Settings → **Main menu** saves, then reloads to the menu.
+- Seeds moved to `src/seed.js`; `sim/state.js` re-exports them.
 
 ## Running and checking
 

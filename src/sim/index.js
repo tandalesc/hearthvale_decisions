@@ -44,12 +44,32 @@ export function createState(seed, options = {}) {
 }
 
 // Advance the simulation by dt sim seconds. Returns the number of ticks run.
+// options.until (a time on options.clock, default performance.now()) is a
+// frame budget: once it passes, or the last tick says the next would overrun
+// it, no further tick starts (one always runs) and
+// the backlog carried to the next call is capped at MAX_CARRY_SECONDS. A
+// device that cannot keep up with a high speed then runs the town slower
+// instead of stalling. The ticks themselves, and so the outcome, are unchanged.
+const MAX_CARRY_SECONDS = 1;
+
 export function stepTick(state, dt, services = {}, options = {}) {
   useTerrainOf(state);
   state.time.acc = (state.time.acc ?? 0) + Math.max(0, dt);
   const ctx = makeCtx(state, services, options);
-  let ticks = 0;
+  const clock = options.until != null ? options.clock ?? (() => performance.now()) : null;
+  let ticks = 0, started = clock ? clock() : 0, lastMs = 0;
   while (state.time.acc >= TICK_SECONDS - 1e-9 && ticks < MAX_TICKS_PER_CALL) {
+    if (clock && ticks > 0) {
+      // Stop when the budget is spent, or when another tick like the last
+      // one would overrun it.
+      const t = clock();
+      lastMs = t - started;
+      started = t;
+      if (t + lastMs >= options.until) {
+        state.time.acc = Math.min(state.time.acc, MAX_CARRY_SECONDS);
+        break;
+      }
+    }
     state.time.acc -= TICK_SECONDS;
     runTick(state, ctx);
     ticks++;
