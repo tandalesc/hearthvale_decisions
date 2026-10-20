@@ -1062,12 +1062,20 @@ export function createDecor(ctx) {
     streets(view, cx, cz, reach, lotCells, litterSpots);
     boxes.count = nBox;
     blobs.count = nBlob;
+    // Upload only the rows in use (the buffers are sized for the busiest view).
     for (const m of [boxes, blobs]) {
+      const n = Math.max(1, m.count);
       m.instanceMatrix.clearUpdateRanges();
+      m.instanceMatrix.addUpdateRange(0, n * 16);
       m.instanceMatrix.needsUpdate = true;
-      if (m.instanceColor) { m.instanceColor.clearUpdateRanges(); m.instanceColor.needsUpdate = true; }
+      if (m.instanceColor) {
+        m.instanceColor.clearUpdateRanges();
+        m.instanceColor.addUpdateRange(0, n * 3);
+        m.instanceColor.needsUpdate = true;
+      }
     }
     leafAttr.clearUpdateRanges();
+    leafAttr.addUpdateRange(0, Math.max(1, nBlob));
     leafAttr.needsUpdate = true;
     boxes.visible = nBox > 0;
     blobs.visible = nBlob > 0;
