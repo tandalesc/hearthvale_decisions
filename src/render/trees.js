@@ -370,8 +370,9 @@ class TreeBuilder {
     const ring = (p, r, a) => [p[0] + (Math.cos(a) * e1[0] + Math.sin(a) * e2[0]) * r, p[1] + (Math.cos(a) * e1[1] + Math.sin(a) * e2[1]) * r, p[2] + (Math.cos(a) * e1[2] + Math.sin(a) * e2[2]) * r];
     for (let i = 0; i < sides; i++) {
       const a0 = (i / sides) * Math.PI * 2, a1 = ((i + 1) / sides) * Math.PI * 2;
-      this.tri(ring(p0, r0, a1), ring(p0, r0, a0), ring(p1, r1, a0), 0, p0);
-      this.tri(ring(p0, r0, a1), ring(p1, r1, a0), ring(p1, r1, a1), 0, p0);
+      // Wound counter-clockwise seen from outside, so the bark faces out.
+      this.tri(ring(p0, r0, a0), ring(p0, r0, a1), ring(p1, r1, a0), 0, p0);
+      this.tri(ring(p1, r1, a0), ring(p0, r0, a1), ring(p1, r1, a1), 0, p0);
     }
   }
 

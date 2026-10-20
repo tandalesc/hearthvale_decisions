@@ -216,6 +216,8 @@ const VERTEX_PLACE = /* glsl */ `
   // Snow presses the grass flat; reeds and bracken stand above it.
   float snowK = smoothstep(0.25, 0.8, uSnow);
   height *= 1.0 - snowK * (kind > 1.5 && kind < 3.5 ? 0.35 : 0.75);
+  // Under lying snow the sward disappears; only a few tall stems show.
+  keep *= 1.0 - snowK * (kind > 1.5 && kind < 3.5 ? 0.4 : 0.9);
   coverDead = h4 >= keep || size < 0.02;
 
   // Colour: summer green -> spring fresh, autumn tawny, winter straw.
@@ -262,7 +264,7 @@ const VERTEX_PLACE = /* glsl */ `
   // Darker at the root (the sward's own shade), lighter toward the tips.
   vec3 tipCol = mix(col * 1.25 + vec3(0.02, 0.02, 0.0), vec3(0.55, 0.47, 0.30), seedHead * 0.8);
   vCoverCol = mix(col * 0.62, tipCol, tip);
-  vCoverCol = mix(vCoverCol, vec3(0.80, 0.83, 0.88), snowK * 0.45 * tip);
+  vCoverCol = mix(vCoverCol, vec3(0.80, 0.83, 0.88), snowK * (0.35 + 0.35 * tip));
   objectNormal = normalize(vec3(aOut.x * 0.35 * tip, 1.0, aOut.y * 0.35 * tip));
   }
 `;
