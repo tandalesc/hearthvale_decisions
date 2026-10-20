@@ -22,14 +22,14 @@ test('worker gzip keeps the exact city save bytes and restored state', async ({p
     };
     try {
       const store = createSaveStore({legacyKey: 'legacy-test'});
-      const saved = await store.save(raw);
-      const loaded = await store.load();
+      const saved = await store.save('t1', raw, {name: 'Test'});
+      const loaded = await store.load('t1');
       const db = await new Promise((resolve) => {
-        const request = indexedDB.open('hearthvale', 1);
+        const request = indexedDB.open('hearthvale', 2);
         request.onsuccess = () => resolve(request.result);
       });
       const blob = await new Promise((resolve) => {
-        const request = db.transaction('saves').objectStore('saves').get('current');
+        const request = db.transaction('saves').objectStore('saves').get('t1');
         request.onsuccess = () => resolve(request.result);
       });
       db.close();
@@ -70,8 +70,8 @@ test('delayed compression preserves queued save order and cleans up workers', as
     };
     try {
       const store = createSaveStore({legacyKey: 'legacy-test'});
-      const results = await Promise.all([store.save('first'), store.save('second'), store.save('last')]);
-      return {results, latest: await store.load(), created, active, maxActive, terminated};
+      const results = await Promise.all([store.save('t1', 'first'), store.save('t1', 'second'), store.save('t1', 'last')]);
+      return {results, latest: await store.load('t1'), created, active, maxActive, terminated};
     } finally { window.Worker = NativeWorker; }
   });
   expect(result).toEqual({results: [true, true, true], latest: 'last', created: 3, active: 0, maxActive: 1, terminated: 3});
@@ -97,11 +97,11 @@ for (const failure of ['unavailable', 'constructor', 'runtime', 'message', 'work
       };
       try {
         const store = createSaveStore({legacyKey: 'legacy-test'});
-        const first = await store.save('fallback café 🌳');
-        const loadedFirst = await store.load();
+        const first = await store.save('t1', 'fallback café 🌳');
+        const loadedFirst = await store.load('t1');
         window.Worker = NativeWorker;
-        const next = await store.save('next');
-        return {first, loadedFirst, next, latest: await store.load(), created, terminated};
+        const next = await store.save('t1', 'next');
+        return {first, loadedFirst, next, latest: await store.load('t1'), created, terminated};
       } finally { window.Worker = NativeWorker; }
     }, failure);
     expect(result).toEqual({
@@ -126,13 +126,13 @@ for (const event of ['visibilitychange', 'pagehide']) {
       };
       try {
         const store = createSaveStore({legacyKey: 'legacy-test'});
-        const first = store.save('first');
-        const next = store.save('latest');
+        const first = store.save('t1', 'first');
+        const next = store.save('t1', 'latest');
         await new Promise((resolve) => setTimeout(resolve, 0));
         hidden = true;
         (event === 'pagehide' ? window : document).dispatchEvent(new Event(event));
         const results = await Promise.all([first, next]);
-        return {results, latest: await store.load(), created, terminated};
+        return {results, latest: await store.load('t1'), created, terminated};
       } finally {
         window.Worker = NativeWorker;
         delete document.visibilityState;
@@ -156,21 +156,24 @@ test('raw saves and failed legacy migration remain recoverable', async ({page}) 
     try {
       localStorage.setItem('legacy-test', 'legacy raw town');
       const store = createSaveStore({legacyKey: 'legacy-test'});
-      const first = await store.load();
+      // The first move into a slot fails (storage full): nothing is lost.
+      const first = (await store.list()).length;
       const retainedAfterFailure = localStorage.getItem('legacy-test');
-      const retried = await store.load();
+      // The next listing tries again and the old town becomes a slot.
+      const towns = await store.list();
+      const retried = await store.load(towns[0]?.id);
       const removedAfterSuccess = localStorage.getItem('legacy-test');
       window.CompressionStream = nativeCompression;
-      const rawLoadedWithCompressionAvailable = await store.load();
-      const next = await store.save('new compressed town');
-      return {first, retainedAfterFailure, retried, removedAfterSuccess, rawLoadedWithCompressionAvailable, next, latest: await store.load()};
+      const rawLoadedWithCompressionAvailable = await store.load(towns[0]?.id);
+      const next = await store.save('t2', 'new compressed town');
+      return {first, retainedAfterFailure, retried, removedAfterSuccess, rawLoadedWithCompressionAvailable, next, latest: await store.load('t2')};
     } finally {
       window.CompressionStream = nativeCompression;
       IDBObjectStore.prototype.put = nativePut;
     }
   });
   expect(result).toEqual({
-    first: 'legacy raw town', retainedAfterFailure: 'legacy raw town', retried: 'legacy raw town',
+    first: 0, retainedAfterFailure: 'legacy raw town', retried: 'legacy raw town',
     removedAfterSuccess: null, rawLoadedWithCompressionAvailable: 'legacy raw town', next: true, latest: 'new compressed town',
   });
 });

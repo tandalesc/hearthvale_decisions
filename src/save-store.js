@@ -154,6 +154,10 @@ export function createSaveStore({legacyKey}) {
         if (await writeSlot(id, legacy, info)) {
           storage.remove(legacyKey);
           storage.set(LAST_KEY, id);
+        } else {
+          // Storage full or blocked: the old save stays where it is, and the
+          // next listing tries again.
+          migrated = null;
         }
       }
     })());
