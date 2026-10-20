@@ -81,6 +81,8 @@ function rockColor() {
 
 const SHADE_GLSL = /* glsl */ `
 uniform vec3 uRockColor;
+uniform vec3 uSkyHorizon;
+uniform vec3 uSkyZenith;
 uniform float uSnowline;
 uniform sampler2D tWood;
 uniform vec4 uWoodRect;
@@ -219,6 +221,17 @@ const SHADE_FRAGMENT = /* glsl */ `
   // Wet weather darkens roads more than grass.
   // Wet ground darkens; trodden roads darken most and read as sheened mud.
   col *= 1.0 - uWet * (0.12 + 0.16 * roadA);
+  #ifndef RING
+    // Puddles: hollows in lanes and trodden ground hold water that mirrors
+    // the sky, more of them the longer the rain has set in.
+    if (uWet > 0.05 && uWeatherDetail > 0.5) {
+      float pud = vnoise(vWorldP.xz * 0.42 + 17.0) * 0.7 + vnoise(vWorldP.xz * 1.3 + 4.0) * 0.3;
+      float pk = smoothstep(0.66 - 0.12 * uWet, 0.74 - 0.1 * uWet, pud) * max(roadA, 0.18 * (1.0 - rock)) * smoothstep(0.85, 0.97, vUp);
+      pk *= smoothstep(0.15, 0.6, uWet) * (1.0 - smoothstep(0.3, 0.7, uSnow));
+      vec3 skyRefl = mix(uSkyHorizon, uSkyZenith, 0.35) * (1.0 - 0.5 * uNight);
+      col = mix(col, col * 0.45 + skyRefl * 0.32, pk * 0.8);
+    }
+  #endif
   // Valley snow settles on flat ground; trodden roads keep a darker slush.
   float snow = smoothstep(0.25, 0.8, uSnow) * smoothstep(0.55, 0.92, vUp);
   snow *= 1.0 - 0.55 * roadA;

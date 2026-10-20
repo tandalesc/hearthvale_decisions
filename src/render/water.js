@@ -550,6 +550,23 @@ void main() {
     calm *= (1.0 + 1.2 * vFlow.x) * (0.45 + 1.1 * smoothstep(0.2, 0.8, gust));
   #endif
   vec3 n = normalize(vec3(-s.x * 0.22 * calm, 1.0, -s.y * 0.22 * calm));
+  // Rain: rings spreading from the drops (two offset lattices of drop
+  // sites, each on its own clock), brightening the surface where they run.
+  float rainRing = 0.0;
+  #if WATER_TIER > 0
+    if (uWet > 0.05) {
+      for (int k = 0; k < 2; k++) {
+        vec2 rp = vWorld.xz * 1.3 + float(k) * vec2(0.5, 0.37);
+        vec2 c = floor(rp);
+        vec2 f = rp - c;
+        vec3 h = fract(sin(vec3(dot(c, vec2(127.1, 311.7)), dot(c, vec2(269.5, 183.3)), dot(c, vec2(419.2, 371.9))) + float(k) * 3.7) * 43758.5453);
+        float t = fract(uTime * 0.85 + h.x);
+        float d = length(f - (0.25 + 0.5 * h.yz));
+        rainRing += smoothstep(0.05, 0.0, abs(d - t * 0.42)) * (1.0 - t) * step(0.35, h.y + h.z * 0.5);
+      }
+      rainRing *= smoothstep(0.1, 0.6, uWet);
+    }
+  #endif
 
   vec3 V = normalize(cameraPosition - vWorld);
   // Reflection uses a calmer normal than the glitter: ripples should break
@@ -618,6 +635,7 @@ void main() {
   vec3 col = mix(body, reflCol, clamp(fresnel + 0.05 + pool * 0.12, 0.0, 1.0));
   col += uSunColor * spec;
 
+  col += mix(uSkyHorizon, vec3(1.0), 0.35) * rainRing * 0.18 * (1.0 - 0.6 * uNight);
   float alpha = mix(0.0, 0.94, smoothstep(0.0, 0.42, depth));
   // A ford is shallow but still a river: keep it mostly opaque and green so
   // the pale bed never reads as a translucent slab.

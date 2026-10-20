@@ -158,6 +158,7 @@ export function createGrade() {
     uWet: { value: 0 },
     uYearT: { value: 0 },
     uOverlay: { value: 0 }, // 0 none, 1 value, 2 roads, 3 health
+    uWeatherDetail: { value: 0 }, // set from the tier's `weather` flag (index.js)
   };
 
   const current = makeFrame();

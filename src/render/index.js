@@ -191,6 +191,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
     tier = { ...TIERS[tierName] };
     ctx.quality = tier;
     frame.tier = tierName;
+    grade.uniforms.uWeatherDetail.value = tier.weather ? 1 : 0;
     renderer.setPixelRatio(pixelRatioFor(window.devicePixelRatio, tier, power));
     lights.applyQuality(tier);
     terrain.applyQuality(tier);

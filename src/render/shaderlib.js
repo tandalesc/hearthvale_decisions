@@ -53,6 +53,8 @@ uniform float uNight;
 uniform vec2 uWind;
 uniform float uWet;
 uniform float uOverlay;
+// 1 where the tier draws weather detail (puddles, crop waves; quality.js).
+uniform float uWeatherDetail;
 `;
 
 // Hash and value noise, cheap enough for every fragment.
