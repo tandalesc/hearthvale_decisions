@@ -11,10 +11,16 @@ export function createAudio(prefs) {
   const bus = createBus();
   let ambience = null, started = false, waterSources = null, warned = false;
 
+  // iPhone speakers run hot: trim the master another 15% there. iPads that
+  // report a desktop UA are caught by the touch-points check.
+  const IS_IPHONE = /iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const PLATFORM_GAIN = IS_IPHONE ? 0.85 : 1;
+
   function levels(fade = 0.3) {
     if (!bus.ctx) return;
     const muted = prefs.get('muted');
-    bus.ramp(bus.master.gain, muted ? 0 : Number(prefs.get('master') ?? 0.8), 0.3);
+    bus.ramp(bus.master.gain, muted ? 0 : Number(prefs.get('master') ?? 0.6) * PLATFORM_GAIN, 0.3);
     bus.ramp(bus.ambience.gain, Number(prefs.get('ambience') ?? 0.6), fade);
     bus.ramp(bus.ui.gain, Number(prefs.get('ui') ?? 0.7), 0.1);
   }
@@ -23,6 +29,7 @@ export function createAudio(prefs) {
     if (started) return;
     if (!bus.ensure()) return;
     started = true;
+    watchState();
     try {
       ambience = createAmbience(bus);
       if (waterSources) ambience.setWaterSources(waterSources);
@@ -34,13 +41,22 @@ export function createAudio(prefs) {
   }
 
   // The first pointer or key press unlocks audio (browser autoplay rules).
-  const unlock = () => {
+  // iOS Safari is fussy about which gesture and when, so listen broadly and
+  // stay armed until the context is actually running.
+  const GESTURES = ['pointerdown', 'touchend', 'click', 'keydown'];
+  const disarm = () => { for (const g of GESTURES) removeEventListener(g, unlock, true); };
+  const arm = () => { for (const g of GESTURES) addEventListener(g, unlock, true); };
+  function unlock() {
     start();
-    removeEventListener('pointerdown', unlock, true);
-    removeEventListener('keydown', unlock, true);
-  };
-  addEventListener('pointerdown', unlock, true);
-  addEventListener('keydown', unlock, true);
+    if (bus.ctx?.state === 'running') { disarm(); return; }
+    bus.ctx?.resume?.().then(() => { if (bus.ctx.state === 'running') disarm(); }).catch(() => {});
+  }
+  arm();
+  // If the context falls back to suspended/interrupted (iOS does this after
+  // calls, Siri, or other apps grabbing audio), re-arm for the next gesture.
+  const watchState = () => bus.ctx?.addEventListener?.('statechange', () => {
+    if (bus.ctx.state !== 'running' && !document.hidden) arm();
+  });
 
   document.addEventListener('visibilitychange', () => {
     if (!bus.ctx) return;

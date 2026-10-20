@@ -13,6 +13,19 @@ html, body {
   -webkit-text-size-adjust: 100%;
 }
 
+/* iOS web apps: plain 100% heights can stop at the inset layout viewport
+   and leave the page background showing below the screen edge. The large
+   viewport units (and the legacy fill keyword for old Safari) pin the page
+   to the full visible surface instead. */
+html {
+  height: -webkit-fill-available;
+  height: 100lvh;
+}
+body {
+  min-height: -webkit-fill-available;
+  min-height: 100lvh;
+}
+
 body {
   font-family: var(--font-ui);
   font-size: var(--fs-15);
@@ -26,8 +39,14 @@ body {
 #world {
   position: fixed;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 100vw;
+  /* Largest-viewport height keeps the scene edge to edge in iOS home-screen
+     apps, where vh/% heights stop above the home-indicator strip. Last
+     supported declaration wins; each earlier one is a fallback. */
+  height: -webkit-fill-available;
+  height: 100vh;
+  height: 100dvh;
+  height: 100lvh;
   display: block;
   z-index: var(--z-scene);
   touch-action: none;

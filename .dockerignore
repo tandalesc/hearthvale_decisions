@@ -1,0 +1,12 @@
+.git
+node_modules
+dist
+tests
+test-results
+benchmarks
+docs
+local.env
+local.env.example
+*.md
+Dockerfile
+.dockerignore

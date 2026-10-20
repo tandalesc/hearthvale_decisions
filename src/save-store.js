@@ -26,9 +26,48 @@ function tx(db, mode, fn) {
   });
 }
 
+function gzipInWorker(source) {
+  return new Promise((resolve, reject) => {
+    // Each immutable snapshot gets its own worker. It is stopped on every
+    // completion or failure, so no pending reply can belong to another save.
+    const worker = new Worker(new URL('./save-worker.js', import.meta.url), {type: 'module'});
+    let settled = false;
+    const onHide = () => finish(new Error('Finish this save on the page thread.'));
+    const onVisibility = () => { if (globalThis.document?.visibilityState === 'hidden') onHide(); };
+    const finish = (error, blob) => {
+      if (settled) return;
+      settled = true;
+      globalThis.removeEventListener?.('pagehide', onHide);
+      globalThis.document?.removeEventListener('visibilitychange', onVisibility);
+      worker.onmessage = worker.onerror = worker.onmessageerror = null;
+      worker.terminate();
+      if (error) reject(error);
+      else resolve(blob);
+    };
+    worker.onmessage = ({data}) => {
+      if (data?.blob instanceof Blob) finish(null, data.blob);
+      else finish(new Error(data?.error ?? 'Save compression returned no data.'));
+    };
+    worker.onerror = (event) => {
+      event.preventDefault();
+      finish(event.error ?? new Error('Save compression worker failed.'));
+    };
+    worker.onmessageerror = () => finish(new Error('Save compression reply could not be read.'));
+    globalThis.addEventListener?.('pagehide', onHide);
+    globalThis.document?.addEventListener('visibilitychange', onVisibility);
+    try { worker.postMessage(source); } catch (error) { finish(error); }
+  });
+}
+
 async function gzip(text) {
   if (typeof CompressionStream === 'undefined') return text;
-  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+  const source = new Blob([text]);
+  // Hidden/unloading pages keep the original local compressor. An in-flight
+  // foreground worker also falls back there when the page is hidden.
+  if (typeof Worker === 'function' && globalThis.document?.visibilityState !== 'hidden') {
+    try { return await gzipInWorker(source); } catch { /* use the local compressor below */ }
+  }
+  const stream = source.stream().pipeThrough(new CompressionStream('gzip'));
   return new Blob([await new Response(stream).arrayBuffer()], {type: 'application/gzip'});
 }
 

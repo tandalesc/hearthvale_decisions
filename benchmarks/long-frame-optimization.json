@@ -1,0 +1,445 @@
+{
+  "baselineCommit": "fd6e048019473ccada19f5760d3a43ca418ce6a5",
+  "date": "2026-10-16",
+  "scope": "Retained: foreground autosave gzip in a dedicated worker, with native fallback. Immutable snapshot timing, saved text, gzip format, serial writes, simulation cadence and graphics are preserved. The route water-check candidate was tested and deferred.",
+  "setup": {
+    "fixture": "city",
+    "saveEnabled": true,
+    "sampleMs": 70000,
+    "warmupMs": 8000,
+    "viewport": [
+      1440,
+      900
+    ],
+    "deviceScaleFactor": 2,
+    "actualPixelRatio": 1.75,
+    "quality": "high",
+    "speed": 1,
+    "camera": "distance120 gentle pan",
+    "browser": "Installed Google Chrome, Metal, headless",
+    "power": "Charging/full-battery emulation; battery saver off",
+    "network": "API calls blocked, model disabled",
+    "capture": "Per-frame subsystem spans, LongTask/LongAnimationFrame observers, 1ms CDP CPU sampling and Chrome trace; no permanent game instrumentation"
+  },
+  "findings": [
+    "The original save compressor runs native CompressionStream Deflate on the page thread: two 109/118ms long tasks, in addition to 45/59ms synchronous snapshot serialization and 10ms Blob construction.",
+    "The longest RAF callbacks spend most time in stepPeople -> checkFootprints/reskirt -> skirtOutlines/legDry. GC overlapping these frames is below 1ms.",
+    "The water-check reorder improved an isolated route workload and passed exact helper oracles, but full and focused bridge/deep-water checks failed with the candidate and passed with original fd6e048 roads. It was reverted; no navigation performance improvement is retained.",
+    "Worker compression removes main-thread Deflate in the frozen-input control. Snapshot serialization still creates 50/64ms foreground work in the combined-candidate capture. Route reskirting and synchronous serialization hitches remain unresolved."
+  ],
+  "cityRuns": {
+    "baseline": {
+      "initial": {
+        "tick": 55270,
+        "pop": 5059,
+        "people": 2000,
+        "buildings": 640
+      },
+      "final": {
+        "tick": 55642,
+        "people": 2000,
+        "buildings": 637
+      },
+      "frameCpuMs": {
+        "count": 4194,
+        "mean": 1.9604434909056525,
+        "p50": 0.800000011920929,
+        "p95": 5.700000047683716,
+        "p99": 9,
+        "max": 52.5
+      },
+      "framesOver16_7Ms": 25,
+      "framesOver33_3Ms": 25,
+      "stages": {
+        "routes": {
+          "count": 4194,
+          "mean": 0.12589413446361358,
+          "p50": 0,
+          "p95": 0.10000002384185791,
+          "p99": 4.900000035762787,
+          "max": 7
+        },
+        "simulation": {
+          "count": 4194,
+          "mean": 0.4159275150805015,
+          "p50": 0,
+          "p95": 1.899999976158142,
+          "p99": 4.600000023841858,
+          "max": 50.19999998807907
+        },
+        "view.sync": {
+          "count": 4194,
+          "mean": 0.1935622318619822,
+          "p50": 0.10000002384185791,
+          "p95": 0.7000000476837158,
+          "p99": 1,
+          "max": 1.300000011920929
+        },
+        "world": {
+          "count": 4194,
+          "mean": 1.1403195041102572,
+          "p50": 0.6000000238418579,
+          "p95": 4,
+          "p99": 5.899999976158142,
+          "max": 9.300000011920929
+        },
+        "ui": {
+          "count": 4194,
+          "mean": 0.05214592272972685,
+          "p50": 0,
+          "p95": 0.699999988079071,
+          "p99": 0.9000000357627869,
+          "max": 2.299999952316284
+        }
+      },
+      "saveEvents": [
+        {
+          "name": "save.serialize",
+          "durationMs": 45.19999998807907,
+          "chars": 13787942,
+          "tick": 55378
+        },
+        {
+          "name": "save.gzip.setup",
+          "durationMs": 9.5,
+          "sourceBytes": 13787942
+        },
+        {
+          "name": "save.gzip.async",
+          "durationMs": 129.19999998807907,
+          "compressedBytes": 4056289
+        },
+        {
+          "name": "save.indexedDB.async",
+          "durationMs": 9.699999988079071
+        },
+        {
+          "name": "save.serialize",
+          "durationMs": 58.60000002384186,
+          "chars": 14662409,
+          "tick": 55527
+        },
+        {
+          "name": "save.gzip.setup",
+          "durationMs": 10.399999976158142,
+          "sourceBytes": 14662409
+        },
+        {
+          "name": "save.gzip.async",
+          "durationMs": 141.0999999642372,
+          "compressedBytes": 4439084
+        },
+        {
+          "name": "save.indexedDB.async",
+          "durationMs": 4.5
+        }
+      ],
+      "compressionTrace": {
+        "mainDeflateMs": 224.517,
+        "otherThreadDeflateMs": 0
+      },
+      "errors": [],
+      "consoleWarnings": []
+    },
+    "after": {
+      "initial": {
+        "tick": 55270,
+        "pop": 5059,
+        "people": 2000,
+        "buildings": 640
+      },
+      "final": {
+        "tick": 55639,
+        "people": 2000,
+        "buildings": 637
+      },
+      "frameCpuMs": {
+        "count": 4183,
+        "mean": 2.1163758066548075,
+        "p50": 0.8999999761581421,
+        "p95": 6.800000011920929,
+        "p99": 10.899999976158142,
+        "max": 54.69999998807907
+      },
+      "framesOver16_7Ms": 26,
+      "framesOver33_3Ms": 14,
+      "stages": {
+        "routes": {
+          "count": 4183,
+          "mean": 0.147501792943053,
+          "p50": 0,
+          "p95": 0.10000002384185791,
+          "p99": 5.899999976158142,
+          "max": 8.300000011920929
+        },
+        "simulation": {
+          "count": 4183,
+          "mean": 0.4128854884902969,
+          "p50": 0,
+          "p95": 2.199999988079071,
+          "p99": 5.699999988079071,
+          "max": 49.09999996423721
+        },
+        "view.sync": {
+          "count": 4183,
+          "mean": 0.21185751878100947,
+          "p50": 0.10000002384185791,
+          "p95": 0.9000000357627869,
+          "p99": 1.199999988079071,
+          "max": 1.4000000357627869
+        },
+        "world": {
+          "count": 4183,
+          "mean": 1.2545063349866081,
+          "p50": 0.6000000238418579,
+          "p95": 4.800000011920929,
+          "p99": 7,
+          "max": 13.700000047683716
+        },
+        "ui": {
+          "count": 4183,
+          "mean": 0.05995696879960748,
+          "p50": 0,
+          "p95": 0.800000011920929,
+          "p99": 1.0999999642372131,
+          "max": 2.800000011920929
+        }
+      },
+      "saveEvents": [
+        {
+          "name": "save.serialize",
+          "durationMs": 50,
+          "chars": 13791981,
+          "tick": 55378
+        },
+        {
+          "name": "save.gzip.setup",
+          "durationMs": 9.699999988079071,
+          "sourceBytes": 13791981
+        },
+        {
+          "name": "save.worker.dispatch",
+          "durationMs": 0.09999996423721313
+        },
+        {
+          "name": "save.gzip.worker.async",
+          "durationMs": 117.5,
+          "compressedBytes": 4058088
+        },
+        {
+          "name": "save.indexedDB.async",
+          "durationMs": 2.700000047683716
+        },
+        {
+          "name": "save.serialize",
+          "durationMs": 63.80000001192093,
+          "chars": 14692586,
+          "tick": 55528
+        },
+        {
+          "name": "save.gzip.setup",
+          "durationMs": 12,
+          "sourceBytes": 14692586
+        },
+        {
+          "name": "save.worker.dispatch",
+          "durationMs": 0
+        },
+        {
+          "name": "save.gzip.worker.async",
+          "durationMs": 133.60000002384186,
+          "compressedBytes": 4455718
+        },
+        {
+          "name": "save.indexedDB.async",
+          "durationMs": 1.600000023841858
+        }
+      ],
+      "compressionTrace": {
+        "mainDeflateMs": 0,
+        "otherThreadDeflateMs": 222.282
+      },
+      "errors": [],
+      "consoleWarnings": [],
+      "configuration": "Experimental route water-check reorder plus worker gzip; the route candidate was subsequently reverted. This is not a capture of the final retained configuration."
+    }
+  },
+  "frozenSaveCompression": {
+    "results": [
+      {
+        "label": "native",
+        "ok": true,
+        "wallMs": 137.79999995231628,
+        "sourceChars": 14692586,
+        "compressedBytes": 4455718,
+        "type": "application/gzip",
+        "sha256": "769c8ac423318ab0aa001378f17b65102ea905b563a5c56771fae90e018e5fbb",
+        "restoredEqual": true,
+        "longTasks": [
+          {
+            "start": 487.10000002384186,
+            "duration": 117
+          }
+        ],
+        "maxRafGapMs": 100
+      },
+      {
+        "label": "worker",
+        "ok": true,
+        "wallMs": 145.70000004768372,
+        "sourceChars": 14692586,
+        "compressedBytes": 4455718,
+        "type": "application/gzip",
+        "sha256": "769c8ac423318ab0aa001378f17b65102ea905b563a5c56771fae90e018e5fbb",
+        "restoredEqual": true,
+        "longTasks": [],
+        "maxRafGapMs": 16.700000000000045
+      }
+    ],
+    "compressedBytesEqual": true
+  },
+  "validation": {
+    "browserSaveStore": "11/11 pass: real city save/restore, identical gzip bytes, serial writes, unsupported/error fallback, visibility/pagehide fallback and migration/IDB recovery",
+    "build": "pass, bundled module save worker",
+    "fullNodeSuite": {
+      "experimentalCandidates": {
+        "total": 396,
+        "passed": 391,
+        "failed": 5,
+        "failures": [
+          "hill-town drawn walker collision",
+          "T-junction path geometry",
+          "towpath lane geometry",
+          "town bridge/deep-water",
+          "8x walker deep-water"
+        ]
+      },
+      "originalRoadsSubstitution": {
+        "command": "node --import /tmp/hearthvale-longframes-20261016/baseline-hook.mjs --test tests/*.test.js",
+        "total": 396,
+        "passed": 392,
+        "failed": 4,
+        "failures": [
+          "hill-town drawn walker collision",
+          "T-junction path geometry",
+          "towpath lane geometry",
+          "1x walker footprint invariant"
+        ],
+        "configuration": "Original fd6e048 roads, plus the then-present golden oracle test. The oracle test was subsequently removed along with the candidate; retained Node production source matches this configuration. Save compression is browser-only. No additional full suite run was made after removing that test."
+      }
+    },
+    "syntaxChecks": [
+      "scripts/benchmark-longframes.js",
+      "scripts/benchmark-save-compression.js"
+    ],
+    "focusedWalkerComparison": {
+      "originalFd6e048": {
+        "bridgeDeepWater": "pass",
+        "8xFootprint": "pass"
+      },
+      "baselineMethod": "Node module loader substitutes original src/sim/roads.js without editing the checkout; save code is not exercised by these Node tests.",
+      "currentExperimentalBeforeRevert": {
+        "bridgeDeepWater": "fail: 34 deep-water samples",
+        "8xFootprint": "pass"
+      }
+    }
+  },
+  "caveats": [
+    "One sequential combined-candidate live-city pair; profiling adds overhead. The route candidate was later reverted, so this pair does not measure the final retained configuration. No overall FPS, frame-tail or worst-frame improvement claim.",
+    "Simulation timestamps and camera phase diverge slightly in real time: final tick55642 vs55639. Initial render draw counts also differ during transient scene/shadow work. Frozen-input compression and exact route comparisons isolate the demonstrated wins.",
+    "The original midpoint diagnostic transferred full arrays and induced one roughly250ms gap; exclude that measurement artifact and startup gaps from frame-gap claims. The reusable harness transfers only a small midpoint summary.",
+    "Foreground worker compression has similar/slightly longer wall completion time; the benefit is keeping the page responsive during compression. Hidden/unloading or unsupported/error cases preserve the existing page-thread fallback.",
+    "Serialization and remaining route reskirting hitches are unresolved. This pass does not change snapshot timing or introduce asynchronous state serialization.",
+    "The full Node suite remains affected by four observed failures with original routing code; the deferred candidate added an unresolved bridge-test failure. Browser save-store tests pass 11/11."
+  ],
+  "reproduction": {
+    "before": "node scripts/benchmark-longframes.js --label=baseline --baseline-ref=fd6e048 --out=/tmp/hearthvale-longframes",
+    "after": "node scripts/benchmark-longframes.js --label=after --out=/tmp/hearthvale-longframes",
+    "frozenSave": "node scripts/benchmark-save-compression.js --input=/tmp/hearthvale-longframes/after-saved.json --baseline-ref=fd6e048 --out=/tmp/hearthvale-longframes/compression-control.json",
+    "saveTests": "HEARTHVALE_TEST_PORT=5297 npx playwright test tests/browser/save-store.spec.js --reporter=line"
+  },
+  "rawCaptureDirectory": "/tmp/hearthvale-longframes-20261016",
+  "routeExperimentDeferred": {
+    "synthetic": {
+      "routes": 66,
+      "hashes": [
+        "85bf3722fae84d49d3cd075c073eb0d90d7c08ab927a9eca39fe51eb7f703d7d",
+        "905cdd677bfcbf219ecc363b3defe8724eff8353a91e186025f01c4bf07f1cd6"
+      ],
+      "modified": 3,
+      "nearWaypoints": 98
+    },
+    "results": [
+      {
+        "name": "town",
+        "routes": 108,
+        "checks": 108,
+        "beforeMedianMs": 0.8850830000000087,
+        "afterMedianMs": 0.45412499999997635,
+        "reductionPct": 48.69125268477963,
+        "beforeMs": [
+          0.8445830000000569,
+          0.8580419999999549,
+          0.8601670000000468,
+          0.8624169999999367,
+          0.8725839999999607,
+          0.8850830000000087,
+          0.8856250000000045,
+          0.94662500000004,
+          1.0591249999999945,
+          1.0941250000000196,
+          1.4853329999999687
+        ],
+        "afterMs": [
+          0.40999999999996817,
+          0.4237920000000486,
+          0.43183299999998326,
+          0.43212500000004184,
+          0.4375830000000178,
+          0.45412499999997635,
+          0.45470799999998235,
+          0.4554170000000113,
+          0.5040829999999232,
+          0.5570830000000342,
+          0.5935410000000161
+        ]
+      },
+      {
+        "name": "city",
+        "routes": 99,
+        "checks": 99,
+        "beforeMedianMs": 1.5867499999999382,
+        "afterMedianMs": 0.7371249999998781,
+        "reductionPct": 53.54498188120959,
+        "beforeMs": [
+          1.4922500000000127,
+          1.52862499999992,
+          1.5322090000001936,
+          1.5417079999999714,
+          1.5847499999999854,
+          1.5867499999999382,
+          1.5928329999999278,
+          1.6084999999998217,
+          1.6383330000001024,
+          1.6552079999999023,
+          2.089999999999918
+        ],
+        "afterMs": [
+          0.6992079999999987,
+          0.7081250000001091,
+          0.7137080000002243,
+          0.7264580000000933,
+          0.7286670000000868,
+          0.7371249999998781,
+          0.7579580000001442,
+          0.7615000000000691,
+          0.7818339999998898,
+          0.8083750000000691,
+          0.8232080000000224
+        ]
+      }
+    ],
+    "method": "Exact Float64 route values, same/new array identity and ordered keep-callback arguments; fixed wet/touching/overlap cases plus real town/city in-flight routes.",
+    "disposition": "Deferred and reverted. Despite exact helper outputs, original bridge test passed both full/focused runs and experimental code failed both full/focused runs. No unrelated walker logic was changed to make tests pass."
+  }
+}

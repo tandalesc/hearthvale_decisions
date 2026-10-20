@@ -65,6 +65,9 @@ export function createBus() {
     if (ctx) return ctx;
     const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
     if (!AC) return null;
+    // iOS Safari treats WebAudio as "ambient" audio: silenced by the mute
+    // switch and other apps' audio. Declare playback so the town is heard.
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* older Safari */ }
     ctx = new AC({latencyHint: 'playback'});
     const rate = ctx.sampleRate;
 

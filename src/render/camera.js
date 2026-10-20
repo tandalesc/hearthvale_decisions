@@ -27,8 +27,8 @@ export function createCameraRig(canvas) {
   controls.screenSpacePanning = false;
   controls.zoomToCursor = true;
   controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
-  // On touch, one finger pans the town; two fingers pinch and turn.
-  controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
+  // On touch, one finger orbits the town; two fingers pinch and pan.
+  controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
   canvas.style.touchAction = 'none';
 
   const insets = { top: 0, right: 0, bottom: 0, left: 0 };

@@ -194,14 +194,23 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
     forceFrame = true;
   }
 
+  let lastW = 0, lastH = 0;
   function resize() {
+    // The stylesheet owns the canvas box (100lvh full-bleed rules); render
+    // to whatever it computes. Never pin inline pixel sizes here — they
+    // would silently override the CSS.
     const rect = canvas.getBoundingClientRect();
-    const w = Math.max(1, Math.round(rect.width || canvas.clientWidth || 1));
-    const h = Math.max(1, Math.round(rect.height || canvas.clientHeight || 1));
+    const w = Math.max(1, Math.round(rect.width || window.innerWidth || 1));
+    const h = Math.max(1, Math.round(rect.height || window.innerHeight || 1));
+    if (w === lastW && h === lastH) return;
+    lastW = w; lastH = h;
     renderer.setSize(w, h, false);
     rig.resize(w, h);
     forceFrame = true;
   }
+  // iOS Safari reports stale viewport dimensions right after a rotation;
+  // measure again once the screen has definitely settled.
+  const onOrientation = () => { setTimeout(resize, 250); setTimeout(resize, 700); };
   /**
    * Recompute the power state (Battery saver setting + battery). Saving draws
    * at 30 Hz while watching, at most 1.25x pixels and, in Auto detail, one
@@ -226,6 +235,10 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
 
   const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(resize) : null;
   resizeObserver?.observe(canvas);
+  // The observer only sees CSS-box changes; window events catch the rest
+  // (rotation, iOS chrome collapsing, entering standalone mode).
+  addEventListener('resize', resize);
+  addEventListener('orientationchange', onOrientation);
   applyQuality();
   rig.home();
 
@@ -519,6 +532,8 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
     dispose() {
       disposed = true;
       resizeObserver?.disconnect();
+      removeEventListener('resize', resize);
+      removeEventListener('orientationchange', onOrientation);
       picking.dispose();
       rig.dispose();
       water.dispose();
