@@ -1,5 +1,5 @@
 // Time controls (design-visual §8.7): pause, and one speed button that
-// steps 1× → 3× → 5×, a thin era progress bar toward the next age, the
+// steps 1× → 3× → 5× → 10× → 20×, a thin era progress bar toward the next age, the
 // season, and a sound toggle. 'strip' variant lives in the desktop time
 // strip; 'peek' in the phone sheet (the Council and every other view sit in
 // the sheet's view strip below it).
@@ -7,19 +7,21 @@ import {h, setAttr, setText} from '../dom.js';
 import {icon} from '../icons.js';
 import {SEASON_ICONS, SEASONS} from '../format.js';
 
-export const SPEEDS = [1, 3, 5];
+export const SPEEDS = [1, 3, 5, 10, 20];
 
 // The speed after s, round to 1× again after the fastest.
 export function nextSpeed(s) {
   return SPEEDS[(SPEEDS.indexOf(s) + 1) % SPEEDS.length];
 }
 
+const toggleLag = (el, on) => el.classList.toggle('lagging', on);
+
 function speedSeg(ctx) {
   const seg = h('div.seg', {role: 'group', 'aria-label': 'Speed'});
   const pause = h('button.pause', {type: 'button', title: 'Pause (Space)'});
   pause.addEventListener('click', () => ctx.setSpeed(ctx.speed() === 0 ? ctx.lastSpeed() : 0));
   // Steps to the next speed; when paused it also starts the town again.
-  const step = h('button.speed', {type: 'button', title: 'Change speed (1, 2, 3)'});
+  const step = h('button.speed', {type: 'button', title: 'Change speed (1 to 5)'});
   step.addEventListener('click', () => ctx.setSpeed(nextSpeed(ctx.speed() || ctx.lastSpeed())));
   seg.append(pause, step);
   return seg;
@@ -68,6 +70,16 @@ export function createTime(ctx, variant = 'strip') {
         step.setAttribute('aria-label', `Speed ${shown} times. Change speed`);
       }
       setAttr(step, 'aria-pressed', String(speed > 0));
+      // At a speed this device cannot keep up with, say what it really reaches.
+      const reached = speed > 0 ? ctx.reachedSpeed?.() : null;
+      const lagging = reached != null && reached < speed * 0.8;
+      const lagKey = lagging ? String(Math.max(1, Math.round(reached))) : '';
+      if (step.dataset.lag !== lagKey) {
+        step.dataset.lag = lagKey;
+        toggleLag(step, lagging);
+        step.title = lagging ? `Running at about ${lagKey}× on this device. Change speed (1 to 5)` : 'Change speed (1 to 5)';
+        step.setAttribute('aria-label', lagging ? `Speed ${shown} times, running at about ${lagKey} times. Change speed` : `Speed ${shown} times. Change speed`);
+      }
       const sum = eraSummary(era);
       if (variant === 'strip') {
         setText(el.querySelector('.era-name'), top.eraName);

@@ -1,0 +1,1434 @@
+{
+ "date": "2026-10-20",
+ "baseline": "fd6e048",
+ "hardware": "Apple M5 Pro (ANGLE Metal), macOS, Node 24.14, Chrome headless; machine shared with other sessions (load average 4-19 during runs)",
+ "fixtures": {
+  "metro": "year-165 town grown headless from seed 1888 (city profile pushed to year 165): ~7,800 people, 2,000 walkers, ~1,040 buildings. Not committed (7.8 MB); regenerate with the recipe in PERFORMANCE.md.",
+  "city": "src/sim/fixtures/city.json (year 92)"
+ },
+ "nodeAB": {
+  "method": "node --expose-gc scripts/benchmark-city.js [--save=metro] --seconds=30 (5x, 60 fps, 120 warm frames); baseline (git archive fd6e048) and current alternated, 3 runs each",
+  "metro": {
+   "base": [
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 6.375,
+       "p50": 0.414,
+       "p95": 57.103,
+       "p99": 93.706,
+       "max": 123.673
+      },
+      "sim": {
+       "mean": 5.479,
+       "p50": 0.009,
+       "p95": 55.633,
+       "p99": 91.155,
+       "max": 120.66
+      },
+      "sync": {
+       "mean": 0.895,
+       "p50": 0.404,
+       "p95": 2.578,
+       "p99": 3.063,
+       "max": 8.218
+      },
+      "routeCompute": {
+       "mean": 3.825,
+       "p50": 0.006,
+       "p95": 17.908,
+       "p99": 39.178,
+       "max": 94.32
+      }
+     },
+     "gc": {
+      "count": 637,
+      "totalMs": 310.3,
+      "maxMs": 5.72
+     },
+     "hash": "8906ea1f4c0c8f09",
+     "town": {
+      "year": 166,
+      "pop": 7719,
+      "walkers": 2000,
+      "buildings": 1033
+     }
+    },
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 7.2,
+       "p50": 0.436,
+       "p95": 59.823,
+       "p99": 100.415,
+       "max": 350.078
+      },
+      "sim": {
+       "mean": 6.142,
+       "p50": 0.009,
+       "p95": 58.04,
+       "p99": 97.767,
+       "max": 347.271
+      },
+      "sync": {
+       "mean": 1.058,
+       "p50": 0.424,
+       "p95": 2.694,
+       "p99": 3.236,
+       "max": 3.952
+      },
+      "routeCompute": {
+       "mean": 4.34,
+       "p50": 0.007,
+       "p95": 20.913,
+       "p99": 39.878,
+       "max": 79.108
+      }
+     },
+     "gc": {
+      "count": 639,
+      "totalMs": 340.6,
+      "maxMs": 7.51
+     },
+     "hash": "8906ea1f4c0c8f09",
+     "town": {
+      "year": 166,
+      "pop": 7719,
+      "walkers": 2000,
+      "buildings": 1033
+     }
+    },
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 6.405,
+       "p50": 0.376,
+       "p95": 60.579,
+       "p99": 83.077,
+       "max": 134.94
+      },
+      "sim": {
+       "mean": 5.412,
+       "p50": 0.008,
+       "p95": 58.053,
+       "p99": 81.052,
+       "max": 132.02
+      },
+      "sync": {
+       "mean": 0.993,
+       "p50": 0.368,
+       "p95": 2.474,
+       "p99": 2.904,
+       "max": 4.764
+      },
+      "routeCompute": {
+       "mean": 3.889,
+       "p50": 0.006,
+       "p95": 17.538,
+       "p99": 40.335,
+       "max": 65.462
+      }
+     },
+     "gc": {
+      "count": 653,
+      "totalMs": 299.8,
+      "maxMs": 4.4
+     },
+     "hash": "8906ea1f4c0c8f09",
+     "town": {
+      "year": 166,
+      "pop": 7719,
+      "walkers": 2000,
+      "buildings": 1033
+     }
+    }
+   ],
+   "cur": [
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 3.695,
+       "p50": 0.44,
+       "p95": 19.639,
+       "p99": 33.317,
+       "max": 48.799
+      },
+      "sim": {
+       "mean": 3.095,
+       "p50": 0.009,
+       "p95": 18.643,
+       "p99": 32.453,
+       "max": 47.67
+      },
+      "sync": {
+       "mean": 0.599,
+       "p50": 0.43,
+       "p95": 1.335,
+       "p99": 1.622,
+       "max": 4.045
+      },
+      "routeCompute": {
+       "mean": 4.048,
+       "p50": 0.008,
+       "p95": 19.008,
+       "p99": 38.078,
+       "max": 63.505
+      }
+     },
+     "gc": {
+      "count": 503,
+      "totalMs": 302.8,
+      "maxMs": 8.52
+     },
+     "hash": "8906ea1f4c0c8f09",
+     "town": {
+      "year": 166,
+      "pop": 7719,
+      "walkers": 2000,
+      "buildings": 1033
+     }
+    },
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 3.194,
+       "p50": 0.417,
+       "p95": 17.893,
+       "p99": 30.179,
+       "max": 49.97
+      },
+      "sim": {
+       "mean": 2.706,
+       "p50": 0.008,
+       "p95": 17.097,
+       "p99": 29.093,
+       "max": 48.51
+      },
+      "sync": {
+       "mean": 0.488,
+       "p50": 0.39,
+       "p95": 1.209,
+       "p99": 1.564,
+       "max": 2.271
+      },
+      "routeCompute": {
+       "mean": 3.509,
+       "p50": 0.006,
+       "p95": 16.169,
+       "p99": 36.834,
+       "max": 77.8
+      }
+     },
+     "gc": {
+      "count": 498,
+      "totalMs": 280.4,
+      "maxMs": 7.77
+     },
+     "hash": "8906ea1f4c0c8f09",
+     "town": {
+      "year": 166,
+      "pop": 7719,
+      "walkers": 2000,
+      "buildings": 1033
+     }
+    },
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 2.87,
+       "p50": 0.347,
+       "p95": 16.44,
+       "p99": 25.788,
+       "max": 37.109
+      },
+      "sim": {
+       "mean": 2.424,
+       "p50": 0.008,
+       "p95": 15.655,
+       "p99": 24.95,
+       "max": 35.309
+      },
+      "sync": {
+       "mean": 0.446,
+       "p50": 0.34,
+       "p95": 0.939,
+       "p99": 1.219,
+       "max": 1.799
+      },
+      "routeCompute": {
+       "mean": 3.2,
+       "p50": 0.005,
+       "p95": 14.486,
+       "p99": 33.687,
+       "max": 64.736
+      }
+     },
+     "gc": {
+      "count": 500,
+      "totalMs": 251.7,
+      "maxMs": 6
+     },
+     "hash": "8906ea1f4c0c8f09",
+     "town": {
+      "year": 166,
+      "pop": 7719,
+      "walkers": 2000,
+      "buildings": 1033
+     }
+    }
+   ]
+  },
+  "city": {
+   "base": [
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 3.412,
+       "p50": 0.321,
+       "p95": 9.603,
+       "p99": 49.934,
+       "max": 61.739
+      },
+      "sim": {
+       "mean": 2.796,
+       "p50": 0.009,
+       "p95": 8.029,
+       "p99": 48.289,
+       "max": 60.198
+      },
+      "sync": {
+       "mean": 0.616,
+       "p50": 0.314,
+       "p95": 1.494,
+       "p99": 1.772,
+       "max": 3.041
+      },
+      "routeCompute": {
+       "mean": 2.307,
+       "p50": 0.004,
+       "p95": 10.55,
+       "p99": 19.492,
+       "max": 43.961
+      }
+     },
+     "gc": {
+      "count": 403,
+      "totalMs": 178.5,
+      "maxMs": 6.04
+     },
+     "hash": "4473f15f6c3eca7d",
+     "town": {
+      "year": 93,
+      "pop": 5049,
+      "walkers": 2000,
+      "buildings": 643
+     }
+    },
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 3,
+       "p50": 0.266,
+       "p95": 8.233,
+       "p99": 41.978,
+       "max": 53.248
+      },
+      "sim": {
+       "mean": 2.459,
+       "p50": 0.007,
+       "p95": 7.008,
+       "p99": 40.755,
+       "max": 52.185
+      },
+      "sync": {
+       "mean": 0.541,
+       "p50": 0.26,
+       "p95": 1.244,
+       "p99": 1.508,
+       "max": 3.879
+      },
+      "routeCompute": {
+       "mean": 2.058,
+       "p50": 0.003,
+       "p95": 9.022,
+       "p99": 18.019,
+       "max": 39.339
+      }
+     },
+     "gc": {
+      "count": 402,
+      "totalMs": 161.3,
+      "maxMs": 6.75
+     },
+     "hash": "4473f15f6c3eca7d",
+     "town": {
+      "year": 93,
+      "pop": 5049,
+      "walkers": 2000,
+      "buildings": 643
+     }
+    },
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 2.873,
+       "p50": 0.262,
+       "p95": 8.357,
+       "p99": 41.285,
+       "max": 50.766
+      },
+      "sim": {
+       "mean": 2.37,
+       "p50": 0.007,
+       "p95": 7.514,
+       "p99": 39.744,
+       "max": 49.627
+      },
+      "sync": {
+       "mean": 0.503,
+       "p50": 0.255,
+       "p95": 1.124,
+       "p99": 1.473,
+       "max": 2.58
+      },
+      "routeCompute": {
+       "mean": 1.972,
+       "p50": 0.003,
+       "p95": 8.638,
+       "p99": 17.323,
+       "max": 39.936
+      }
+     },
+     "gc": {
+      "count": 405,
+      "totalMs": 157.8,
+      "maxMs": 4.38
+     },
+     "hash": "4473f15f6c3eca7d",
+     "town": {
+      "year": 93,
+      "pop": 5049,
+      "walkers": 2000,
+      "buildings": 643
+     }
+    }
+   ],
+   "cur": [
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 1.756,
+       "p50": 0.252,
+       "p95": 8.238,
+       "p99": 16.863,
+       "max": 31.501
+      },
+      "sim": {
+       "mean": 1.397,
+       "p50": 0.006,
+       "p95": 7.606,
+       "p99": 16.113,
+       "max": 30.902
+      },
+      "sync": {
+       "mean": 0.359,
+       "p50": 0.246,
+       "p95": 0.752,
+       "p99": 0.977,
+       "max": 1.769
+      },
+      "routeCompute": {
+       "mean": 1.854,
+       "p50": 0.003,
+       "p95": 7.977,
+       "p99": 16.705,
+       "max": 39.957
+      }
+     },
+     "gc": {
+      "count": 332,
+      "totalMs": 151,
+      "maxMs": 4.77
+     },
+     "hash": "4473f15f6c3eca7d",
+     "town": {
+      "year": 93,
+      "pop": 5049,
+      "walkers": 2000,
+      "buildings": 643
+     }
+    },
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 1.609,
+       "p50": 0.227,
+       "p95": 7.725,
+       "p99": 15.86,
+       "max": 26.737
+      },
+      "sim": {
+       "mean": 1.281,
+       "p50": 0.006,
+       "p95": 6.982,
+       "p99": 15.286,
+       "max": 26.132
+      },
+      "sync": {
+       "mean": 0.328,
+       "p50": 0.221,
+       "p95": 0.655,
+       "p99": 0.813,
+       "max": 2.611
+      },
+      "routeCompute": {
+       "mean": 1.73,
+       "p50": 0.002,
+       "p95": 7.361,
+       "p99": 14.876,
+       "max": 39.293
+      }
+     },
+     "gc": {
+      "count": 331,
+      "totalMs": 142.9,
+      "maxMs": 4.38
+     },
+     "hash": "4473f15f6c3eca7d",
+     "town": {
+      "year": 93,
+      "pop": 5049,
+      "walkers": 2000,
+      "buildings": 643
+     }
+    },
+    {
+     "perFrameMs": {
+      "simPlusSync": {
+       "mean": 1.86,
+       "p50": 0.275,
+       "p95": 8.417,
+       "p99": 16.927,
+       "max": 31.653
+      },
+      "sim": {
+       "mean": 1.476,
+       "p50": 0.007,
+       "p95": 7.506,
+       "p99": 16.194,
+       "max": 30.957
+      },
+      "sync": {
+       "mean": 0.383,
+       "p50": 0.269,
+       "p95": 0.795,
+       "p99": 0.993,
+       "max": 1.86
+      },
+      "routeCompute": {
+       "mean": 1.912,
+       "p50": 0.003,
+       "p95": 8.271,
+       "p99": 17.19,
+       "max": 39.599
+      }
+     },
+     "gc": {
+      "count": 328,
+      "totalMs": 155.4,
+      "maxMs": 6.26
+     },
+     "hash": "4473f15f6c3eca7d",
+     "town": {
+      "year": 93,
+      "pop": 5049,
+      "walkers": 2000,
+      "buildings": 643
+     }
+    }
+   ]
+  }
+ },
+ "browserAB": {
+  "method": "scripts/benchmark-desktop.js --dprs=2 --save=metro; baseline checkout and current alternated, 2 runs each; 8 s warmup, 16 s sample",
+  "overview5x": [
+   {
+    "label": "base-1",
+    "settings": {
+     "viewport": [
+      1440,
+      900
+     ],
+     "quality": "high",
+     "warmupMs": 8000,
+     "sampleMs": 16000,
+     "cameraDistance": "overview",
+     "cameraPan": false,
+     "batteryEnvironment": "emulated charging/full battery",
+     "decisionModel": false,
+     "batterySaver": "off",
+     "speed": 5,
+     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+    },
+    "raf": {
+     "count": 831,
+     "meanMs": 19.253188929001205,
+     "p50Ms": 16.69999999999891,
+     "p95Ms": 33.400000000001455,
+     "maxMs": 150
+    },
+    "frameCpu": {
+     "count": 832,
+     "meanMs": 9.285937500186265,
+     "p50Ms": 6.5,
+     "p95Ms": 48.80000001192093,
+     "maxMs": 141.9000000357628
+    },
+    "worldCpu": {
+     "count": 832,
+     "meanMs": 3.002764423019611,
+     "p50Ms": 2.600000023841858,
+     "p95Ms": 5.899999976158142,
+     "maxMs": 14.199999988079071
+    },
+    "stageMeans": {
+     "grade": 0.020156250000000014,
+     "roads": 1.7165625,
+     "buildings": 0.09609374999999996,
+     "people": 0.0471875,
+     "trees": 0.19328125000000002,
+     "decals": 0.12874999999999992,
+     "particles": 0.024843750000000005,
+     "props": 0.12000000000000004,
+     "decor": 0.000625,
+     "labels": 0.08109374999999999,
+     "lights": 0.005468750000000003,
+     "render": 0.6362499999999999
+    },
+    "final": {
+     "drawCalls": 109,
+     "triangles": 2459395,
+     "gpuMemory": {
+      "geometries": 75,
+      "textures": 15,
+      "programs": 64
+     }
+    }
+   },
+   {
+    "label": "base-2",
+    "settings": {
+     "viewport": [
+      1440,
+      900
+     ],
+     "quality": "high",
+     "warmupMs": 8000,
+     "sampleMs": 16000,
+     "cameraDistance": "overview",
+     "cameraPan": false,
+     "batteryEnvironment": "emulated charging/full battery",
+     "decisionModel": false,
+     "batterySaver": "off",
+     "speed": 5,
+     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+    },
+    "raf": {
+     "count": 828,
+     "meanMs": 19.322946859903382,
+     "p50Ms": 16.69999999999891,
+     "p95Ms": 49.899999999999636,
+     "maxMs": 166.70000000000073
+    },
+    "frameCpu": {
+     "count": 829,
+     "meanMs": 9.291435464803214,
+     "p50Ms": 6.399999976158142,
+     "p95Ms": 50.700000047683716,
+     "maxMs": 148.60000002384186
+    },
+    "worldCpu": {
+     "count": 829,
+     "meanMs": 3.0022919183760988,
+     "p50Ms": 2.699999988079071,
+     "p95Ms": 5.800000011920929,
+     "maxMs": 15.200000047683716
+    },
+    "stageMeans": {
+     "grade": 0.018437500000000013,
+     "roads": 1.6779687500000007,
+     "buildings": 0.09531249999999997,
+     "people": 0.049218749999999985,
+     "trees": 0.20640624999999996,
+     "decals": 0.12921875,
+     "particles": 0.026875000000000007,
+     "props": 0.11843750000000003,
+     "decor": 0.00046875,
+     "labels": 0.08234375000000002,
+     "lights": 0.0057812500000000025,
+     "render": 0.6443749999999999
+    },
+    "final": {
+     "drawCalls": 153,
+     "triangles": 3309137,
+     "gpuMemory": {
+      "geometries": 75,
+      "textures": 15,
+      "programs": 64
+     }
+    }
+   },
+   {
+    "label": "cur-1",
+    "settings": {
+     "viewport": [
+      1440,
+      900
+     ],
+     "quality": "high",
+     "warmupMs": 8000,
+     "sampleMs": 16000,
+     "cameraDistance": "overview",
+     "cameraPan": false,
+     "batteryEnvironment": "emulated charging/full battery",
+     "decisionModel": false,
+     "batterySaver": "off",
+     "speed": 5,
+     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+    },
+    "raf": {
+     "count": 948,
+     "meanMs": 16.89451476793249,
+     "p50Ms": 16.69999999999891,
+     "p95Ms": 16.799999999999272,
+     "maxMs": 50
+    },
+    "frameCpu": {
+     "count": 949,
+     "meanMs": 6.3913593231312715,
+     "p50Ms": 5.699999988079071,
+     "p95Ms": 18.899999976158142,
+     "maxMs": 46.69999998807907
+    },
+    "worldCpu": {
+     "count": 949,
+     "meanMs": 2.9786090625977995,
+     "p50Ms": 2.5,
+     "p95Ms": 5.600000023841858,
+     "maxMs": 11.100000023841858
+    },
+    "stageMeans": {
+     "grade": 0.019841269841269826,
+     "roads": 1.5998412698412707,
+     "buildings": 0.09158730158730155,
+     "people": 0.052698412698412675,
+     "trees": 0.18095238095238095,
+     "decals": 0.14984126984126978,
+     "particles": 0.022857142857142857,
+     "props": 0.10793650793650796,
+     "decor": 0.0009523809523809524,
+     "labels": 0.08539682539682539,
+     "lights": 0.0046031746031746,
+     "render": 0.6419047619047619
+    },
+    "final": {
+     "drawCalls": 67,
+     "triangles": 1616561,
+     "gpuMemory": {
+      "geometries": 75,
+      "textures": 15,
+      "programs": 64
+     }
+    }
+   },
+   {
+    "label": "cur-2",
+    "settings": {
+     "viewport": [
+      1440,
+      900
+     ],
+     "quality": "high",
+     "warmupMs": 8000,
+     "sampleMs": 16000,
+     "cameraDistance": "overview",
+     "cameraPan": false,
+     "batteryEnvironment": "emulated charging/full battery",
+     "decisionModel": false,
+     "batterySaver": "off",
+     "speed": 5,
+     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+    },
+    "raf": {
+     "count": 943,
+     "meanMs": 16.966489925768823,
+     "p50Ms": 16.69999999999891,
+     "p95Ms": 16.799999999999272,
+     "maxMs": 33.400000000001455
+    },
+    "frameCpu": {
+     "count": 944,
+     "meanMs": 6.870338983454947,
+     "p50Ms": 5.900000035762787,
+     "p95Ms": 20.599999964237213,
+     "maxMs": 47.40000003576279
+    },
+    "worldCpu": {
+     "count": 944,
+     "meanMs": 3.223622882075734,
+     "p50Ms": 2.800000011920929,
+     "p95Ms": 6.399999976158142,
+     "maxMs": 11.699999988079071
+    },
+    "stageMeans": {
+     "grade": 0.022968750000000013,
+     "roads": 1.7356250000000002,
+     "buildings": 0.09093749999999999,
+     "people": 0.051874999999999984,
+     "trees": 0.19218750000000004,
+     "decals": 0.18359374999999992,
+     "particles": 0.027031250000000007,
+     "props": 0.11421874999999997,
+     "decor": 0.00078125,
+     "labels": 0.10062500000000002,
+     "lights": 0.004531250000000001,
+     "render": 0.6765625
+    },
+    "final": {
+     "drawCalls": 67,
+     "triangles": 1616573,
+     "gpuMemory": {
+      "geometries": 75,
+      "textures": 15,
+      "programs": 64
+     }
+    }
+   }
+  ],
+  "close1x": [
+   {
+    "label": "base-1",
+    "settings": {
+     "viewport": [
+      1440,
+      900
+     ],
+     "quality": "high",
+     "warmupMs": 8000,
+     "sampleMs": 16000,
+     "cameraDistance": 120,
+     "cameraPan": true,
+     "batteryEnvironment": "emulated charging/full battery",
+     "decisionModel": false,
+     "batterySaver": "off",
+     "speed": 1,
+     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+    },
+    "raf": {
+     "count": 935,
+     "meanMs": 17.111657754010693,
+     "p50Ms": 16.69999999999891,
+     "p95Ms": 16.799999999999272,
+     "maxMs": 66.69999999999891
+    },
+    "frameCpu": {
+     "count": 936,
+     "meanMs": 3.034081195982603,
+     "p50Ms": 1,
+     "p95Ms": 8.300000011920929,
+     "maxMs": 68.09999996423721
+    },
+    "worldCpu": {
+     "count": 936,
+     "meanMs": 1.5124999987136605,
+     "p50Ms": 0.7000000476837158,
+     "p95Ms": 5.399999976158142,
+     "maxMs": 10.900000035762787
+    },
+    "stageMeans": {
+     "grade": 0.022031250000000013,
+     "roads": 0.49234374999999997,
+     "buildings": 0.029531250000000012,
+     "people": 0.04187500000000001,
+     "trees": 0.03703125,
+     "decals": 0.09312499999999996,
+     "particles": 0.007812500000000002,
+     "props": 0.11703124999999998,
+     "decor": 0.1112499999999999,
+     "labels": 0.01500000000000001,
+     "lights": 0.0032812500000000003,
+     "render": 0.5603125
+    },
+    "final": {
+     "drawCalls": 65,
+     "triangles": 1777648,
+     "gpuMemory": {
+      "geometries": 75,
+      "textures": 15,
+      "programs": 67
+     }
+    }
+   },
+   {
+    "label": "base-2",
+    "settings": {
+     "viewport": [
+      1440,
+      900
+     ],
+     "quality": "high",
+     "warmupMs": 8000,
+     "sampleMs": 16000,
+     "cameraDistance": 120,
+     "cameraPan": true,
+     "batteryEnvironment": "emulated charging/full battery",
+     "decisionModel": false,
+     "batterySaver": "off",
+     "speed": 1,
+     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+    },
+    "raf": {
+     "count": 939,
+     "meanMs": 17.056443024494143,
+     "p50Ms": 16.69999999999891,
+     "p95Ms": 16.799999999999272,
+     "maxMs": 66.70000000000073
+    },
+    "frameCpu": {
+     "count": 940,
+     "meanMs": 3.0155319167578476,
+     "p50Ms": 1,
+     "p95Ms": 9,
+     "maxMs": 73.90000003576279
+    },
+    "worldCpu": {
+     "count": 940,
+     "meanMs": 1.4805319174807123,
+     "p50Ms": 0.7000000476837158,
+     "p95Ms": 5.600000023841858,
+     "maxMs": 10.700000047683716
+    },
+    "stageMeans": {
+     "grade": 0.01968750000000001,
+     "roads": 0.47046875000000005,
+     "buildings": 0.030156250000000013,
+     "people": 0.045624999999999985,
+     "trees": 0.041718750000000006,
+     "decals": 0.09656249999999994,
+     "particles": 0.008906250000000004,
+     "props": 0.11468749999999993,
+     "decor": 0.10906249999999992,
+     "labels": 0.013593750000000009,
+     "lights": 0.00265625,
+     "render": 0.5375
+    },
+    "final": {
+     "drawCalls": 65,
+     "triangles": 1777784,
+     "gpuMemory": {
+      "geometries": 75,
+      "textures": 15,
+      "programs": 67
+     }
+    }
+   },
+   {
+    "label": "cur-1",
+    "settings": {
+     "viewport": [
+      1440,
+      900
+     ],
+     "quality": "high",
+     "warmupMs": 8000,
+     "sampleMs": 16000,
+     "cameraDistance": 120,
+     "cameraPan": true,
+     "batteryEnvironment": "emulated charging/full battery",
+     "decisionModel": false,
+     "batterySaver": "off",
+     "speed": 1,
+     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+    },
+    "raf": {
+     "count": 958,
+     "meanMs": 16.70073068893528,
+     "p50Ms": 16.69999999999891,
+     "p95Ms": 16.799999999999272,
+     "maxMs": 50
+    },
+    "frameCpu": {
+     "count": 959,
+     "meanMs": 2.5202294071598272,
+     "p50Ms": 1,
+     "p95Ms": 7.800000011920929,
+     "maxMs": 62.59999996423721
+    },
+    "worldCpu": {
+     "count": 959,
+     "meanMs": 1.4923879054216698,
+     "p50Ms": 0.7000000476837158,
+     "p95Ms": 5.5,
+     "maxMs": 10.400000035762787
+    },
+    "stageMeans": {
+     "grade": 0.01843750000000001,
+     "roads": 0.49734374999999975,
+     "buildings": 0.02671875000000001,
+     "people": 0.049374999999999974,
+     "trees": 0.038125,
+     "decals": 0.08187499999999998,
+     "particles": 0.009843750000000004,
+     "props": 0.10749999999999997,
+     "decor": 0.10843749999999994,
+     "labels": 0.013281250000000008,
+     "lights": 0.0029687499999999996,
+     "render": 0.5435937499999999
+    },
+    "final": {
+     "drawCalls": 106,
+     "triangles": 2657048,
+     "gpuMemory": {
+      "geometries": 75,
+      "textures": 15,
+      "programs": 67
+     }
+    }
+   },
+   {
+    "label": "cur-2",
+    "settings": {
+     "viewport": [
+      1440,
+      900
+     ],
+     "quality": "high",
+     "warmupMs": 8000,
+     "sampleMs": 16000,
+     "cameraDistance": 120,
+     "cameraPan": true,
+     "batteryEnvironment": "emulated charging/full battery",
+     "decisionModel": false,
+     "batterySaver": "off",
+     "speed": 1,
+     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+    },
+    "raf": {
+     "count": 959,
+     "meanMs": 16.7007299270073,
+     "p50Ms": 16.69999999999891,
+     "p95Ms": 16.799999999999272,
+     "maxMs": 50
+    },
+    "frameCpu": {
+     "count": 960,
+     "meanMs": 2.373333334301909,
+     "p50Ms": 0.9000000357627869,
+     "p95Ms": 7.5,
+     "maxMs": 59.69999998807907
+    },
+    "worldCpu": {
+     "count": 960,
+     "meanMs": 1.4007291668405135,
+     "p50Ms": 0.699999988079071,
+     "p95Ms": 5.5,
+     "maxMs": 11.399999976158142
+    },
+    "stageMeans": {
+     "grade": 0.020312500000000015,
+     "roads": 0.42546874999999995,
+     "buildings": 0.025468750000000012,
+     "people": 0.03593750000000001,
+     "trees": 0.03671875,
+     "decals": 0.08984374999999993,
+     "particles": 0.007500000000000003,
+     "props": 0.11640624999999995,
+     "decor": 0.09124999999999993,
+     "labels": 0.01421875000000001,
+     "lights": 0.0035937500000000006,
+     "render": 0.5060937500000001
+    },
+    "final": {
+     "drawCalls": 65,
+     "triangles": 1777584,
+     "gpuMemory": {
+      "geometries": 75,
+      "textures": 15,
+      "programs": 67
+     }
+    }
+   }
+  ]
+ },
+ "startup": {
+  "method": "npm run build; scripts/benchmark-startup.js --runs=7, before/after the shader pre-compile only",
+  "before": {
+   "fresh": {
+    "median": {
+     "booted": 537,
+     "firstFrame": 737,
+     "longestTask": 258,
+     "longTasksMs": 590
+    },
+    "runs": [
+     {
+      "domContentLoaded": 126,
+      "booted": 424,
+      "firstFrame": 635,
+      "longestTask": 209,
+      "longTasksMs": 469,
+      "people": 28,
+      "buildings": 11,
+      "scriptKB": 1013
+     },
+     {
+      "domContentLoaded": 97,
+      "booted": 537,
+      "firstFrame": 737,
+      "longestTask": 258,
+      "longTasksMs": 590,
+      "people": 28,
+      "buildings": 11,
+      "scriptKB": 1140
+     },
+     {
+      "domContentLoaded": 95,
+      "booted": 1103,
+      "firstFrame": 1319,
+      "longestTask": 668,
+      "longTasksMs": 1160,
+      "people": 28,
+      "buildings": 11,
+      "scriptKB": 1252
+     },
+     {
+      "domContentLoaded": 99,
+      "booted": 585,
+      "firstFrame": 781,
+      "longestTask": 291,
+      "longTasksMs": 644,
+      "people": 28,
+      "buildings": 10,
+      "scriptKB": 1068
+     },
+     {
+      "domContentLoaded": 99,
+      "booted": 394,
+      "firstFrame": 568,
+      "longestTask": 172,
+      "longTasksMs": 435,
+      "people": 28,
+      "buildings": 11,
+      "scriptKB": 948
+     },
+     {
+      "domContentLoaded": 98,
+      "booted": 521,
+      "firstFrame": 715,
+      "longestTask": 249,
+      "longTasksMs": 579,
+      "people": 28,
+      "buildings": 10,
+      "scriptKB": 1051
+     },
+     {
+      "domContentLoaded": 100,
+      "booted": 855,
+      "firstFrame": 1035,
+      "longestTask": 470,
+      "longTasksMs": 901,
+      "people": 28,
+      "buildings": 11,
+      "scriptKB": 881
+     }
+    ]
+   },
+   "city": {
+    "median": {
+     "booted": 676,
+     "firstFrame": 959,
+     "longestTask": 305,
+     "longTasksMs": 783
+    },
+    "runs": [
+     {
+      "domContentLoaded": 119,
+      "booted": 692,
+      "firstFrame": 976,
+      "longestTask": 305,
+      "longTasksMs": 794,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 971
+     },
+     {
+      "domContentLoaded": 95,
+      "booted": 681,
+      "firstFrame": 959,
+      "longestTask": 305,
+      "longTasksMs": 790,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 882
+     },
+     {
+      "domContentLoaded": 86,
+      "booted": 656,
+      "firstFrame": 927,
+      "longestTask": 297,
+      "longTasksMs": 769,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 1073
+     },
+     {
+      "domContentLoaded": 104,
+      "booted": 672,
+      "firstFrame": 948,
+      "longestTask": 301,
+      "longTasksMs": 778,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 997
+     },
+     {
+      "domContentLoaded": 89,
+      "booted": 671,
+      "firstFrame": 960,
+      "longestTask": 315,
+      "longTasksMs": 806,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 1165
+     },
+     {
+      "domContentLoaded": 101,
+      "booted": 676,
+      "firstFrame": 947,
+      "longestTask": 306,
+      "longTasksMs": 780,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 1212
+     },
+     {
+      "domContentLoaded": 120,
+      "booted": 695,
+      "firstFrame": 970,
+      "longestTask": 309,
+      "longTasksMs": 783,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 1191
+     }
+    ]
+   }
+  },
+  "after": {
+   "fresh": {
+    "median": {
+     "booted": 603,
+     "firstFrame": 777,
+     "longestTask": 287,
+     "longTasksMs": 556
+    },
+    "runs": [
+     {
+      "domContentLoaded": 114,
+      "booted": 549,
+      "firstFrame": 755,
+      "longestTask": 268,
+      "longTasksMs": 516,
+      "people": 28,
+      "buildings": 11,
+      "scriptKB": 1183
+     },
+     {
+      "domContentLoaded": 145,
+      "booted": 447,
+      "firstFrame": 629,
+      "longestTask": 160,
+      "longTasksMs": 380,
+      "people": 28,
+      "buildings": 11,
+      "scriptKB": 906
+     },
+     {
+      "domContentLoaded": 95,
+      "booted": 1112,
+      "firstFrame": 1295,
+      "longestTask": 674,
+      "longTasksMs": 1033,
+      "people": 28,
+      "buildings": 11,
+      "scriptKB": 921
+     },
+     {
+      "domContentLoaded": 96,
+      "booted": 1195,
+      "firstFrame": 1361,
+      "longestTask": 743,
+      "longTasksMs": 1114,
+      "people": 28,
+      "buildings": 11,
+      "scriptKB": 1189
+     },
+     {
+      "domContentLoaded": 94,
+      "booted": 839,
+      "firstFrame": 1010,
+      "longestTask": 465,
+      "longTasksMs": 762,
+      "people": 28,
+      "buildings": 11,
+      "scriptKB": 1166
+     },
+     {
+      "domContentLoaded": 106,
+      "booted": 548,
+      "firstFrame": 725,
+      "longestTask": 263,
+      "longTasksMs": 463,
+      "people": 28,
+      "buildings": 10,
+      "scriptKB": 1060
+     },
+     {
+      "domContentLoaded": 119,
+      "booted": 603,
+      "firstFrame": 777,
+      "longestTask": 287,
+      "longTasksMs": 556,
+      "people": 28,
+      "buildings": 10,
+      "scriptKB": 996
+     }
+    ]
+   },
+   "city": {
+    "median": {
+     "booted": 674,
+     "firstFrame": 940,
+     "longestTask": 309,
+     "longTasksMs": 704
+    },
+    "runs": [
+     {
+      "domContentLoaded": 95,
+      "booted": 674,
+      "firstFrame": 940,
+      "longestTask": 304,
+      "longTasksMs": 704,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 994
+     },
+     {
+      "domContentLoaded": 91,
+      "booted": 671,
+      "firstFrame": 938,
+      "longestTask": 306,
+      "longTasksMs": 694,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 925
+     },
+     {
+      "domContentLoaded": 95,
+      "booted": 673,
+      "firstFrame": 912,
+      "longestTask": 309,
+      "longTasksMs": 704,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 899
+     },
+     {
+      "domContentLoaded": 117,
+      "booted": 707,
+      "firstFrame": 944,
+      "longestTask": 311,
+      "longTasksMs": 697,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 1060
+     },
+     {
+      "domContentLoaded": 91,
+      "booted": 672,
+      "firstFrame": 908,
+      "longestTask": 308,
+      "longTasksMs": 686,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 908
+     },
+     {
+      "domContentLoaded": 102,
+      "booted": 705,
+      "firstFrame": 960,
+      "longestTask": 316,
+      "longTasksMs": 713,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 1160
+     },
+     {
+      "domContentLoaded": 91,
+      "booted": 697,
+      "firstFrame": 940,
+      "longestTask": 317,
+      "longTasksMs": 706,
+      "people": 2000,
+      "buildings": 630,
+      "scriptKB": 902
+     }
+    ]
+   }
+  }
+ },
+ "soak": {
+  "method": "benchmark-desktop --save=metro --speed=5 --warmup=10000 --duration=180000",
+  "start": {
+   "gpuMemory": {
+    "geometries": 69,
+    "textures": 15,
+    "programs": 64
+   },
+   "jsHeapMB": 180,
+   "tick": 99289,
+   "acc": 0.098500000000001,
+   "year": 165,
+   "month": 5,
+   "pop": 7837,
+   "people": 2000,
+   "buildings": 1042,
+   "moving": 1530,
+   "routes": 1992,
+   "roadsVersion": 44765
+  },
+  "end": {
+   "gpuMemory": {
+    "geometries": 75,
+    "textures": 15,
+    "programs": 64
+   },
+   "jsHeapMB": 173,
+   "tick": 103792
+  },
+  "raf": {
+   "count": 10578,
+   "meanMs": 17.01733787105313,
+   "p50Ms": 16.69999999999709,
+   "p95Ms": 16.79999999998836,
+   "maxMs": 83.30000000001746
+  },
+  "frameCpu": {
+   "count": 10579,
+   "meanMs": 6.6040930145798065,
+   "p50Ms": 5.100000023841858,
+   "p95Ms": 15.800000011920929,
+   "maxMs": 83.90000003576279
+  }
+ }
+}

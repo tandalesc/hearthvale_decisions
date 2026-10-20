@@ -87,6 +87,8 @@ export function createApp(host) {
     bodyName: (id) => bodyNames[id] ?? (id === 'moot' ? 'The Council' : titleCase(id)),
     bodyIcon: (id) => bodyIcon({id, kind: data.bodies.find((b) => b.id === id)?.kind}),
     coin: () => data.top?.coin,
+    townName: () => host.state()?.townName ?? null,
+    reachedSpeed: () => host.reachedSpeed?.() ?? null,
     unlocks: () => data.unlocks,
     sound: (name, arg) => audio?.play(name, arg),
     onRule,
@@ -192,6 +194,7 @@ export function createApp(host) {
     exportSave: () => host.exportSave(),
     importSave: (file) => host.importSave(file),
     newTown: (opts) => confirmNewTown(opts),
+    toMenu: () => host.toMenu?.(),
     seedCode: () => host.seedCode?.(),
     hideInterface: () => { settings.close(); setClean(true); },
   });
@@ -894,6 +897,8 @@ export function createApp(host) {
     } else if (e.key === '1') host.setSpeed(1);
     else if (e.key === '2') host.setSpeed(3);
     else if (e.key === '3') host.setSpeed(5);
+    else if (e.key === '4') host.setSpeed(10);
+    else if (e.key === '5') host.setSpeed(20);
     else if (e.key === 'h' || e.key === 'H') setClean(!clean);
     else if ((e.key === 'f' || e.key === 'F') && fsSupported) toggleFullscreen();
     else if (/^[cCdD]$/.test(e.key)) {
@@ -956,14 +961,14 @@ export function createApp(host) {
     requestAnimationFrame(() => confirmLayer?.querySelector('[data-act="cancel"]').focus());
   }
 
-  // "Start a new town", with a way to keep the old one first.
+  // "Start a new town". The old town stays saved in Your towns on the main menu.
   function confirmNewTown(opts = {}) {
     confirmDialog({
       title: 'Start a new town?',
-      text: `${opts.seed ? `A new valley grows from the seed ${opts.seed}. ` : ''}Your town will be gone for good. Export it first if you want to keep it.`,
+      text: `${opts.seed ? `A new valley grows from the seed ${opts.seed}. ` : ''}This town is saved first and stays in Your towns on the main menu.`,
       actions: [
-        {id: 'export', label: 'Export', icon: 'save', kind: 'secondary', keepOpen: true, run: () => host.exportSave()},
-        {id: 'start', label: 'Start new', kind: 'danger', run: () => host.newTown(opts)},
+        ...(opts.seed ? [] : [{id: 'choose', label: 'Choose a valley', kind: 'secondary', run: () => host.newTown({choose: true})}]),
+        {id: 'start', label: opts.seed ? 'Start new' : 'Start in a random valley', kind: 'danger', run: () => host.newTown(opts)},
       ],
     });
   }

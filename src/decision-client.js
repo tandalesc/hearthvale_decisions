@@ -12,6 +12,12 @@
 // /v1/decisions/batch call. Several requests may be in flight; the target
 // concurrency adapts to measured throughput. Failures back off and resolve to
 // null so the simulation never waits on the network.
+//
+// Answers are cached by (kind, state, context, allowed). The model reads one
+// question in one forward pass and returns a distribution the game samples
+// itself, so the same question over the same state always gets the same
+// answer: a repeat is answered at once, without the network. Many walkers and
+// many months ask byte-identical questions, so this removes most traffic.
 import {MAX_QUESTIONS_PER_REQUEST, MAX_GROUPS_PER_REQUEST, validateQuestion, validateState, stateKey, normalizeAnswer} from './decision-kinds.js';
 
 const WINDOW_MS = 5000;
@@ -28,6 +34,7 @@ const DEFAULTS = {
   timeoutMs: 16000,
   maxQueue: 8192,
   maxQueueAgeMs: 5000,
+  cacheSize: 8192,            // answers kept for exact repeats (0 turns the cache off)
 };
 
 export function createDecisionClient(options = {}) {
@@ -45,6 +52,7 @@ export function createDecisionClient(options = {}) {
   const queue = new Map();         // key -> entry waiting to be sent
   const inFlightByKey = new Map(); // key -> entry currently being answered
   const latest = new Map();        // key -> newest ask sequence, for stale rejection
+  const answers = new Map();       // kind|signature -> answer, least recently used first
   let sequence = 0, generation = 0, forceFlush = false, pumpQueued = false;
   let timer = null, timerDue = Infinity;
 
@@ -57,7 +65,7 @@ export function createDecisionClient(options = {}) {
   let inFlight = 0, inFlightQuestions = 0;
   let latencyEma = 0, lastLatencyMs = 0, batchEma = 0, groupsEma = 0, lastBatch = 0;
   let failures = 0, consecutiveFailures = 0, backoffUntil = 0, model = null;
-  const counters = {asked: 0, sent: 0, answered: 0, unanswered: 0, dropped: 0, stale: 0, invalid: 0, deduped: 0, splits: 0};
+  const counters = {asked: 0, sent: 0, answered: 0, unanswered: 0, dropped: 0, stale: 0, invalid: 0, deduped: 0, splits: 0, cached: 0};
   const tags = {};
 
   // Adaptive concurrency. An "epoch" is a run of completions at one target.
@@ -96,6 +104,25 @@ export function createDecisionClient(options = {}) {
     const sKey = stateKey(cleanState);
     const signature = `${sKey}|${JSON.stringify([question.context, question.allowed])}`;
     priority = Number.isFinite(priority) ? priority : 0;
+    const hit = answers.get(`${question.kind}|${signature}`);
+    if (hit) {
+      // Refresh its place in the LRU order.
+      answers.delete(`${question.kind}|${signature}`);
+      answers.set(`${question.kind}|${signature}`, hit);
+      counters.cached++;
+      if (tag) tagStats(tag).answered++;
+      // Same actor, older question still waiting: this newer one supersedes it.
+      const queued = queue.get(key);
+      if (queued && queued.signature !== signature) {
+        queue.delete(key);
+        settle(queued, null);
+        counters.stale++;
+      }
+      // An older, different question for this actor in flight is now stale.
+      const flying = inFlightByKey.get(key);
+      if (flying && flying.signature !== signature) latest.set(key, ++sequence);
+      return Promise.resolve({...hit});
+    }
     return new Promise((resolve) => {
       const waiter = {resolve, tag};
       const t = now();
@@ -242,6 +269,7 @@ export function createDecisionClient(options = {}) {
     inFlight++;
     inFlightQuestions += batch.length;
     counters.sent += batch.length;
+    sentInWindow(t);   // drop entries over a second old (only the manual ceiling reads them)
     sentLog.push({at: t, count: batch.length});
     for (const entry of batch) inFlightByKey.set(entry.key, entry);
     for (const group of groups) noteState(group[0].stateKey, t);
@@ -321,6 +349,7 @@ export function createDecisionClient(options = {}) {
     lastBatch = batch.length;
     batchEma = batchEma ? batchEma * 0.8 + batch.length * 0.2 : batch.length;
     groupsEma = groupsEma ? groupsEma * 0.8 + groups.length * 0.2 : groups.length;
+    while (completions.length && t - completions[0].at >= WINDOW_MS) completions.shift();
     completions.push({at: t, count: batch.length});
     batch.forEach((entry, i) => {
       if (gen !== generation || latest.has(entry.key) && latest.get(entry.key) !== entry.seq) {
@@ -330,6 +359,7 @@ export function createDecisionClient(options = {}) {
       const raw = data.answers[String(i)];
       const answer = raw && raw.kind === entry.kind ? normalizeAnswer(entry, {...raw, type: 'choice'}) : null;
       counters[answer ? 'answered' : 'unanswered']++;
+      if (answer) remember(entry, answer);
       settle(entry, answer);
     });
     // Requests dispatched before the epoch began ran at the old target.
@@ -340,6 +370,14 @@ export function createDecisionClient(options = {}) {
       epoch.latency += latency;
       adapt(t);
     }
+  }
+
+  function remember(entry, answer) {
+    if (!(opts.cacheSize > 0)) return;
+    const key = `${entry.kind}|${entry.signature}`;
+    answers.delete(key);
+    answers.set(key, answer);
+    if (answers.size > opts.cacheSize) answers.delete(answers.keys().next().value);
   }
 
   function failed(batch, result, t, gen) {
@@ -437,7 +475,7 @@ export function createDecisionClient(options = {}) {
       observedRate: observedRate(t), capacity: capacityEstimate(t),
       latencyMs: latencyEma, lastLatencyMs,
       failures, consecutiveFailures, backoffMs: Math.max(0, backoffUntil - t),
-      model, ...counters,
+      model, ...counters, cacheSize: answers.size,
       tags: Object.fromEntries(Object.entries(tags).map(([k, v]) => [k, {...v}])),
       states: {distinctLastHour: statesSeen.size, lastKey: lastStateKey},
     };
@@ -451,8 +489,10 @@ export function createDecisionClient(options = {}) {
   }
 
   // Drop everything pending; in-flight replies are ignored when they land.
+  // Cached answers go too: a model switched off and on again may be another model.
   function reset() {
     generation++;
+    answers.clear();
     for (const entry of queue.values()) settle(entry, null);
     for (const entry of inFlightByKey.values()) settle(entry, null);
     queue.clear();

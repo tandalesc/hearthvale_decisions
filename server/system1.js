@@ -1,4 +1,4 @@
-import {MAX_QUESTIONS_PER_REQUEST,MAX_GROUPS_PER_REQUEST,validateQuestion,validateState,renderQuestion,normalizeAnswer} from '../src/decision-kinds.js';
+import {MAX_QUESTIONS_PER_REQUEST,MAX_GROUPS_PER_REQUEST,validateQuestion,validateState,renderQuestion,normalizeAnswer,stateKey,canonicalJson} from '../src/decision-kinds.js';
 import { readFile } from 'node:fs/promises';
 import { parseEnv } from 'node:util';
 import { join } from 'node:path';
@@ -175,55 +175,160 @@ export function createConcurrencyGate({limit = 4, maxQueue = 8, maxWaitMs = 1000
   };
 }
 
+// Answers shared by every player: the same question over the same state gets
+// the same distribution from the model, so a repeat never goes upstream.
+// Least recently used entries go first once `size` is reached.
+export function createAnswerCache(size = 50000) {
+  const entries = new Map();
+  let hits = 0, misses = 0;
+  const keyOf = (state, q) => `${q.kind}|${stateKey(state ?? {})}|${canonicalJson([q.context, q.allowed ?? null])}`;
+  return {
+    get(state, q) {
+      if (!(size > 0)) return null;
+      const key = keyOf(state, q);
+      const hit = entries.get(key);
+      if (!hit) { misses++; return null; }
+      entries.delete(key);
+      entries.set(key, hit);
+      hits++;
+      return hit;
+    },
+    set(state, q, answer) {
+      if (!(size > 0)) return;
+      const key = keyOf(state, q);
+      entries.delete(key);
+      entries.set(key, answer);
+      if (entries.size > size) entries.delete(entries.keys().next().value);
+    },
+    stats: () => ({size: entries.size, hits, misses}),
+  };
+}
+
+// Limits on questions sent upstream (cache hits are free):
+//   clientRate  per client (an address), questions a second, bursting to 4 s' worth; 0 = none
+//   dailyCap    for the whole service per UTC day; 0 = none. Past it, every
+//               player's town uses local rules until the next day.
+// For a public deployment, set both. See local.env.example.
+export function createLimits({clientRate = 0, dailyCap = 0, now = () => Date.now()} = {}) {
+  const buckets = new Map();
+  let day = null, used = 0;
+  return {
+    // -> null when allowed, else {status, retryAfterMs?, error}
+    take(client, count) {
+      const t = now();
+      const today = new Date(t).toISOString().slice(0, 10);
+      if (today !== day) { day = today; used = 0; }
+      if (dailyCap > 0 && used + count > dailyCap) return {status: 503, error: 'Daily decision budget used'};
+      if (clientRate > 0) {
+        const burst = clientRate * 4;
+        let b = buckets.get(client);
+        if (!b) { b = {tokens: burst, at: t}; buckets.set(client, b); }
+        b.tokens = Math.min(burst, b.tokens + (t - b.at) * clientRate / 1000);
+        b.at = t;
+        if (b.tokens < count) {
+          const retryAfterMs = Math.max(250, Math.ceil((count - b.tokens) / clientRate * 1000));
+          return {status: 429, retryAfterMs, error: 'Decision budget for this player used for now'};
+        }
+        b.tokens -= count;
+        // Forget idle clients now and then.
+        if (buckets.size > 10000) for (const [k, v] of buckets) if (t - v.at > 60000) buckets.delete(k);
+      }
+      used += count;
+      return null;
+    },
+    stats: () => ({day, used, dailyCap, clientRate}),
+  };
+}
+
+export function limitsFromEnv(env = process.env) {
+  const n = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
+  return {clientRate: n(env.DECISIONS_CLIENT_QPS), dailyCap: n(env.DECISIONS_DAILY_CAP), cacheSize: env.DECISIONS_CACHE_SIZE != null ? n(env.DECISIONS_CACHE_SIZE) : 50000};
+}
+
 // Transport-independent request handling: used by the Vite middleware and by
 // scripts/benchmark-decisions.js. Returns {status, body, retryAfterMs?}.
-export function createDecisionService({loadConfig, fetcher = fetch, gate = createConcurrencyGate()} = {}) {
+export function createDecisionService({loadConfig, fetcher = fetch, gate = createConcurrencyGate(), cache = createAnswerCache(), limits = createLimits()} = {}) {
   let lastSuccess = 0, model = null, latestFailure = false;
-  async function handle(body) {
+  async function handle(body, {client = 'local'} = {}) {
     let groups;
     try { groups = validateDecisionRequest(body); } catch { return {status: 400, body: {error: 'Invalid decision request'}}; }
+    // Answer what the cache knows; only the rest goes upstream.
+    const answers = {};
+    const misses = [];
+    for (const group of groups) {
+      const rest = group.questions.filter((q) => {
+        const hit = cache.get(group.state, q);
+        if (hit) answers[q.id] = hit;
+        return !hit;
+      });
+      if (rest.length) misses.push({state: group.state, questions: rest});
+    }
+    const cached = Object.keys(answers).length;
+    if (!misses.length) return {status: 200, body: {answers, model: model ?? 'local-decision-service', cached}};
+    const wanted = misses.reduce((n, g) => n + g.questions.length, 0);
+    const refused = limits.take(client, wanted);
+    if (refused) {
+      // Partial answers still help: send what the cache had.
+      if (cached) return {status: 200, body: {answers, model: model ?? 'local-decision-service', cached}};
+      return {status: refused.status, ...(refused.retryAfterMs ? {retryAfterMs: refused.retryAfterMs} : {}), body: {error: refused.error, fallback: true, ...(refused.retryAfterMs ? {retryAfterMs: refused.retryAfterMs} : {})}};
+    }
     let release;
-    try { release = await gate.acquire(); } catch { return {status: 429, retryAfterMs: 250, body: {error: 'Decision service busy', retryAfterMs: 250, fallback: true}}; }
+    try { release = await gate.acquire(); } catch {
+      if (cached) return {status: 200, body: {answers, model: model ?? 'local-decision-service', cached}};
+      return {status: 429, retryAfterMs: 250, body: {error: 'Decision service busy', retryAfterMs: 250, fallback: true}};
+    }
     try {
       // Hard deadline so a stalled upstream can never pin a concurrency slot.
       let timer;
       const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Upstream deadline')), UPSTREAM_TIMEOUT_MS + 500); });
-      const result = await Promise.race([deadline, requestDecisions(await loadConfig(), groups, fetcher)]).finally(() => clearTimeout(timer));
+      const result = await Promise.race([deadline, requestDecisions(await loadConfig(), misses, fetcher)]).finally(() => clearTimeout(timer));
       lastSuccess = Date.now(); latestFailure = false; model = result.model;
-      return {status: 200, body: result};
+      for (const group of misses) {
+        for (const q of group.questions) if (result.answers[q.id]) cache.set(group.state, q, result.answers[q.id]);
+      }
+      return {status: 200, body: {answers: {...answers, ...result.answers}, model: result.model, cached}};
     } catch {
       latestFailure = true;
+      if (cached) return {status: 200, body: {answers, model: model ?? 'local-decision-service', cached}};
       return {status: 503, body: {error: 'Local decision service unavailable or invalid response', fallback: true}};
     } finally { release(); }
   }
   const health = () => {
     const {active, queued, limit} = gate.stats();
-    return {connected: !latestFailure && Date.now() - lastSuccess < 90000, model, lastDecisionAt: lastSuccess || null, inFlight: active, queued, concurrency: limit};
+    return {connected: !latestFailure && Date.now() - lastSuccess < 90000, model, lastDecisionAt: lastSuccess || null, inFlight: active, queued, concurrency: limit, cache: cache.stats(), limits: limits.stats()};
   };
   return {handle, health};
 }
 
 async function readJson(req){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>MAX_REQUEST_BYTES)throw new Error('Request too large');chunks.push(chunk);}return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
 export function system1Plugin({concurrency = 4, maxQueue = 8} = {}) {
-  let root;
-  const service = createDecisionService({loadConfig: () => loadLocalConfig(root), gate: createConcurrencyGate({limit: concurrency, maxQueue})});
+  let root, service, ready = null;
+  // Limits come from the environment or local.env (the environment wins).
+  const start = async () => {
+    let file = {};
+    try { file = parseEnv(await readFile(join(root, 'local.env'), 'utf8')); } catch { /* none */ }
+    const {clientRate, dailyCap, cacheSize} = limitsFromEnv({...file, ...process.env});
+    service = createDecisionService({loadConfig: () => loadLocalConfig(root), gate: createConcurrencyGate({limit: concurrency, maxQueue}),
+      cache: createAnswerCache(cacheSize), limits: createLimits({clientRate, dailyCap})});
+  };
   const attach = async server => {
     server.middlewares.use(async (req,res,next)=>{
       let pathname;try{pathname=decodeURIComponent(new URL(req.url,'http://localhost').pathname);}catch{res.statusCode=400;res.end('Invalid path');return;}
       if(/(?:^|\/)(?:local\.env|\.env[^/]*)(?:\/|$)/i.test(pathname)){res.statusCode=403;res.setHeader('Cache-Control','no-store');res.end('Private configuration');return;}
       if(!['/api/system1/status','/api/decisions'].includes(pathname))return next();
+      await (ready??=start());
       res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
       const send=(status,body)=>{res.statusCode=status;res.end(JSON.stringify(body));};
       if(pathname.endsWith('/status')){
         if(req.method!=='GET'){res.setHeader('Allow','GET');return send(405,{error:'Method not allowed'});}
-        try{const status=await checkConnection(await loadLocalConfig(root)),h=service.health(),active=status.state==='ready'&&h.connected;return send(200,{...status,engine:active?'local-model':'local-rules',modelConnected:active,model:active?h.model:null,lastDecisionAt:h.lastDecisionAt,inFlight:h.inFlight,queued:h.queued,concurrency:h.concurrency});}catch{return send(500,{state:'configuration-error',engine:'local-rules',modelConnected:false});}
+        try{const status=await checkConnection(await loadLocalConfig(root)),h=service.health(),active=status.state==='ready'&&h.connected;return send(200,{...status,engine:active?'local-model':'local-rules',modelConnected:active,model:active?h.model:null,lastDecisionAt:h.lastDecisionAt,inFlight:h.inFlight,queued:h.queued,concurrency:h.concurrency,cache:h.cache});}catch{return send(500,{state:'configuration-error',engine:'local-rules',modelConnected:false});}
       }
       if(req.method!=='POST'){res.setHeader('Allow','POST');return send(405,{error:'Method not allowed'});}
       if(req.headers.origin){try{if(new URL(req.headers.origin).host!==req.headers.host)return send(403,{error:'Origin not allowed'});}catch{return send(403,{error:'Origin not allowed'});}}
       if(!req.headers['content-type']?.startsWith('application/json'))return send(415,{error:'JSON required'});
       let body;try{body=await readJson(req);}catch(error){return error.message==='Request too large'?send(413,{error:'Request too large'}):send(400,{error:'Invalid decision request'});}
-      const result=await service.handle(body);if(result.retryAfterMs)res.setHeader('Retry-After',String(result.retryAfterMs/1000));send(result.status,result.body);
+      const result=await service.handle(body,{client:req.socket?.remoteAddress??'unknown'});if(result.retryAfterMs)res.setHeader('Retry-After',String(result.retryAfterMs/1000));send(result.status,result.body);
     });
   };
-  return {name:'hearthvale-system1',configResolved(config){root=config.root;},configureServer:attach,configurePreviewServer:attach};
+  return {name:'hearthvale-system1',configResolved(config){root=config.root;ready=start();return ready;},configureServer:attach,configurePreviewServer:attach};
 }

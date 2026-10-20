@@ -220,7 +220,7 @@ test('keys: space pauses, digits set speed, C opens and closes the Council, Esca
   await expect(page.locator('.dk')).toBeHidden();
 });
 
-test('one speed button steps 1× → 3× → 5× → 1×, beside pause', async ({page}) => {
+test('one speed button steps 1× → 3× → 5× → 10× → 20× → 1×, beside pause', async ({page}) => {
   await open(page, {fixture: 'town', paused: false, stub: true});
   const seg = page.locator('.timestrip .seg');
   await expect(seg.locator('button')).toHaveCount(2);
@@ -232,7 +232,19 @@ test('one speed button steps 1× → 3× → 5× → 1×, beside pause', async (
   await step.click();
   expect(await hv(page, () => window.hearthvale.speed())).toBe(5);
   await step.click();
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(10);
+  await expect(step).toHaveText('10×');
+  await step.click();
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(20);
+  await expect(step).toHaveText('20×');
+  await step.click();
   expect(await hv(page, () => window.hearthvale.speed())).toBe(1);
+  // The number keys reach every speed.
+  await page.keyboard.press('5');
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(20);
+  await page.keyboard.press('4');
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(10);
+  await page.keyboard.press('1');
   // Paused, it shows the speed it will resume at, and a click starts the town again.
   await seg.locator('.pause').click();
   expect(await hv(page, () => window.hearthvale.speed())).toBe(0);

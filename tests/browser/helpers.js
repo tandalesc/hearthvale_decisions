@@ -21,6 +21,8 @@ export async function open(page, {fixture, paused = true, renderer = 'stub', stu
   if (paused) params.set('paused', '1');
   if (renderer) params.set('renderer', renderer);
   if (stub) params.set('stub', '1');
+  // play=1 skips the main menu and goes straight to the town.
+  params.set('play', '1');
   await page.goto(`/?${params}${query}`);
   await page.waitForFunction(() => window.hearthvale?.app);
   await settle(page);

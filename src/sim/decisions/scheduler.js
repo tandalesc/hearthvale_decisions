@@ -35,6 +35,11 @@ import {monthlyCost} from '../enterprises.js';
 export const ANSWER_LOG_CAP = 2000;
 const SWEEP_DEADLINE_TICKS = 40;
 const SWEEP_DEADLINE_MS = 2500;
+// At high speed the real-time wait shrinks so a sweep never waits more than
+// about this much game time (6.25 sim seconds, a month and a quarter) for answers;
+// late answers fall back to local rules. Up to 5× (2.5 sim s a second) the
+// 2.5 s wait stands as before. services.rate is sim seconds per real second.
+const SWEEP_WAIT_SIM_S = 6.25;
 const REFINE_D = 0.25;
 const REFINE_MIN_N = 12;
 const INDIVIDUAL_TTL_MONTHS = 24;
@@ -131,7 +136,7 @@ export function schedulerTick(state, ctx = {}) {
     }
   }
   dispatch(state, rt, bus, ctx);
-  if (bus) fillThroughput(state, rt, bus);
+  if (bus) fillThroughput(state, rt, bus, ctx);
   applyInbox(state, rt);
 }
 
@@ -623,7 +628,7 @@ function finishOne(state, rt, ctx) {
     const sweep = inflight[i];
     const done = sweep.answered >= sweep.questions.length;
     const late = sweep.startedMs != null && state.time.tick - sweep.tick >= SWEEP_DEADLINE_TICKS &&
-      nowMs(ctx) - sweep.startedMs >= SWEEP_DEADLINE_MS && sweep.questions.every((q) => q.sent);
+      nowMs(ctx) - sweep.startedMs >= deadlineMs(ctx) && sweep.questions.every((q) => q.sent);
     if (!done && !late) continue;
     if (!done) {
       for (const q of sweep.questions) {
@@ -637,6 +642,11 @@ function finishOne(state, rt, ctx) {
     return true;
   }
   return false;
+}
+
+function deadlineMs(ctx) {
+  const rate = ctx?.services?.rate;
+  return Number.isFinite(rate) && rate > 0 ? Math.min(SWEEP_DEADLINE_MS, (SWEEP_WAIT_SIM_S / rate) * 1000) : SWEEP_DEADLINE_MS;
 }
 
 function finishSweep(state, rt, sweep) {
@@ -1030,9 +1040,33 @@ function pruneTable(table, cap) {
 
 const REFINE_KINDS = ['household_stay_move', 'react_to_policy', 'choose_trade', 'crime_charity', 'resident_routine', 'event_response'];
 
-function fillThroughput(state, rt, bus) {
+// Spare throughput is not a reason to ask: refinement and individual
+// questions get a steady real-time budget (FILL_PER_SEC, bursting to
+// FILL_BURST), whatever the service could take. Before this budget, the town
+// asked every visible walker again the moment their last answer landed,
+// hundreds of questions a second, mostly repeats.
+const FILL_PER_SEC = 8;
+const FILL_BURST = 32;
+// People looked at per tick for an individual question, so a big town does
+// not walk its whole population every tick at high speed.
+const FILL_SCAN = 96;
+
+function fillThroughput(state, rt, bus, ctx) {
   let room = Math.max(0, Math.min(256, bus.stats?.().room ?? 0) - rt.asked.size);
+  const t = nowMs(ctx);
+  // Without a clock (headless tools and tests) the service's room is the only limit.
+  if (t) {
+    if (rt.fillAt == null) { rt.fillAt = t; rt.fillTokens = FILL_BURST; }
+    rt.fillTokens = Math.min(FILL_BURST, rt.fillTokens + Math.max(0, t - rt.fillAt) * FILL_PER_SEC / 1000);
+    rt.fillAt = t;
+    room = Math.min(room, Math.floor(rt.fillTokens));
+  }
   if (room <= 0) return;
+  const left = fillWith(state, rt, bus, room);
+  if (t) rt.fillTokens -= room - left;
+}
+
+function fillWith(state, rt, bus, room) {
   const m = monthIndex(state.time);
   const gov = g(state);
 
@@ -1048,7 +1082,7 @@ function fillThroughput(state, rt, bus) {
   }
   torn.sort((a, b) => b.row.D * b.row.n - a.row.D * a.row.n || (a.key < b.key ? -1 : 1));
   for (const t of torn) {
-    if (room <= 0) return;
+    if (room <= 0) return room;
     const kind = KIND_BY_ID[t.kindId];
     const context = {};
     for (const part of t.key.split('|')) {
@@ -1074,21 +1108,31 @@ function fillThroughput(state, rt, bus) {
     room--;
   }
 
-  // 2. Individuals: visible people's routines, then homes, round-robin.
+  // 2. Individuals: visible people's routines, then homes, round-robin. A
+  // person is asked again only when their question would differ (a need
+  // crossed a band, they moved or changed trade) or a month has passed.
   const people = state.people ?? [];
   const hh = new Map(state.households.map((h) => [h.id, h]));
   const variant = ['morning', 'midday', 'evening'][Math.floor(state.time.tick / 17) % 3];
-  for (let i = 0; i < people.length && room > 0; i++) {
+  rt.fresh ??= new Map();
+  if (rt.fresh.size > people.length * 3 + 256) rt.fresh.clear();
+  let i = 0;
+  for (; i < Math.min(people.length, FILL_SCAN) && room > 0; i++) {
     const p = people[(rt.personCursor + i) % people.length];
     const h = hh.get(p.householdId);
     if (!h) continue;
     const m0 = memberships(state, h);
     const context = {district: m0.district, lifeStage: m0.lifeStage, trade: m0.trade, timeOfDay: variant,
       energy: needBand(p.needs?.energy), fullness: needBand(p.needs?.fullness), social: needBand(p.needs?.social)};
-    askExtra(state, rt, bus, 'resident_routine', `p${p.id}.${variant}`, context, districtSnapshot(state, h.districtId), null, PRIORITY.individual);
+    const subjectKey = `p${p.id}.${variant}`;
+    const sig = `${context.district}|${context.lifeStage}|${context.trade}|${context.energy}|${context.fullness}|${context.social}`;
+    const seen = rt.fresh.get(subjectKey);
+    if (seen && seen.sig === sig && seen.month === m) continue;
+    rt.fresh.set(subjectKey, {sig, month: m});
+    askExtra(state, rt, bus, 'resident_routine', subjectKey, context, districtSnapshot(state, h.districtId), null, PRIORITY.individual);
     room--;
-    if (i === people.length - 1 || room <= 0) rt.personCursor = (rt.personCursor + i + 1) % Math.max(1, people.length);
   }
+  if (people.length) rt.personCursor = (rt.personCursor + i) % people.length;
   if (room > 0) {
     const skip = new Set(Object.keys(gov.individual.household_home ?? {}).filter((k) => m - gov.individual.household_home[k].month < 12).map(Number));
     for (const q of homeQuestions(state, Math.min(room, 64), skip)) {
@@ -1096,6 +1140,7 @@ function fillThroughput(state, rt, bus) {
       room--;
     }
   }
+  return room;
 }
 
 const needBand = (v) => (v == null ? undefined : v < 30 ? 'low' : v < 70 ? 'ok' : 'high');

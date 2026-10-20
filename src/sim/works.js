@@ -950,7 +950,20 @@ function pressedRuns(press, embanked, side) {
 }
 
 // The first land cell at the water's edge on one bank, for a grid row.
+// The first dry cell of each row beyond the river centre, west (side 0) and east: a
+// fact of the terrain, so worked out once per valley (embankmentCrossings asks for
+// every row each time the roads change).
+let bankCells = null;
 function bankCell(side, row) {
+  const t = terrainGrid();
+  if (bankCells?.grid !== t) {
+    const cells = new Int32Array(GRID_H * 2);
+    for (let r = 0; r < GRID_H; r++) { cells[r * 2] = findBankCell(0, r); cells[r * 2 + 1] = findBankCell(1, r); }
+    bankCells = { grid: t, cells };
+  }
+  return bankCells.cells[row * 2 + side];
+}
+function findBankCell(side, row) {
   const z = ORIGIN_X + (row + 0.5) * CELL;
   const { water } = terrainGrid();
   const dir = side ? 1 : -1;
@@ -1048,6 +1061,7 @@ export function embankmentCrossings(state) {
   const { water } = terrainGrid();
   const out = [];
   const seen = new Set();
+  const quays = (state.buildings ?? []).filter(b => b.type === 'quay');
   const add = (i, kind, sideName) => {
     if (i < 0 || seen.has(i)) return;
     seen.add(i);
@@ -1056,7 +1070,7 @@ export function embankmentCrossings(state) {
   };
   for (let row = 0; row < GRID_H; row++) {
     const z = ORIGIN_X + (row + 0.5) * CELL;
-    const rx = riverX(z);
+    let rx = null;
     for (const [side, sideName] of [[0, 'west'], [1, 'east']]) {
       const edge = bankCell(side, row);
       if (edge < 0 || water[edge]) continue;
@@ -1066,7 +1080,8 @@ export function embankmentCrossings(state) {
       const bridge = toWater >= 0 && (r.planned[toWater] & FLAG.BRIDGE);
       if (ford || bridge) { add(edge, 'ramp', sideName); continue; }
       if (!(state.roads.embanked?.[row] & (side ? 2 : 1))) continue;
-      const quay = (state.buildings ?? []).some(b => b.type === 'quay' && Math.abs(b.z - z) < b.d / 2 + 1 && Math.abs(b.x - rx) < WATER_HALF + 10 && (b.x > rx) === !!side);
+      if (quays.length) rx ??= riverX(z);
+      const quay = quays.some(b => Math.abs(b.z - z) < b.d / 2 + 1 && Math.abs(b.x - rx) < WATER_HALF + 10 && (b.x > rx) === !!side);
       if (quay) add(edge, 'slipway', sideName);
       else if (out1 >= 0 && r.tier[out1] >= 1 && !(r.planned[out1] & FLAG.TOWPATH)) add(edge, 'steps', sideName);
     }

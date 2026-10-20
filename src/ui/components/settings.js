@@ -54,14 +54,15 @@ export function createSettings(ctx) {
           ${field('People who walk', 'More is livelier but heavier on this device.', `<span style="display:flex;gap:10px;align-items:center">${range('individualCap', ctx.getIndividualCap(), 300, 5000, 100, 'People who walk')}<b class="cap-val" style="font:500 13px var(--font-mono);min-width:44px;text-align:right">${num(ctx.getIndividualCap())}</b></span>`)}
         </fieldset>
         <fieldset><legend>Your town</legend>
-          <p style="margin:0 0 8px;font-size:var(--fs-13);color:var(--ink-2)">The town saves itself every 30 seconds on this device. Export a copy to keep it safe or move it.</p>
+          <p style="margin:0 0 8px;font-size:var(--fs-13);color:var(--ink-2)">The town saves itself every 30 seconds on this device. Your other towns wait on the main menu. Export a copy to keep a town safe or move it.</p>
           ${ctx.seedCode?.() ? `<div class="field"><span>Valley<small>Share this code to grow the same valley.</small></span><span class="seed-row"><span class="seed-code">${esc(ctx.seedCode())}</span><button class="btn btn-secondary" data-act="copy-seed">Copy</button></span></div>` : ''}
           <div class="field"><span>Start from a seed<small>A code, a number or any word.</small></span><span class="seed-row"><input type="text" data-seed maxlength="40" placeholder="Riverbend" aria-label="Seed for a new valley"><button class="btn btn-secondary" data-act="seed-town">Start</button></span></div>
           <div class="btn-row">
             <button class="btn btn-primary" data-act="save">${icon('save')}Save now</button>
             <button class="btn btn-secondary" data-act="export">Export</button>
             <label class="btn btn-secondary">${icon('upload')}Import<input type="file" accept="application/json" class="sr-only" data-act="import"></label>
-            <button class="btn btn-ghost btn-danger" data-act="new">Start a new town</button>
+            <button class="btn btn-secondary" data-act="menu">Main menu</button>
+            <button class="btn btn-ghost" data-act="new">Start a new town</button>
           </div>
         </fieldset>`,
       display: `
@@ -88,12 +89,12 @@ export function createSettings(ctx) {
           ${field('Text size', null, seg('textSize', p.textSize, [['normal', 'Normal'], ['large', 'Large']]))}
         </fieldset>
         <fieldset><legend>Keys</legend>
-          <div class="keys"><kbd>Space</kbd><span>Pause or resume</span><kbd>1</kbd><span>Normal speed</span><kbd>2</kbd><span>Three times</span><kbd>3</kbd><span>Five times</span><kbd>C</kbd><span>Open or close the Council</span><kbd>R</kbd><span>Open or close the Rule Book</span><kbd>F</kbd><span>Full screen</span><kbd>H</kbd><span>Hide or show the interface</span><kbd>Esc</kbd><span>Close panels, cards and notices</span><kbd>← →</kbd><span>Move between these tabs</span></div>
+          <div class="keys"><kbd>Space</kbd><span>Pause or resume</span><kbd>1</kbd><span>Normal speed</span><kbd>2</kbd><span>Three times</span><kbd>3</kbd><span>Five times</span><kbd>4</kbd><span>Ten times</span><kbd>5</kbd><span>Twenty times</span><kbd>C</kbd><span>Open or close the Council</span><kbd>R</kbd><span>Open or close the Rule Book</span><kbd>F</kbd><span>Full screen</span><kbd>H</kbd><span>Hide or show the interface</span><kbd>Esc</kbd><span>Close panels, cards and notices</span><kbd>← →</kbd><span>Move between these tabs</span></div>
         </fieldset>`,
       model: `
         <fieldset><legend>Decision model</legend>
           ${field('Use the local model', 'Townsfolk ask it about their everyday choices. Your rulings stay with you.', switchCtl('model', ctx.modelEnabled(), 'Use the local decision model'))}
-          ${field('Pacing', 'Automatic keeps the service busy.', `<select data-decision="mode" aria-label="Pacing"><option value="auto" ${d.mode === 'auto' ? 'selected' : ''}>Automatic</option><option value="manual" ${d.mode === 'manual' ? 'selected' : ''}>Manual ceiling</option></select>`)}
+          ${field('Pacing', 'Automatic asks what the town needs, and never asks the same question twice.', `<select data-decision="mode" aria-label="Pacing"><option value="auto" ${d.mode === 'auto' ? 'selected' : ''}>Automatic</option><option value="manual" ${d.mode === 'manual' ? 'selected' : ''}>Manual ceiling</option></select>`)}
           ${field('Most questions a second', 'Used in manual pacing. 1 to 5,000.', `<input type="number" min="1" max="5000" step="1" data-decision="cap" value="${d.cap}" aria-label="Most questions a second">`)}
           <div class="status-box" role="status">
             <div class="status-line"><span class="status-dot"></span><span class="status-title">Checking…</span></div>
@@ -169,6 +170,7 @@ export function createSettings(ctx) {
       if (act === 'clean') ctx.hideInterface?.();
       if (act === 'export') ctx.exportSave();
       if (act === 'new') ctx.newTown();
+      if (act === 'menu') ctx.toMenu?.();
       if (act === 'seed-town') {
         const seed = el.querySelector('[data-seed]').value.trim();
         if (seed) ctx.newTown({seed});
