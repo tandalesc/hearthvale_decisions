@@ -5,7 +5,7 @@ import { riverX, WATER_HALF } from '../src/terrain.js';
 
 test('forest is deterministic, sorted by priority and keeps off the river', () => {
   const f = generateForest();
-  assert.ok(f.count > 3000 && f.count < 14000, `tree count ${f.count}`);
+  assert.ok(f.count > 3000 && f.count < 30000, `tree count ${f.count}`);
   for (let i = 1; i < f.count; i++) assert.ok(f.priority[i - 1] >= f.priority[i]);
   for (let i = 0; i < f.count; i++) assert.ok(Math.abs(f.x[i] - riverX(f.z[i])) >= WATER_HALF + 2.5);
   const kinds = new Set(f.kind);

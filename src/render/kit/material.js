@@ -241,6 +241,16 @@ const FRAGMENT_COLOR = /* glsl */ `
   bool isWall = part < 0.5;
   bool isRoof = part > 0.5 && part < 1.5;
   bool isStone = part > 7.5;
+  // Wind over the crops: brighter bands roll across a standing field along
+  // the wind, as the stems bend and show their paler sides.
+  if (part > 6.5 && part < 7.5 && uWeatherDetail > 0.5) {
+    float windL = length(uWind);
+    vec2 wd = uWind / max(windL, 1e-3);
+    float along = dot(vWorldP.xz, wd);
+    float wave = sin(along * 0.35 - uDecoTime * (1.6 + windL) + vnoise(vWorldP.xz * 0.08) * 4.0);
+    float standing = smoothstep(0.15, 0.3, uYearT) * (1.0 - smoothstep(0.64, 0.7, uYearT));
+    col *= 1.0 + 0.11 * smoothstep(0.2, 1.0, wave) * standing * (0.5 + windL);
+  }
 
   if (isWall || isStone) {
     float h = vLocal.y - vShapeV.x; // metres above the ground floor

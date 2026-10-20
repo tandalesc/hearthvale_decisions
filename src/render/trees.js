@@ -4,6 +4,7 @@ import { patchMaterial, hashId, LAYER_REFLECT, GRADE_HEAD, NOISE } from './shade
 import { GROUND_GLSL, GROUND_ORIGIN, GROUND_LIMIT, shoreCharacter } from './ground.js';
 import { WOODLAND } from './terrain.js';
 import { woodField } from '../woodland.js';
+import { TIERS } from './quality.js';
 
 // Trees (design-visual §3.5, §4.4): a deterministic woodland that frames the
 // town like a model village — woods and copses on the hills and at the map
@@ -28,8 +29,13 @@ const CELL = 5;
 // Default town centre; createTrees passes the real one (ctx.townCentre).
 const DEFAULT_TOWN = [-40, 0];
 const FLAG_BLOSSOM = 1;
-// Kept share of wild trees per quality tier (lowest priority trees drop first).
+// Trees of the denser-woods pass (High; a share on Medium). Never on Low.
+const FLAG_EXTRA = 2;
+// Kept share of wild trees per quality tier (lowest priority trees drop first),
+// and of the denser-woods pass.
 const KEEP = { low: 0.35, medium: 0.6, high: 1 };
+const KEEP_EXTRA = { low: TIERS.low.woods, medium: TIERS.medium.woods, high: TIERS.high.woods };
+const TIER_RANK = { low: 0, medium: 1, high: 2 };
 // Trees closer than this to the eye draw at full detail (metres), per tier.
 const NEAR_DIST = { low: 55, medium: 85, high: 120 };
 // The near set is refilled when the eye has moved this far; it holds every
@@ -182,7 +188,53 @@ export function generateForest(TOWN = DEFAULT_TOWN) {
     }
   }
 
-  list.sort((a, b) => b.p - a.p);
+  // Denser woods: a second grid, offset half a cell, fills the deep woods;
+  // species gather in stands (birch groves, beech and oak, conifers where the
+  // first pass put them); saplings and scrub soften the edges, and bushes grow
+  // under the canopy. All flagged extra: High draws them, Medium a share.
+  for (let gz = 0; gz < n; gz++) {
+    for (let gx = 0; gx < n; gx++) {
+      const id = 2000000 + gx * 1009 + gz;
+      const x = -EXTENT + (gx + 0.5 + (hashId(id, 1) - 0.5) * 0.9) * CELL;
+      const z = -EXTENT + (gz + 0.5 + (hashId(id, 2) - 0.5) * 0.9) * CELL;
+      const w = woodField(x, z);
+      if (w < 0.54) continue;
+      const townK = 0.22 + 0.78 * smoothstep(25, 140, Math.hypot(x - TOWN[0], z - TOWN[1]));
+      const deep = smoothstep(0.6, 0.8, w);
+      const edge = smoothstep(0.54, 0.62, w) * (1 - deep);
+      const r = hashId(id, 3);
+      const h = heightAt(x, z);
+      const birchy = 0.5 + 0.5 * Math.sin(z / 33 - Math.sin(x / 41) * 2 + 0.6);
+      const pick = () => {
+        if (hashId(id, 4) < pineShare(x, z, h)) return KIND.PINE;
+        return hashId(id, 5) < 0.25 + 0.6 * smoothstep(0.62, 0.85, birchy) ? KIND.TALL : KIND.ROUND;
+      };
+      if (r < deep * 0.72 * townK) {
+        // Canopy: bigger and more varied the deeper in.
+        push(x, z, pick(), (0.8 + hashId(id, 6) * 0.65) * (1 + 0.22 * deep), id, FLAG_EXTRA);
+      } else if (r < (deep * 0.72 + edge * 0.45) * townK) {
+        // Saplings and young trees at the margin.
+        push(x, z, pick(), 0.55 + hashId(id, 6) * 0.3, id, FLAG_EXTRA);
+      }
+      // Understorey: holly, hazel and bramble under the trees and at the edge.
+      if (hashId(id, 7) < (0.3 * deep + 0.35 * edge) * townK) {
+        const a = hashId(id, 8) * Math.PI * 2;
+        push(x + Math.cos(a) * 1.9, z + Math.sin(a) * 1.9, KIND.BUSH, 0.6 + hashId(id, 9) * 0.6, id + 500000, FLAG_EXTRA);
+      }
+    }
+  }
+  // Rank by the tiers that draw a tree (Low's set, then Medium's additions,
+  // then High's), then by priority: every tier keeps a prefix.
+  // Per kind, as the tiers always kept their share of each species.
+  for (let k = 0; k < KINDS; k++) {
+    for (const extra of [false, true]) {
+      const group = list.filter((t) => t.kind === k && !!(t.flags & FLAG_EXTRA) === extra).sort((a, b) => b.p - a.p);
+      const low = extra ? 0 : Math.round(group.length * KEEP.low);
+      const medium = Math.round(group.length * (extra ? KEEP_EXTRA.medium : KEEP.medium));
+      group.forEach((t, i) => { t.rank = i < low ? 0 : i < medium ? 1 : 2; });
+    }
+  }
+  list.sort((a, b) => a.rank - b.rank || b.p - a.p);
   const count = list.length;
   const forest = {
     count,
@@ -193,7 +245,14 @@ export function generateForest(TOWN = DEFAULT_TOWN) {
   list.forEach((t, i) => {
     forest.x[i] = t.x; forest.z[i] = t.z; forest.y[i] = heightAt(t.x, t.z) - 0.12;
     forest.scale[i] = t.scale; forest.yaw[i] = t.yaw; forest.seed[i] = t.seed;
-    forest.priority[i] = t.p; forest.kind[i] = t.kind; forest.flags[i] = t.flags;
+    // Sort key: the tier rank first, then the tree's own priority.
+    forest.priority[i] = (2 - t.rank + t.p) / 3; forest.kind[i] = t.kind; forest.flags[i] = t.flags;
+  });
+  // Trees each tier draws (a prefix of the list), overall and per kind.
+  forest.tierCount = [0, 0, 0];
+  forest.tierKind = [0, 1, 2].map(() => new Array(KINDS).fill(0));
+  list.forEach((t) => {
+    for (let r = t.rank; r < 3; r++) { forest.tierCount[r]++; forest.tierKind[r][t.kind]++; }
   });
   cachedForest = forest;
   cachedSeed = terrainKey();
@@ -209,7 +268,8 @@ function woodlandTexture(forest) {
   const span = GROUND_LIMIT - GROUND_ORIGIN;
   let grid = new Float32Array(N * N);
   for (let i = 0; i < forest.count; i++) {
-    if (forest.kind[i] === KIND.BUSH) continue;
+    // The woodland floor follows the first pass (the same on every tier).
+    if (forest.kind[i] === KIND.BUSH || forest.flags[i] & FLAG_EXTRA) continue;
     const cx = Math.floor(((forest.x[i] - GROUND_ORIGIN) / span) * N);
     const cz = Math.floor(((forest.z[i] - GROUND_ORIGIN) / span) * N);
     if (cx >= 0 && cz >= 0 && cx < N && cz < N) grid[cz * N + cx] += 1;
@@ -310,8 +370,9 @@ class TreeBuilder {
     const ring = (p, r, a) => [p[0] + (Math.cos(a) * e1[0] + Math.sin(a) * e2[0]) * r, p[1] + (Math.cos(a) * e1[1] + Math.sin(a) * e2[1]) * r, p[2] + (Math.cos(a) * e1[2] + Math.sin(a) * e2[2]) * r];
     for (let i = 0; i < sides; i++) {
       const a0 = (i / sides) * Math.PI * 2, a1 = ((i + 1) / sides) * Math.PI * 2;
-      this.tri(ring(p0, r0, a1), ring(p0, r0, a0), ring(p1, r1, a0), 0, p0);
-      this.tri(ring(p0, r0, a1), ring(p1, r1, a0), ring(p1, r1, a1), 0, p0);
+      // Wound counter-clockwise seen from outside, so the bark faces out.
+      this.tri(ring(p0, r0, a0), ring(p0, r0, a1), ring(p1, r1, a0), 0, p0);
+      this.tri(ring(p1, r1, a0), ring(p0, r0, a1), ring(p1, r1, a1), 0, p0);
     }
   }
 
@@ -592,6 +653,11 @@ const VERTEX_BEGIN = /* glsl */ `
   float tilt = 0.21 * smoothstep(0.0, 0.55, chopK);
   transformed.yz = mat2(cos(tilt), sin(tilt), -sin(tilt), cos(tilt)) * transformed.yz;
   transformed.y *= 1.0 - smoothstep(0.35, 1.0, chopK);
+  // Denser-woods trees (flag 2) stay out of the shadow map: decals.js draws
+  // their shadows as cast blobs on the ground, far cheaper with thousands.
+  #ifdef TREE_DEPTH
+    lodKeep *= 1.0 - step(0.5, mod(floor(iTree.w * 0.5 + 0.01), 2.0));
+  #endif
   transformed *= step(chopK, 0.999) * lodKeep;
 `;
 
@@ -760,7 +826,7 @@ function makeMaterials(grade, kind, lod, lodUniforms) {
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   depth.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, grade.uniforms, lodUniforms);
-    shader.defines = { ...(shader.defines ?? {}), ...defines };
+    shader.defines = { ...(shader.defines ?? {}), ...defines, TREE_DEPTH: 1 };
     shader.vertexShader = GRADE_HEAD + VERTEX_HEAD + shader.vertexShader
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + VERTEX_BEGIN)
       .replace('#include <project_vertex>', PROJECT);
@@ -866,6 +932,7 @@ export function createTrees(ctx) {
   let lastBuildings = -1;
   let lastRoadsRef = null;
   let lastRoadsVersion = -1;
+  let lastRoadsCheck = -Infinity;
   let choppedThisFrame = 0;
   let nearDirty = true;
   const nearEye = new THREE.Vector3(0, 1e5, 0);
@@ -900,19 +967,31 @@ export function createTrees(ctx) {
     }
   }
 
+  // Road cells under each tree's five reach samples (-1 outside the grid),
+  // worked out once per road grid: a road change then only reads them.
+  let reachCells = null, reachKey = '';
   function clearRoads(roads, time) {
     const { W, H, cell, ox, oz, tier, wear } = roads;
     if (!tier) return;
+    const key = `${W},${H},${cell},${ox},${oz}`;
+    if (key !== reachKey) {
+      reachKey = key;
+      reachCells = new Int32Array(forest.count * 5);
+      for (let i = 0; i < forest.count; i++) {
+        const reach = forest.kind[i] === KIND.BUSH ? 0.7 : 1.5 * forest.scale[i];
+        for (let k = 0; k < 5; k++) {
+          const x = forest.x[i] + (k === 1 ? reach : k === 2 ? -reach : 0);
+          const z = forest.z[i] + (k === 3 ? reach : k === 4 ? -reach : 0);
+          const cx = Math.floor((x - ox) / cell), cz = Math.floor((z - oz) / cell);
+          reachCells[i * 5 + k] = cx < 0 || cz < 0 || cx >= W || cz >= H ? -1 : cz * W + cx;
+        }
+      }
+    }
     for (let i = 0; i < forest.count; i++) {
       if (chopT[i] !== 0) continue;
-      const reach = forest.kind[i] === KIND.BUSH ? 0.7 : 1.5 * forest.scale[i];
-      for (let k = 0; k < 5; k++) {
-        const x = forest.x[i] + (k === 1 ? reach : k === 2 ? -reach : 0);
-        const z = forest.z[i] + (k === 3 ? reach : k === 4 ? -reach : 0);
-        const cx = Math.floor((x - ox) / cell), cz = Math.floor((z - oz) / cell);
-        if (cx < 0 || cz < 0 || cx >= W || cz >= H) continue;
-        const c = cz * W + cx;
-        if (tier[c] >= 2 || (wear && wear[c] >= 300)) { chop(i, time); break; }
+      for (let k = i * 5, e = k + 5; k < e; k++) {
+        const c = reachCells[k];
+        if (c >= 0 && (tier[c] >= 2 || (wear && wear[c] >= 300))) { chop(i, time); break; }
       }
     }
   }
@@ -1035,7 +1114,10 @@ export function createTrees(ctx) {
     const time = primed ? frame.time : -1000;
     choppedThisFrame = 0;
     const roads = view?.roads;
-    if (roads && (roads !== lastRoadsRef || roads.version !== lastRoadsVersion)) {
+    // Roads change most frames in a busy town: check them a few times a
+    // second (a tree a road claims falls a moment later, unseen).
+    if (roads && (roads !== lastRoadsRef || roads.version !== lastRoadsVersion) && (!primed || frame.time - lastRoadsCheck >= 0.3)) {
+      lastRoadsCheck = frame.time;
       lastRoadsRef = roads;
       lastRoadsVersion = roads.version;
       clearRoads(roads, time);
@@ -1058,10 +1140,11 @@ export function createTrees(ctx) {
   }
 
   function applyQuality(q) {
-    const keep = KEEP[q.name] ?? 1;
-    shared.keep = keep;
+    const rank = TIER_RANK[q.name] ?? 1;
+    // decals.js keeps the same global prefix (round(count * keep)).
+    shared.keep = forest.tierCount[rank] / Math.max(1, forest.count);
     for (let k = 0; k < KINDS; k++) {
-      meshes[k].mesh.count = PARK_RESERVE[k] + Math.round(wildCount[k] * keep);
+      meshes[k].mesh.count = PARK_RESERVE[k] + forest.tierKind[rank][k];
     }
     lodUniforms.uLodDist.value = NEAR_DIST[q.name] ?? NEAR_DIST.medium;
     nearDirty = true;

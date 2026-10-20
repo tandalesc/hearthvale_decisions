@@ -40,8 +40,8 @@ import { benchesOf, GATHER } from '../sim/seats.js';
 const { riverX, bankDistance } = Terrain;
 const waterHalf = () => Terrain.WATER_HALF;
 
-const MAX_BOXES = 16000;
-const MAX_BLOBS = 6000;
+const MAX_BOXES = 20000;
+const MAX_BLOBS = 8000;
 const REACH = { low: 70, medium: 100, high: 150 };
 const HIDE_BEYOND = 210;   // camera distance: further out the pieces are under a pixel
 const REBUILD_GAP = 0.75;  // seconds
@@ -60,6 +60,15 @@ const FLOWERS = ['#d9574a', '#e8c04a', '#c97ab8', '#f1ead8', '#7a8fd0', '#e88a5a
 const AWNINGS = ['#b2563f', '#526d42', '#3f6f8a', '#c9a24a', '#7a4f6d', '#a8553f'].map(col);
 const TOWELS = ['#c94a3a', '#3f6f8a', '#e8c04a', '#efe6cf', '#526d42'].map(col);
 const PRODUCE = ['#a63d2a', '#6f8f3a', '#d39a3a', '#c9a86a', '#8a3a4f'].map(col);
+const LAUNDRY = ['#efe9dc', '#e4e8ec', '#b9c9d6', '#c97a6a', '#d9cfa8', '#8fa6b8', '#efe9dc'].map(col);
+const Y = {
+  logEnd: col('#b58d5e'), logEndDark: col('#9c7649'), log: col('#5f4630'), soil: col('#5a4632'),
+  veg: col('#5d8a3e'), vegLight: col('#86a852'), vegDark: col('#476f34'), pumpkin: col('#d0782e'),
+  hay: col('#d6b45c'), hayDark: col('#b8963e'), barrel: col('#7a5634'), hoop: col('#3a3a36'),
+  crate: col('#a8865a'), line: col('#d8d2c2'),
+};
+// Lots whose yard gets barrels and crates by the door.
+const STOCKED = new Set(['inn', 'shop', 'workshop', 'warehouse', 'quay', 'mill', 'brewery', 'factory']);
 
 const NO_GARDEN = new Set(['farm', 'park', 'bridge', 'monument', 'quay', 'quarry', 'mill', 'factory', 'warehouse']);
 const SIGNED = new Set(['shop', 'inn', 'workshop']);
@@ -480,6 +489,184 @@ export function createDecor(ctx) {
     box(x, y, z, 0.05, 0.55, 0.75, AWNINGS[(b.id | 0) % AWNINGS.length], yaw - Math.PI / 2);
   }
 
+  // --- Yards (Medium and High) ---------------------------------------------
+  // The small things of a lived-in lot, placed in the lot's own frame beside
+  // the house body (kit/compose.js: body centred on x, nudged toward the
+  // street by frontZ, garden behind): a woodpile against a side wall while
+  // homes burn wood, a washing line in the back garden on dry days, a
+  // vegetable plot in cottage gardens that follows the seasons, barrels and
+  // crates by trading doors, a handcart in working yards, and hay on the
+  // stubble after harvest.
+  function barrel(x, y, z, yaw) {
+    box(x, y + 0.36, z, 0.5, 0.72, 0.5, Y.barrel, yaw);
+    box(x, y + 0.36, z, 0.5, 0.72, 0.5, Y.barrel, yaw + Math.PI / 4);
+    for (const h of [0.16, 0.56]) box(x, y + h, z, 0.53, 0.05, 0.53, Y.hoop, yaw + Math.PI / 4);
+  }
+
+  function handcart(x, z, yaw) {
+    const y = heightAt(x, z);
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    const at = (lx, lz) => [x + lx * c + lz * s, z - lx * s + lz * c];
+    // The bed rests tipped forward on its handles, wheels either side.
+    box(x, y + 0.5, z, 1.3, 0.1, 0.8, K.wood, yaw, 0);
+    for (const sz of [-0.38, 0.38]) {
+      const [px, pz] = at(0, sz);
+      box(px, y + 0.62, pz, 1.3, 0.2, 0.05, K.woodDark, yaw);
+      const [wx, wz] = at(0.15, sz * 1.25);
+      blob(wx, y + 0.36, wz, 0.36, 0.36, 0.05, K.woodDark, 0, yaw);
+      const [hx, hz] = at(-0.95, sz * 0.8);
+      beam(px, y + 0.55, pz, hx, y + 0.12, hz, 0.05, 0.05, K.woodDark);
+    }
+  }
+
+  function yard(b, era, dry, season, free) {
+    const id = b.id | 0;
+    const occupied = b.occupied !== false && !b.flags?.derelict;
+    if (!occupied) return;
+    const rot = (((b.rot ?? 0) % 4) + 4) % 4;
+    const angle = (rot * Math.PI) / 2, ca = Math.cos(angle), sa = Math.sin(angle);
+    const lw = rot % 2 ? b.d : b.w, ld = rot % 2 ? b.w : b.d;
+    const L = (lx, lz) => [b.x + lx * ca + lz * sa, b.z - lx * sa + lz * ca];
+    const ext = new Set((b.extensions ?? []).map((e) => e.side ?? 1));
+    const home = b.type === 'home';
+    const tall = (b.tier ?? 1) >= 4 || b.variant === 'apartments';
+
+    if (b.type === 'farm') {
+      // Farmhouse front-left, barn front-right, the field behind (compose.js).
+      const hw = Math.min(6, lw * 0.42), hd = Math.min(5.5, ld * 0.32);
+      const bwid = Math.min(7, lw * 0.45);
+      const gap = lw - 1.2 - hw - bwid;
+      if (gap > 1.1) {
+        const [x, z] = L(-lw / 2 + 0.6 + hw + gap / 2, ld / 2 - 1.2);
+        handcart(x, z, angle + Math.PI / 2 + (hashId(id, 90) - 0.5) * 0.5);
+      }
+      if (era <= 3 && hashId(id, 91) < 0.7) {
+        // Logs stacked against the farmhouse's side.
+        const [x, z] = L(-lw / 2 + 0.6 + hw + 0.4, ld / 2 - 0.6 - hd * 0.65);
+        woodpile(x, z, angle, id);
+      }
+      // After harvest: haystacks (round bales from the Industrial era) on the stubble.
+      if (season === 2) {
+        const fd = Math.max(2, ld - hd - 4.2);
+        const fw = Math.max(2, lw - 4);
+        const n = 3 + Math.floor(hashId(id, 92) * 4);
+        for (let i = 0; i < n; i++) {
+          const lx = (hashId(id * 13 + i, 93) - 0.5) * (fw - 2);
+          const lz = -ld / 2 + 3 + hashId(id * 13 + i, 94) * Math.max(0.5, fd - 2);
+          const [x, z] = L(lx, lz);
+          const y = heightAt(x, z);
+          if (era >= 4) blob(x, y + 0.5, z, 0.62, 0.55, 0.62, i % 3 ? Y.hay : Y.hayDark, 0, hashId(id + i, 95) * 3);
+          else {
+            blob(x, y + 0.8, z, 1.0, 1.25, 1.0, Y.hay, 0, i);
+            blob(x, y + 1.85, z, 0.55, 0.45, 0.55, Y.hayDark, 0, i);
+          }
+        }
+      }
+      return;
+    }
+
+    // Most homes fill their lot, so the yard is the strip just outside it,
+    // past the garden fence (0.2 m out): every piece checks that its ground
+    // is clear of roads, water and other buildings first.
+    const hx = lw / 2, hz = ld / 2;
+    const ok = (pts) => pts.every(([lx, lz]) => { const [x, z] = L(lx, lz); return free(x, z, id); });
+
+    // Woodpile against a side, while homes burn wood (to the Industrial era).
+    if ((home || b.type === 'workshop') && era <= 3 && !tall && hashId(id, 96) < 0.6) {
+      const sgn = hashId(id, 97) < 0.5 ? 1 : -1;
+      const lx = sgn * (hx + 0.6), lz = -hz * 0.25;
+      if (!ext.has(sgn > 0 ? 1 : 3) && ok([[lx, lz - 0.8], [lx, lz + 0.8], [lx + sgn * 0.5, lz]])) {
+        const [x, z] = L(lx, lz);
+        woodpile(x, z, angle, id);
+      }
+    }
+    // Behind the house: a vegetable plot in cottage gardens, else (on dry
+    // days) a washing line.
+    const tend = b.tend ?? 0;
+    const behind = !ext.has(2);
+    let plot = false;
+    if (behind && home && era <= 3 && !tall && tend > 0.2 && (b.wild ?? 0) < 0.2 && hashId(id, 102) < 0.5) {
+      const pw = Math.min(lw + 0.6, 3.4), pd = 2.0;
+      const cx = 0, cz = -hz - 0.6 - pd / 2;
+      if (ok([[cx - pw / 2, cz - pd / 2], [cx + pw / 2, cz - pd / 2], [cx - pw / 2, cz + pd / 2], [cx + pw / 2, cz + pd / 2], [cx, cz]])) {
+        plot = true;
+        const [x, z] = L(cx, cz);
+        box(x, heightAt(x, z) + 0.01, z, pw, 0.1, pd, Y.soil, angle);
+        const grown = season === 0 ? 0.5 : season === 3 ? 0 : 1;
+        if (grown > 0) {
+          const rows = Math.max(2, Math.floor(pd / 0.55));
+          const per = Math.max(2, Math.floor(pw / 0.45));
+          for (let r = 0; r < rows; r++) {
+            const lz = cz - pd / 2 + (r + 0.5) * (pd / rows);
+            const kind = (id + r) % 3;
+            for (let k = 0; k < per; k++) {
+              const lx = cx - pw / 2 + (k + 0.5) * (pw / per);
+              const [px, pz] = L(lx, lz);
+              const autumnPumpkin = season === 2 && kind === 0 && (k + r) % 2 === 0;
+              const rr = (kind === 1 ? 0.14 : 0.18) * grown;
+              const c = autumnPumpkin ? Y.pumpkin : kind === 0 ? Y.veg : kind === 1 ? Y.vegLight : Y.vegDark;
+              blob(px, heightAt(px, pz) + 0.08 + rr * 0.6, pz, rr, rr * (kind === 2 ? 1.5 : 0.85), rr, c, autumnPumpkin ? 0 : 0.6, k);
+            }
+          }
+        }
+      }
+    }
+    if (!plot && behind && home && dry && era >= 1 && era <= 4 && hashId(id, 98) < (tall ? 0.2 : 0.45)) {
+      const half = Math.min(hx + 0.4, 2.3);
+      const lz = -hz - 1.3;
+      if (half > 0.9 && ok([[-half, lz], [half, lz], [0, lz], [0, lz + 0.6]])) {
+        const [ax, az] = L(-half, lz), [bx2, bz2] = L(half, lz);
+        const ya = heightAt(ax, az), yb = heightAt(bx2, bz2);
+        leg(ax, az, ya + 1.9, 0.07, 0.07, K.woodDark);
+        leg(bx2, bz2, yb + 1.9, 0.07, 0.07, K.woodDark);
+        beam(ax, ya + 1.82, az, bx2, yb + 1.82, bz2, 0.015, 0.015, Y.line);
+        let u = 0.25;
+        for (let i = 0; i < 6 && u < 2 * half - 0.3; i++) {
+          const w = 0.32 + hashId(id * 17 + i, 99) * 0.5;
+          const h = 0.45 + hashId(id * 17 + i, 100) * 0.4;
+          const t = (u + w / 2) / (2 * half);
+          const x = ax + (bx2 - ax) * t, z = az + (bz2 - az) * t;
+          const y = ya + (yb - ya) * t + 1.8 - h / 2 - 0.02;
+          box(x, y, z, w, h, 0.025, LAUNDRY[(id + i * 3) % LAUNDRY.length], angle, (hashId(id + i, 101) - 0.5) * 0.25);
+          u += w + 0.12;
+        }
+      }
+    }
+    // Barrels and crates by trading and working doors.
+    if (STOCKED.has(b.type)) {
+      const sgn = hashId(id, 104) < 0.5 ? 1 : -1;
+      const lx = sgn * (hx + 0.55);
+      if (!ext.has(sgn > 0 ? 1 : 3)) {
+        const n = 2 + Math.floor(hashId(id, 105) * 3);
+        for (let i = 0; i < n; i++) {
+          const lz = hz - 0.45 - i * 0.62;
+          if (!ok([[lx, lz], [lx + sgn * 0.3, lz]])) continue;
+          const [x, z] = L(lx + (hashId(id + i, 106) - 0.5) * 0.15, lz);
+          const y = heightAt(x, z);
+          if ((i + id) % 3 === 2) box(x, y + 0.28, z, 0.56, 0.56, 0.56, Y.crate, angle + hashId(id + i, 107) * 0.6);
+          else barrel(x, y, z, angle + hashId(id + i, 107));
+        }
+        const cz = -hz * 0.4;
+        if (b.type === 'workshop' && ok([[lx + sgn * 0.6, cz - 0.9], [lx + sgn * 0.6, cz + 0.9], [lx + sgn * 1.2, cz]])) {
+          const [x, z] = L(lx + sgn * 0.6, cz);
+          handcart(x, z, angle + Math.PI / 2);
+        }
+      }
+    }
+  }
+
+  function woodpile(x, z, yaw, id) {
+    const y = topGround(x, z, yaw, [[0, -0.75], [0, 0.75]]);
+    for (let r = 0; r < 3; r++) {
+      const len = 1.5 - r * 0.12 - hashId(id + r, 108) * 0.1;
+      box(x, y + 0.15 + r * 0.27, z, 0.55, 0.27, len, r % 2 ? Y.logEndDark : Y.logEnd, yaw);
+    }
+    // A plank roof leaning on the wall, and the chopping block.
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    box(x, y + 1.02, z, 0.8, 0.05, 1.75, K.woodDark, yaw, 0);
+    box(x + c * 0.75 + s * 0.6, y + 0.2, z - s * 0.75 + c * 0.6, 0.38, 0.4, 0.38, Y.log, yaw + 0.4);
+  }
+
   // --- Parks ---------------------------------------------------------------
   function park(b, era, season, sandQuads, level) {
     const id = b.id | 0;
@@ -763,12 +950,51 @@ export function createDecor(ctx) {
     return ctx.quality?.name ?? 'medium';
   }
 
+  // Washing comes in when it rains or snows.
+  const dryDay = (view) => (view.weather?.rain ?? 0) < 0.2 && (view.weather?.snow ?? 0) < 0.2;
+
   function signature(view) {
-    let h = (buildings?.version?.() ?? 0) * 31 + (view.roads?.version ?? 0);
+    let h = (buildings?.version?.() ?? 0) * 31 + (view.roads?.version ?? 0) + (dryDay(view) ? 0 : 7);
     h = Math.imul(h ^ (view.aesthetics?.rev ?? -1), 16777619);
     h = Math.imul(h ^ (view.landscape?.rev ?? -1), 16777619);
     h = Math.imul(h ^ ((view.era ?? 0) * 7 + (view.time?.season ?? 0)), 16777619);
     return h;
+  }
+
+  /**
+   * Whether yard ground at (x, z) is clear: not on a road or trodden lane,
+   * not by the water, and outside every other building's lot (plus 0.4 m).
+   * Uses every building, not just those in reach, so the answer never
+   * depends on where the camera is.
+   */
+  function yardClearance(view) {
+    const G = 8, grid = new Map();
+    for (const o of view.buildings ?? []) {
+      const r = Math.max(o.w, o.d) / 2 + 0.4;
+      for (let gz = Math.floor((o.z - r) / G); gz <= Math.floor((o.z + r) / G); gz++)
+        for (let gx = Math.floor((o.x - r) / G); gx <= Math.floor((o.x + r) / G); gx++) {
+          const k = gx * 65536 + gz;
+          let cell = grid.get(k);
+          if (!cell) grid.set(k, (cell = []));
+          cell.push(o);
+        }
+    }
+    const R = view.roads;
+    return (x, z, selfId) => {
+      if (R?.tier) {
+        const i = Math.floor((x - R.ox) / R.cell), j = Math.floor((z - R.oz) / R.cell);
+        if (i >= 0 && j >= 0 && i < R.W && j < R.H) {
+          const k = j * R.W + i;
+          if (R.tier[k] > 0 || (R.wear && R.wear[k] > 60)) return false;
+        }
+      }
+      if (bankDistance(x, z) < 1.5) return false;
+      for (const o of grid.get(Math.floor(x / G) * 65536 + Math.floor(z / G)) ?? []) {
+        if ((o.id | 0) === selfId) continue;
+        if (Math.abs(x - o.x) < o.w / 2 + 0.4 && Math.abs(z - o.z) < o.d / 2 + 0.4) return false;
+      }
+      return true;
+    };
   }
 
   function layout(view, centre) {
@@ -799,10 +1025,15 @@ export function createDecor(ctx) {
     // Nearest first, so the caps drop the far edge.
     near.sort((a, b) => (a.x - cx) ** 2 + (a.z - cz) ** 2 - ((b.x - cx) ** 2 + (b.z - cz) ** 2) || a.id - b.id);
     const districtsWithWell = new Set();
+    // Yards: by tier (quality.js; Low draws what it always drew).
+    const yards = !!ctx.quality?.yards;
+    const yardFree = yards ? yardClearance(view) : null;
+    const dry = dryDay(view);
     for (const b of near) {
       if ((b.built ?? 1) < 1) continue;
       if (b.type === 'park') { park(b, era, season, sandQuads, view.landscape ? landAt(view, b.x, b.z) : 0.5); continue; }
       if (!NO_GARDEN.has(b.type)) garden(b, era);
+      if (yards) yard(b, era, dry, season, yardFree);
       if (SIGNED.has(b.type) && b.occupied !== false && !b.flags?.derelict && era >= 1) shopSign(b, era);
       if (b.type === 'market' || (b.type === 'shop' && b.variant === 'stall')) {
         const n = b.type === 'market' ? 3 + Math.floor(hashId(b.id, 72) * 3) : 1;
@@ -831,12 +1062,20 @@ export function createDecor(ctx) {
     streets(view, cx, cz, reach, lotCells, litterSpots);
     boxes.count = nBox;
     blobs.count = nBlob;
+    // Upload only the rows in use (the buffers are sized for the busiest view).
     for (const m of [boxes, blobs]) {
+      const n = Math.max(1, m.count);
       m.instanceMatrix.clearUpdateRanges();
+      m.instanceMatrix.addUpdateRange(0, n * 16);
       m.instanceMatrix.needsUpdate = true;
-      if (m.instanceColor) { m.instanceColor.clearUpdateRanges(); m.instanceColor.needsUpdate = true; }
+      if (m.instanceColor) {
+        m.instanceColor.clearUpdateRanges();
+        m.instanceColor.addUpdateRange(0, n * 3);
+        m.instanceColor.needsUpdate = true;
+      }
     }
     leafAttr.clearUpdateRanges();
+    leafAttr.addUpdateRange(0, Math.max(1, nBlob));
     leafAttr.needsUpdate = true;
     boxes.visible = nBox > 0;
     blobs.visible = nBlob > 0;

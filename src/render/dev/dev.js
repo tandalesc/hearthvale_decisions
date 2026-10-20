@@ -38,6 +38,11 @@ async function loadView() {
           view.sync(state, { now: t, speed });
           // Pin the season for screenshots: yearT param, advancing unless frozen.
           if (params.has('yearT')) view.time.yearT = (yearT + (frozen ? 0 : (t - t0) / 60)) % 1;
+          // Pin the weather for screenshots: &weather=rain|snow|clear.
+          if (params.has('weather')) {
+            const w = params.get('weather');
+            view.weather = { ...(view.weather ?? {}), rain: w === 'rain' ? 0.8 : 0, snow: w === 'snow' ? 0.8 : 0, wind: view.weather?.wind ?? [0.6, 0.3] };
+          }
         },
       };
     } catch (err) {
