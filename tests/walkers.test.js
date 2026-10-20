@@ -52,7 +52,9 @@ function run(speed, ticks) {
   const state = fixtureState('town');
   for (const p of state.people) p.task = null;
   state.walkerFootprintKey = null;   // re-check everyone on the first tick
-  const routes = createRoutePlanner({worker: false});
+  // A clock that never advances: each tick runs the planner's full slice cap, so
+  // the run is the same however busy the machine is (route-planner.js).
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
   const services = {routes};
   const view = createRenderView(state, {rowFloats: PERSON_STRIDE_EXTENDED});
   stepTick(state, 0.1, services);

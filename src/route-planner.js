@@ -6,8 +6,11 @@ import { terrainSeed, terrainVersion, terrainWaters } from './terrain.js';
 import { countDeckTrips } from './sim/bridges.js';
 import { navGrid, cellOf, cellCenter, nearestOpen, recordCrossingBand, WALKER_SCALE, footprints } from './sim/roads.js';
 
-export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache = 8192 } = {}) {
-  const fallback = new RouteScheduler({ maxPending, maxCache: 1 });
+// clock: what the cooperative fallback times its slices by (default
+// performance.now). Tests pass a clock that never advances, so each tick runs
+// its full slice cap and a run plans the same routes on a busy machine.
+export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache = 8192, clock } = {}) {
+  const fallback = new RouteScheduler({ maxPending, maxCache: 1, ...(clock ? { clock } : {}) });
   const cache = new Map();
   const waiting = new Map();
   const stats = { mode: 'cooperative', pending: 0, completed: 0, cacheHits: 0, requests: 0, rejected: 0 };
@@ -95,7 +98,12 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
   function enqueue(state, x0, z0, goal, job) {
     const g = ticked && grid && state === lastState ? grid : sync(state);
     stats.requests++;
-    const from = nearestOpen(state, cellOf(x0, z0), 6, true);
+    // Start where the walker stands. A walker mid-ford or on a bridge deck starts
+    // there too: nearestOpen only gives dry land, which can be across the deep
+    // channel, and the first leg (from the walker to that cell) would wade it.
+    const here = cellOf(x0, z0);
+    const from = here >= 0 && (g.water[here] === 2 || g.water[here] === 3) && Number.isFinite(g.cost[here])
+      ? here : nearestOpen(state, here, 6, true);
     // Goals in the water or inside a wall move to the nearest open ground.
     let to = cellOf(goal.x, goal.z);
     let target = { x: goal.x, z: goal.z };

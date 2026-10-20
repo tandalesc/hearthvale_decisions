@@ -263,8 +263,10 @@ function move(state, ctx, p, task, dt, now) {
 }
 
 // Bridge decks arch and ramp: while on one, the render row is renewed every
-// DECK_STEP units so the drawn height keeps to the deck (ramps curve fast).
-export const DECK_STEP = 0.4;
+// DECK_STEP units so the drawn height keeps to the deck (ramps curve fast). At 0.4
+// a walker at 1x could go two ticks between renewals and be drawn still climbing
+// past an arch's crest; at 0.2 it is renewed every tick it walks on a deck.
+export const DECK_STEP = 0.2;
 
 function reanchorOnDeck(state, p, task, now) {
   if (task.seg >= task.route.length || Math.hypot(p.x - (p.anchorX ?? 1e9), p.z - (p.anchorZ ?? 1e9)) < DECK_STEP) return;
@@ -1554,12 +1556,21 @@ export function pickQuiet(state, p, cands, tol) {
   return best;
 }
 
+// A stroll ends somewhere a walker can stand: not in the water, on a bridge deck,
+// or inside a building's walls (its plinth, steps or wings). Strolls in a crowded
+// quarter used to end inside a house, and the last step crossed its plinth.
 function strollTarget(state, p) {
-  const a = hashUnit(p.id * 13 + p.rev) * Math.PI * 2;
+  const a0 = hashUnit(p.id * 13 + p.rev) * Math.PI * 2;
   const r = 6 + hashUnit(p.id * 29 + p.rev) * 14;
-  let x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
-  if (waterAt(x, z)) x = p.x - Math.cos(a) * r;
-  return {type: 'point', id: null, x, z};
+  const {walls} = footprints(state);
+  for (let k = 0; k < 8; k++) {
+    const a = a0 + k * GOLDEN;
+    for (const s of [1, -1]) {
+      const x = p.x + s * Math.cos(a) * r, z = p.z + s * Math.sin(a) * r;
+      if (standable(state, walls, x, z)) return {type: 'point', id: null, x, z};
+    }
+  }
+  return {type: 'point', id: null, x: p.x, z: p.z};
 }
 
 function nearEvent(state, p, kinds) {
@@ -1652,8 +1663,20 @@ function startTask(state, ctx, p, kind, target, now, keep = null) {
 //   onRoute(route: number[] | Float32Array | null)    // flat [x, z, ...], may be called synchronously
 // A null route means unreachable; the walker uses the fallback path.
 
+// A stroll point can be built over while its walker waits for a route (a new lot
+// goes down on it). Pick another before routing there.
+function strollStillOpen(state, p, task) {
+  if (task.targetType !== 'point' || standable(state, footprints(state).walls, task.tx, task.tz)) return true;
+  p.rev++;
+  const next = strollTarget(state, p);
+  task.tx = next.x;
+  task.tz = next.z;
+  return false;
+}
+
 function requestRoute(state, ctx, p, task, now) {
   if (task.claim && task.spot) checkClaim(state, task);
+  strollStillOpen(state, p, task);
   const planner = ctx?.services?.routes;
   if (planner?.plan) {
     task.waiting = true;
@@ -1666,6 +1689,11 @@ function requestRoute(state, ctx, p, task, now) {
       // A route through a footprint that appeared since the planner's grid was built:
       // ask again in a moment (the grid catches up within a few ticks).
       if (route && route.length >= 2 && pathBlocked(state, p.x, p.z, route)) {
+        replan(p, simTime(state), 1);
+        return;
+      }
+      // Its stroll point was built over while the planner worked: ask again (for another point).
+      if (task.targetType === 'point' && !standable(state, footprints(state).walls, task.tx, task.tz)) {
         replan(p, simTime(state), 1);
         return;
       }

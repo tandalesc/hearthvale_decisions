@@ -91,7 +91,7 @@ test('walker leg tests cell by cell agree with testing every sample', () => {
 
 test('pushOpen tries the nearest waypoints first and takes the same one as the full scan', () => {
   const s = fixtureState('city');
-  const routes = createRoutePlanner({worker: false});
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
   for (let i = 0; i < 60; i++) { routes.tick(s, 1e9); stepTick(s, 0.1, {routes}); }
   let fallbacks = 0;
   for (const p of s.people) {
@@ -165,7 +165,7 @@ test('a leg dryAlong passes has no water at any sample, on every kind of valley'
 
 test('a nav grid rebuilt from the cells whose inputs changed is the grid built afresh', () => {
   const s = fixtureState('city');
-  const routes = createRoutePlanner({worker: false});
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
   const r = s.roads;
   const {water} = terrainGrid();
   const wet = [];

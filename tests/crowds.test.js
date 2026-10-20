@@ -54,7 +54,7 @@ function sendCrowd(s, market, n, ctx) {
 
 test('a crowd sent to one market stands apart, off footprints and water; the overflow goes to the other stall or home', () => {
   const {s, a, b} = twoMarkets();
-  const routes = createRoutePlanner({worker: false});
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
   const ctx = {services: {routes}};
   const ids = sendCrowd(s, a, 130, ctx);
   const door = accessPoint(a);
@@ -372,7 +372,7 @@ function festivalTown(strength) {
 
 test('gatherings still draw a crowd, standing apart', () => {
   const {s, at} = festivalTown(0.95);
-  const routes = createRoutePlanner({worker: false});
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
   let most = 0;
   for (let t = 0; t < 500; t++) {
     routes.tick?.(s);

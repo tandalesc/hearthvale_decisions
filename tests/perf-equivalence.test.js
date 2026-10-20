@@ -32,7 +32,7 @@ test('outline tests from the per-cell piece lists agree with every piece of ever
 
 test('a skirt memo that holds means skirtOutlines would leave the walk as it is', () => {
   const s = fixtureState('town');
-  const routes = createRoutePlanner({worker: false});
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
   for (let i = 0; i < 300; i++) {
     routes.tick(s, 1e9);
     stepTick(s, 0.1, {routes});
