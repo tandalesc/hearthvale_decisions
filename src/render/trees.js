@@ -4,6 +4,7 @@ import { patchMaterial, hashId, LAYER_REFLECT, GRADE_HEAD, NOISE } from './shade
 import { GROUND_GLSL, GROUND_ORIGIN, GROUND_LIMIT, shoreCharacter } from './ground.js';
 import { WOODLAND } from './terrain.js';
 import { woodField } from '../woodland.js';
+import { TIERS } from './quality.js';
 
 // Trees (design-visual §3.5, §4.4): a deterministic woodland that frames the
 // town like a model village — woods and copses on the hills and at the map
@@ -33,7 +34,7 @@ const FLAG_EXTRA = 2;
 // Kept share of wild trees per quality tier (lowest priority trees drop first),
 // and of the denser-woods pass.
 const KEEP = { low: 0.35, medium: 0.6, high: 1 };
-const KEEP_EXTRA = { low: 0, medium: 0.3, high: 1 };
+const KEEP_EXTRA = { low: TIERS.low.woods, medium: TIERS.medium.woods, high: TIERS.high.woods };
 const TIER_RANK = { low: 0, medium: 1, high: 2 };
 // Trees closer than this to the eye draw at full detail (metres), per tier.
 const NEAR_DIST = { low: 55, medium: 85, high: 120 };

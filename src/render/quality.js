@@ -1,4 +1,11 @@
 // Quality tiers, auto-detection and the persisted override (design-visual §4.7).
+//
+// Fidelity additions per tier (Low draws exactly what it drew before them):
+//   groundCover  'none' | 'grass' (meadow grass, reeds, bracken) | 'full' (+ wildflowers)
+//   woods        share of the denser-woods pass drawn (extra trees, understorey)
+//   yards        woodpiles, washing lines, plots, barrels, carts, hay (decor)
+//   mist         valley mist sheets (dawn, autumn, damp and cold nights)
+//   weather      puddle sheen on wet ground, rain rings on water, wind on crops
 
 export const TIERS = {
   low: {
@@ -6,18 +13,21 @@ export const TIERS = {
     water: 'low', reflection: false, cloudShadow: false, post: false,
     particles: 0.25, terrainDetail: 1, maxFps: 60,
     ao: 'baked',
+    groundCover: 'none', woods: 0, yards: false, mist: false, weather: false,
   },
   medium: {
     name: 'medium', pixelRatio: 1.75, shadowMapSize: 2048, shadowType: 'pcf', shadowRadius: 1,
     water: 'medium', reflection: false, cloudShadow: false, post: false,
     particles: 0.6, terrainDetail: 1, maxFps: 60,
     ao: 'baked',
+    groundCover: 'grass', woods: 0.3, yards: true, mist: false, weather: true,
   },
   high: {
     name: 'high', pixelRatio: 1.75, shadowMapSize: 2048, shadowType: 'pcfsoft', shadowRadius: 3,
     water: 'high', reflection: true, cloudShadow: true, post: true,
     particles: 1, terrainDetail: 1, maxFps: 60,
     ao: 'ssao', // screen-space AO in the post pass (ssao.js); 'baked' = ground field only (occlusion.js)
+    groundCover: 'full', woods: 1, yards: true, mist: true, weather: true,
   },
 };
 

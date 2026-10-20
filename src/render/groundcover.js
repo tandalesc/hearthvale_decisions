@@ -33,10 +33,11 @@ import { PATH_RANGE } from './paths.js';
 // Tier: Low draws none; Medium the grass mesh over a smaller square; High
 // adds the flowers. Hidden when the camera is far out (sub-pixel there).
 
-const TIERS = {
-  low: null,
-  medium: { grassN: 120, grassCell: 1.25, flowerN: 0, flowerCell: 2.4 },
-  high: { grassN: 210, grassCell: 0.95, flowerN: 124, flowerCell: 1.6 },
+// By the tier's groundCover setting (quality.js).
+const COVER = {
+  none: null,
+  grass: { grassN: 120, grassCell: 1.25, flowerN: 0, flowerCell: 2.4 },
+  full: { grassN: 210, grassCell: 0.95, flowerN: 124, flowerCell: 1.6 },
 };
 const HIDE_BEYOND = 260;        // camera distance (m)
 const LOT_CELL = 2;             // lot mask resolution (m)
@@ -410,8 +411,8 @@ export function createGroundCover(ctx) {
     group.add(mesh);
     return mesh;
   }
-  const grass = makeMesh(tuftGeometry(), false, TIERS.high.grassN ** 2);
-  const flowers = makeMesh(flowerGeometry(), true, TIERS.high.flowerN ** 2);
+  const grass = makeMesh(tuftGeometry(), false, COVER.full.grassN ** 2);
+  const flowers = makeMesh(flowerGeometry(), true, COVER.full.flowerN ** 2);
 
   let spec = null;
   let lotsVersion = -1;
@@ -419,7 +420,7 @@ export function createGroundCover(ctx) {
   let careSig = null;
 
   function applyQuality(q) {
-    spec = TIERS[q?.name] ?? null;
+    spec = COVER[q?.groundCover] ?? null;
     for (const [mesh, n, cell] of [[grass, spec?.grassN ?? 0, spec?.grassCell ?? 1], [flowers, spec?.flowerN ?? 0, spec?.flowerCell ?? 1]]) {
       mesh.geometry.instanceCount = n * n;
       mesh.userData.own.uCoverN.value = Math.max(1, n);

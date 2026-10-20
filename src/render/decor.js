@@ -1025,8 +1025,8 @@ export function createDecor(ctx) {
     // Nearest first, so the caps drop the far edge.
     near.sort((a, b) => (a.x - cx) ** 2 + (a.z - cz) ** 2 - ((b.x - cx) ** 2 + (b.z - cz) ** 2) || a.id - b.id);
     const districtsWithWell = new Set();
-    // Yards: Medium and High only (Low draws what it always drew).
-    const yards = tierName() !== 'low';
+    // Yards: by tier (quality.js; Low draws what it always drew).
+    const yards = !!ctx.quality?.yards;
     const yardFree = yards ? yardClearance(view) : null;
     const dry = dryDay(view);
     for (const b of near) {

@@ -23,6 +23,7 @@ import { createProps } from './props.js';
 import { createDecor } from './decor.js';
 import { createLabels } from './labels.js';
 import { createGroundCover } from './groundcover.js';
+import { createMist } from './mist.js';
 
 // Hearthvale renderer: createWorld (contract §6). The UI owns the main loop
 // and calls world.update(view, timeSeconds, dtSeconds) every animation frame;
@@ -88,7 +89,8 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
   const decor = createDecor(ctx);
   const labels = createLabels(ctx);
   const cover = createGroundCover(ctx);
-  const systems = [people, trees, decals, particles, props, decor, labels, cover];
+  const mist = createMist(ctx);
+  const systems = [people, trees, decals, particles, props, decor, labels, cover, mist];
 
   /**
    * The sim seeds the terrain when it creates or restores a town. If that
@@ -137,8 +139,8 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
   const frame = { time: 0, dt: 0, camera, target: rig.controls.target, distance: 100, tier: tierName };
   const statsState = { fps: 0, frameMs: 0, drawCalls: 0, triangles: 0, frames: 0, windowStart: 0, renderMs: 0 };
   // Smoothed CPU ms per stage, for stats().cpu.
-  const cpu = { grade: 0, roads: 0, buildings: 0, people: 0, trees: 0, decals: 0, particles: 0, props: 0, decor: 0, labels: 0, cover: 0, lights: 0, render: 0 };
-  const SYSTEM_NAMES = ['people', 'trees', 'decals', 'particles', 'props', 'decor', 'labels', 'cover'];
+  const cpu = { grade: 0, roads: 0, buildings: 0, people: 0, trees: 0, decals: 0, particles: 0, props: 0, decor: 0, labels: 0, cover: 0, mist: 0, lights: 0, render: 0 };
+  const SYSTEM_NAMES = ['people', 'trees', 'decals', 'particles', 'props', 'decor', 'labels', 'cover', 'mist'];
   let mark = 0;
   const lap = (key) => {
     const now = performance.now();
