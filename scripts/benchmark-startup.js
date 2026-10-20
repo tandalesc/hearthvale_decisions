@@ -7,7 +7,8 @@
 //   node scripts/benchmark-startup.js --runs=3 --scenarios=fresh --profile=/tmp/startup
 //
 // Prints JSON: per scenario, median and each run's milestones in ms since navigation
-// start (booted: window.hearthvale exists; firstFrame: the world has drawn), plus the
+// start (booted: window.hearthvale exists; firstFrame: the world has drawn), the longest
+// main-thread task and the sum of tasks over 50 ms before that frame, plus the
 // bytes of script fetched before the first frame. --profile=DIR saves one CPU profile
 // per scenario.
 import {chromium} from '@playwright/test';
@@ -34,6 +35,9 @@ try {
       const page = await ctx.newPage();
       await page.route('**/api/**', (r) => r.fulfill({status: 503, body: '{}'}));
       await page.addInitScript(() => {
+        // Main-thread tasks over 50 ms until the first drawn frame (the page cannot respond during them).
+        window.__long = [];
+        try { new PerformanceObserver((list) => { for (const e of list.getEntries()) window.__long.push(e.duration); }).observe({type: 'longtask', buffered: true}); } catch { /* no longtask API */ }
         localStorage.setItem('hearthvale-model-enabled', 'false');
         localStorage.setItem('hearthvale-ui', JSON.stringify({quality: 'high', muted: true, moments: 'never'}));
         localStorage.setItem('hearthvale-ui-seen', JSON.stringify(['explain:docket', 'explain:rules', 'explain:people', 'explain:chronicle', 'explain:tensions', 'explain:overlays', 'explain:council']));
@@ -45,7 +49,7 @@ try {
       });
       const cdp = opts.profile && i === 0 ? await ctx.newCDPSession(page) : null;
       if (cdp) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', {interval: 500}); await cdp.send('Profiler.start'); }
-      await page.goto(`${base}/${scenario === 'fresh' ? '' : `?fixture=${scenario}`}`, {waitUntil: 'commit'});
+      await page.goto(`${base}/${scenario === 'fresh' ? '?play=1' : `?fixture=${scenario}`}`, {waitUntil: 'commit'});
       const m = await page.evaluate(() => new Promise((resolveRun) => {
         let booted = null;
         const poll = () => {
@@ -53,7 +57,8 @@ try {
           if (h && booted == null) booted = performance.now();
           if (h?.renderer === 'real' && (h.world?.stats?.().drawCalls ?? 0) > 0) {
             const nav = performance.getEntriesByType('navigation')[0];
-            resolveRun({domContentLoaded: nav?.domContentLoadedEventEnd ?? null, booted, firstFrame: performance.now(), people: h.state().people.length, buildings: h.state().buildings.length});
+            const long = window.__long ?? [];
+            resolveRun({domContentLoaded: nav?.domContentLoadedEventEnd ?? null, booted, firstFrame: performance.now(), longestTask: Math.round(Math.max(0, ...long)), longTasksMs: Math.round(long.reduce((a, b) => a + b, 0)), people: h.state().people.length, buildings: h.state().buildings.length});
             return;
           }
           requestAnimationFrame(poll);
@@ -70,7 +75,7 @@ try {
       await ctx.close();
     }
     results[scenario] = {
-      median: {booted: +median(rows.map((r) => r.booted)).toFixed(0), firstFrame: +median(rows.map((r) => r.firstFrame)).toFixed(0)},
+      median: {booted: +median(rows.map((r) => r.booted)).toFixed(0), firstFrame: +median(rows.map((r) => r.firstFrame)).toFixed(0), longestTask: median(rows.map((r) => r.longestTask)), longTasksMs: median(rows.map((r) => r.longTasksMs))},
       runs: rows.map((r) => ({...r, booted: +r.booted.toFixed(0), firstFrame: +r.firstFrame.toFixed(0), domContentLoaded: r.domContentLoaded && +r.domContentLoaded.toFixed(0)})),
     };
   }
