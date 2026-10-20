@@ -40,9 +40,25 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
     else cache.clear();
     grid = g;
     // The worker's crossing analysis needs this town's river (terrain seed).
-    if (engine) engine.postMessage({ type: 'grid', grid: { ...g, fp: undefined, footprintsOnly, terrainSeed: terrainSeed(), terrainVersion: terrainVersion(), terrainArchetype: terrainWaters()?.forced ?? null } });
+    if (engine) engine.postMessage({ type: 'grid', grid: gridMessage(g, footprintsOnly) });
     else fallback.setGrid({ ...g, footprintsOnly });
     return g;
+  }
+
+  // The grid for the worker, without the arrays it already has: those the last grid
+  // sent shared (heights, path nodes, often the water codes) are named in `keep`, and a
+  // cost array that differs from the last in few cells goes as those cells (`costPatch`).
+  // The worker puts back the same arrays (navigation-worker.js).
+  let sent = null;
+  function gridMessage(g, footprintsOnly) {
+    const msg = { ...g, fp: undefined, footprintsOnly, terrainSeed: terrainSeed(), terrainVersion: terrainVersion(), terrainArchetype: terrainWaters()?.forced ?? null, keep: [] };
+    if (sent) {
+      for (const k of GRID_ARRAYS) if (g[k] && g[k] === sent[k]) { msg[k] = undefined; msg.keep.push(k); }
+      if (!msg.keep.includes('cost')) msg.costPatch = costPatch(sent.cost, g.cost);
+      if (msg.costPatch) msg.cost = undefined;
+    }
+    sent = Object.fromEntries(GRID_ARRAYS.map(k => [k, g[k]]));
+    return msg;
   }
 
   // Turns a cell path into waypoints and hands it to the job's consumer.
@@ -175,6 +191,25 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
       cache.clear();
     },
   };
+}
+
+const GRID_ARRAYS = ['cost', 'water', 'height', 'nodeX', 'nodeZ', 'nodeLinks'];
+
+// The cells where cost b differs from a (by their bits) and b's values there, or null
+// when there are many (sending the whole array is then as cheap).
+function costPatch(a, b) {
+  if (!(a instanceof Float32Array) || !(b instanceof Float32Array) || a.length !== b.length) return null;
+  const wa = new Uint32Array(a.buffer, a.byteOffset, a.length), wb = new Uint32Array(b.buffer, b.byteOffset, b.length);
+  const limit = b.length >> 4;
+  const idx = [];
+  for (let i = 0; i < wb.length; i++) {
+    if (wa[i] === wb[i]) continue;
+    if (idx.length >= limit) return null;
+    idx.push(i);
+  }
+  const at = Int32Array.from(idx), val = new Float32Array(at.length);
+  for (let k = 0; k < at.length; k++) val[k] = b[at[k]];
+  return { idx: at, val };
 }
 
 function remember(cache, key, value, max) {

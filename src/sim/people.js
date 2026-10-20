@@ -11,12 +11,12 @@
 // without a planner, from a straight-line fallback that crosses the river at the
 // nearest ford or bridge.
 
-import {heightAt, riverX, waterAt, bankDistance, FORDS, hasRiver} from '../terrain.js';
+import {heightAt, riverX, waterAt, bankDistance, FORDS, hasRiver, dryAlong} from '../terrain.js';
 import {rng, hash32, hashUnit} from './rng.js';
 import {decide, findHook} from './hooks.js';
 import {byId, cellIndex, lookFor, nextId, BRIDGE} from './state.js';
 import {monthIndex} from './clock.js';
-import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG} from './roads.js';
+import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG, walkerSegmentBlocked, walkerLegOutlined, structuralWaterAt, ORIGIN_X, ORIGIN_Z, CELL, GRID_W, GRID_H} from './roads.js';
 import {halfWidth, wearBucket} from '../render/paths.js';   // the drawn path widths (pure, no renderer state)
 import {findRoute, cellsToWaypoints} from '../navigation.js';
 import {projectSite} from './buildings.js';
@@ -1142,7 +1142,9 @@ function halt(p) {
 }
 
 function segmentBlocked(state, x0, z0, x1, z1) {
-  const {walls: blocked} = footprints(state);
+  const fp = footprints(state);
+  if (gridLaidOut(state.roads)) return walkerSegmentBlocked(fp, x0, z0, x1, z1);
+  const {walls: blocked} = fp;
   const steps = Math.ceil(Math.hypot(x1 - x0, z1 - z0) * 2);
   for (let i = 0; i <= steps; i++) {
     const x = x0 + ((x1 - x0) * i) / steps, z = z0 + ((z1 - z0) * i) / steps;
@@ -1267,16 +1269,22 @@ export function alongDecks(state, route, lane = 0) {
 // Adds a point, first by way of one of the grid route's own waypoints when the
 // straight leg there would cut a wall or wade (a dropped turn put back; nearest the
 // point first). With no such waypoint the leg stays as it was.
+// The waypoints are tried nearest first (the earlier of two as near), so the first that
+// works is the one taken.
 function pushOpen(state, out, route, x, z) {
   const lx = out[out.length - 2], lz = out[out.length - 1];
   if (legOpen(state, lx, lz, x, z)) { out.push(x, z); return; }
-  let best = -1, bestD = Infinity;
-  for (let k = 0; k + 1 < route.length; k += 2) {
-    const wx = route[k], wz = route[k + 1];
-    const d = Math.hypot(wx - x, wz - z);
-    if (d < bestD && legOpen(state, lx, lz, wx, wz) && legOpen(state, wx, wz, x, z)) { best = k; bestD = d; }
+  const m = route.length >> 1;
+  const dist = new Float64Array(m), order = [];
+  for (let j = 0; j < m; j++) {
+    dist[j] = Math.hypot(route[j * 2] - x, route[j * 2 + 1] - z);
+    if (dist[j] < Infinity) order.push(j);   // never one at no finite distance
   }
-  if (best >= 0) out.push(route[best], route[best + 1]);
+  order.sort((a, b) => dist[a] - dist[b] || a - b);
+  for (const j of order) {
+    const wx = route[j * 2], wz = route[j * 2 + 1];
+    if (legOpen(state, lx, lz, wx, wz) && legOpen(state, wx, wz, x, z)) { out.push(wx, wz); break; }
+  }
   out.push(x, z);
 }
 
@@ -1285,14 +1293,24 @@ function deckZone(state, x, z) {
   return deckAt(state, x, z)?.bridge ?? null;
 }
 
-// The first bridge whose deck or verge a leg passes over, or null.
+// The first bridge whose deck or verge a leg passes over, or null. (None when the leg's
+// box, and a millionth of a unit for its samples' rounding, misses every deck's box,
+// which deckAt tests first.)
 function deckTouched(state, x0, z0, x1, z1) {
+  if (!nearDeckBox(state, x0, z0, x1, z1)) return null;
   const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.25));
   for (let i = 1; i < steps; i++) {
     const b = deckZone(state, x0 + ((x1 - x0) * i) / steps, z0 + ((z1 - z0) * i) / steps);
     if (b) return b;
   }
   return null;
+}
+
+function nearDeckBox(state, x0, z0, x1, z1) {
+  const xa = Math.min(x0, x1) - 1e-6, xb = Math.max(x0, x1) + 1e-6, za = Math.min(z0, z1) - 1e-6, zb = Math.max(z0, z1) + 1e-6;
+  if (!(xb - xa < Infinity && zb - za < Infinity)) return true;
+  for (const d of deckList(state)) if (xb >= d.x0 && xa <= d.x1 && zb >= d.z0 && za <= d.z1) return true;
+  return false;
 }
 
 function nearerEnd(bridge, x, z) { return alongBridge(bridge, x, z).t < 0.5 ? bridge.a : bridge.b; }
@@ -1386,21 +1404,29 @@ function approach(state, out, bridge, e, o, x, z, always = false) {
 }
 
 // A straight leg clear of walls and of water (except over a deck or its verge).
+// Every sample is tested every 0.25 for water and (inside the leg) for drawn pieces;
+// the answer is whether all pass, so the pieces, which are cheap to rule out cell by
+// cell (roads.js walkerLegOutlined), go first, and the water after, unless the whole
+// leg is surely dry (terrain.js dryAlong).
 function legOpen(state, x0, z0, x1, z1) {
   if (segmentBlocked(state, x0, z0, x1, z1)) return false;
   const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.25));
+  if (walkerLegOutlined(footprints(state), x0, z0, x1, z1, steps)) return false;
+  if (dryAlong(x0, z0, x1, z1)) return true;
   for (let i = 0; i <= steps; i++) {
     const x = x0 + ((x1 - x0) * i) / steps, z = z0 + ((z1 - z0) * i) / steps;
     if (waterAt(x, z) && !deckZone(state, x, z) && !fordCell(state, x, z)) return false;
-    if (i > 0 && i < steps && !outlineClear(state, x, z)) return false;
   }
   return true;
 }
 
+// The road grid has roads.js's layout (it always does): its cell tests can be shared.
+const gridLaidOut = (r) => r.ox === ORIGIN_X && r.oz === ORIGIN_Z && r.cell === CELL && r.W === GRID_W && r.H === GRID_H;
+
 // A shallow ford cell on the nav grid (walkable water).
 function fordCell(state, x, z) {
   const c = cellOf(x, z);
-  return c >= 0 && structuralGrid(state).water[c] === 2;
+  return c >= 0 && structuralWaterAt(state, c) === 2;
 }
 
 // The bridge a leg passes over from one side to the other, if any.
@@ -1868,7 +1894,7 @@ function laneLeg(state, decks, x0, z0, x1, z1) {
   const len = Math.hypot(x1 - x0, z1 - z0);
   // Well back from the river (it bends gently), the leg cannot reach the water; away
   // from every deck's bounding box, it cannot touch a deck.
-  const wet = bankDistance(x0, z0) < 3 * len + 1;
+  const wet = !dryAlong(x0, z0, x1, z1) && bankDistance(x0, z0) < 3 * len + 1;
   const lx0 = Math.min(x0, x1), lx1 = Math.max(x0, x1), lz0 = Math.min(z0, z1), lz1 = Math.max(z0, z1);
   let near = false;
   for (const d of decks) if (lx1 >= d.x0 && lx0 <= d.x1 && lz1 >= d.z0 && lz0 <= d.z1) { near = true; break; }
@@ -1954,3 +1980,6 @@ export const BRIDGE_DECK = 0.62;
 
 // Walking pace over a bridge by its style: planks are narrow, stone and iron are broad.
 const DECK_SPEED = {footbridge: 1.1, timber: 1.5, stone: 1.75, iron: 1.75};
+
+// For tests (tests/route-delivery-equivalence.test.js).
+export const __test = {legOpen, pushOpen};

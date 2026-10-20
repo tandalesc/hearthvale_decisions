@@ -396,6 +396,45 @@ export function waterKindAt(x, z) {
   return KIND.LAND;
 }
 
+/**
+ * Is waterAt false all along the straight stretch from (x0, z0) to (x1, z1), and a
+ * millionth of a unit either side? true only when bounds alone settle it (false: it may
+ * not be; test the points). So a leg's samples, which lie within rounding of the
+ * stretch, need no waterAt of their own. It follows waterKindAt: lakes, ponds, creeks
+ * and the sea are only looked at inside their boxes or bands, so a stretch whose box
+ * misses all of them meets none; and riverX never strays more than riverSwing() from
+ * the straight axis base + tilt * z, so neither can a stretch whose offset from that
+ * axis (linear along it) stays beyond the swing and the half-width. Keep in step with
+ * waterKindAt.
+ */
+const DRY_EPS = 1e-6;
+export function dryAlong(x0, z0, x1, z1) {
+  const xa = Math.min(x0, x1) - DRY_EPS, xb = Math.max(x0, x1) + DRY_EPS;
+  const za = Math.min(z0, z1) - DRY_EPS, zb = Math.max(z0, z1) + DRY_EPS;
+  if (!(xb - xa < Infinity && zb - za < Infinity)) return false;   // NaN or unbounded
+  if (W) {
+    const meets = (b) => !(xb < b.x0 || xa > b.x1 || zb < b.z0 || za > b.z1);
+    for (const L of W.lakes) if (meets(L.box)) return false;
+    for (const Q of W.ponds) if (meets(Q.box)) return false;
+    if (W.sea && za < W.seaTop + W.sea.rise) return false;
+    for (const C of W.creeks) if (!(za > C.zs || zb < C.box.z0 || xb < C.box.x0 || xa > C.box.x1)) return false;
+    if (zb <= W.riverEnd) return true;
+  }
+  const r = P.river;
+  const d0 = x0 - (r.base + r.tilt * z0), d1 = x1 - (r.base + r.tilt * z1);
+  const reach = riverSwing() * (1 + 1e-9) + P.half + DRY_EPS * (2 + Math.abs(r.tilt));
+  return Math.min(d0, d1) >= reach || Math.max(d0, d1) <= -reach;
+}
+
+// The most riverX can differ from base + tilt * z: the sines are at most 1, and the
+// meander's gradient noise is under 1.4 (0.7 times a blend of gradient dots, each under
+// 2 in size, land.js gradientNoise), and so is noiseLine's weighted mean of it.
+function riverSwing() {
+  const r = P.river;
+  const waves = Math.abs(r.a1) + Math.abs(r.a2);
+  return MEANDER ? waves * 0.45 + Math.abs(MEANDER.a) * 1.4 : waves;
+}
+
 /** The kind of the water nearest (x, z): mills and quays want KIND.RIVER. */
 export function nearestWaterKind(x, z) {
   if (!W) return KIND.RIVER;

@@ -9,6 +9,11 @@
 //   node --expose-gc scripts/benchmark-city.js ...      # adds heap growth after a full GC
 //   node scripts/benchmark-city.js --root=/tmp/base     # the same run on another checkout's src/
 //
+// Route delivery (people.js setRoute, run in the planner's callback) is on the main
+// thread in the browser too, where the worker's answer arrives: `deliver` is its time per
+// frame, and `mainThread` is sim + sync + the delivery that ran inside routes.tick (the
+// rest of routeCompute is the search, which the browser does in the worker).
+//
 // Prints JSON: per-frame p50/p95/max for each stage, GC pauses, heap, and a hash of
 // the serialized state at the end (same hash = same simulation output).
 import {readFileSync} from 'node:fs';
@@ -33,12 +38,17 @@ const state = opts.save ? restore(readFileSync(opts.save, 'utf8')) : fixtureStat
 const loadMs = performance.now() - t0;
 const routes = createRoutePlanner({worker: false});
 const view = createRenderView(state, {rowFloats: 20});
-const services = {decisions: null, routes, now: 0};
+let deliverMs = 0;
+const timedRoutes = {...routes, plan: (st, x0, z0, x1, z1, onRoute) => routes.plan(st, x0, z0, x1, z1, (route) => {
+  const t = performance.now();
+  try { onRoute(route); } finally { deliverMs += performance.now() - t; }
+})};
+const services = {decisions: null, routes: timedRoutes, now: 0};
 
 const gcs = [];
 new PerformanceObserver((list) => { for (const e of list.getEntries()) gcs.push(e.duration); }).observe({entryTypes: ['gc']});
 
-const stages = {route: [], sim: [], sync: [], frame: []};
+const stages = {route: [], sim: [], sync: [], frame: [], deliver: [], main: []};
 const dt = 1 / fps;
 const frames = Math.round(seconds * fps);
 let now = 0;
@@ -47,9 +57,11 @@ const heap0 = process.memoryUsage().heapUsed;
 for (let f = -warmFrames; f < frames; f++) {
   now += dt;
   services.now = now * 1000;
+  deliverMs = 0;
   const a = performance.now();
   routes.tick(state, 1e9);
   const b = performance.now();
+  const deliverInRoute = deliverMs;
   stepTick(state, dt * speed * PACE, services);
   const c = performance.now();
   view.sync(state, {now, speed: speed * PACE});
@@ -62,6 +74,8 @@ for (let f = -warmFrames; f < frames; f++) {
   stages.sim.push(c - b);
   stages.sync.push(d - c);
   stages.frame.push(d - b);
+  stages.deliver.push(deliverMs);
+  stages.main.push(d - b + deliverInRoute);
 }
 await new Promise((r) => setTimeout(r, 50));   // let the GC observer deliver
 globalThis.gc?.();
@@ -74,7 +88,7 @@ const q = (a) => {
 process.stdout.write(JSON.stringify({
   fixture: opts.save ?? fixture, speed, seconds, fps, loadMs: +loadMs.toFixed(1),
   town: {year: state.time.year, pop: state.indicators.pop, walkers: state.people.length, buildings: state.buildings.length},
-  perFrameMs: {simPlusSync: q(stages.frame), sim: q(stages.sim), sync: q(stages.sync), routeCompute: q(stages.route)},
+  perFrameMs: {mainThread: q(stages.main), deliver: q(stages.deliver), simPlusSync: q(stages.frame), sim: q(stages.sim), sync: q(stages.sync), routeCompute: q(stages.route)},
   gc: {count: gcs.length, totalMs: +gcs.reduce((x, y) => x + y, 0).toFixed(1), maxMs: +Math.max(0, ...gcs).toFixed(2)},
   heapGrowthMB: globalThis.gc ? +((heap1 - heap0) / 1048576).toFixed(2) : null,
   routes: {...routes.stats},
