@@ -610,6 +610,7 @@ attribute vec4 iTree;   // seed, priority, chop start time (0 = standing), flags
 uniform float uYearT;
 uniform vec3 uLodEye;
 uniform float uLodDist;
+uniform float uExtraOff;
 `;
 
 // Object space: the LOD split (each tree is drawn by exactly one level: the
@@ -652,6 +653,13 @@ const VERTEX_BEGIN = /* glsl */ `
   float tilt = 0.21 * smoothstep(0.0, 0.55, chopK);
   transformed.yz = mat2(cos(tilt), sin(tilt), -sin(tilt), cos(tilt)) * transformed.yz;
   transformed.y *= 1.0 - smoothstep(0.35, 1.0, chopK);
+  // Denser-woods trees (flag 2): off in the mirror pass and the shadow map.
+  float extraT = step(0.5, mod(floor(iTree.w * 0.5 + 0.01), 2.0));
+  #ifdef TREE_DEPTH
+    lodKeep *= 1.0 - extraT;
+  #else
+    lodKeep *= 1.0 - extraT * uExtraOff;
+  #endif
   transformed *= step(chopK, 0.999) * lodKeep;
 `;
 
@@ -820,7 +828,7 @@ function makeMaterials(grade, kind, lod, lodUniforms) {
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   depth.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, grade.uniforms, lodUniforms);
-    shader.defines = { ...(shader.defines ?? {}), ...defines };
+    shader.defines = { ...(shader.defines ?? {}), ...defines, TREE_DEPTH: 1 };
     shader.vertexShader = GRADE_HEAD + VERTEX_HEAD + shader.vertexShader
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + VERTEX_BEGIN)
       .replace('#include <project_vertex>', PROJECT);
@@ -856,7 +864,9 @@ export function createTrees(ctx) {
   const up = new THREE.Vector3(0, 1, 0);
   // LOD split shared by both levels: the eye (main camera, also during the
   // shadow and reflection passes) and the near distance.
-  const lodUniforms = { uLodEye: { value: new THREE.Vector3(0, 1e5, 0) }, uLodDist: { value: NEAR_DIST.high } };
+  // uExtraOff: the denser-woods trees stay out of the river mirror (1 during
+  // that pass); they never cast into the shadow map (depth material).
+  const lodUniforms = { uLodEye: { value: new THREE.Vector3(0, 1e5, 0) }, uLodDist: { value: NEAR_DIST.high }, uExtraOff: { value: 0 } };
   const instanced = (k, lod, capacity) => {
     const { material, depth } = makeMaterials(grade, k, lod, lodUniforms);
     const mesh = new THREE.InstancedMesh(buildGeometry(k, lod), material, Math.max(1, capacity));
@@ -960,19 +970,31 @@ export function createTrees(ctx) {
     }
   }
 
+  // Road cells under each tree's five reach samples (-1 outside the grid),
+  // worked out once per road grid: a road change then only reads them.
+  let reachCells = null, reachKey = '';
   function clearRoads(roads, time) {
     const { W, H, cell, ox, oz, tier, wear } = roads;
     if (!tier) return;
+    const key = `${W},${H},${cell},${ox},${oz}`;
+    if (key !== reachKey) {
+      reachKey = key;
+      reachCells = new Int32Array(forest.count * 5);
+      for (let i = 0; i < forest.count; i++) {
+        const reach = forest.kind[i] === KIND.BUSH ? 0.7 : 1.5 * forest.scale[i];
+        for (let k = 0; k < 5; k++) {
+          const x = forest.x[i] + (k === 1 ? reach : k === 2 ? -reach : 0);
+          const z = forest.z[i] + (k === 3 ? reach : k === 4 ? -reach : 0);
+          const cx = Math.floor((x - ox) / cell), cz = Math.floor((z - oz) / cell);
+          reachCells[i * 5 + k] = cx < 0 || cz < 0 || cx >= W || cz >= H ? -1 : cz * W + cx;
+        }
+      }
+    }
     for (let i = 0; i < forest.count; i++) {
       if (chopT[i] !== 0) continue;
-      const reach = forest.kind[i] === KIND.BUSH ? 0.7 : 1.5 * forest.scale[i];
-      for (let k = 0; k < 5; k++) {
-        const x = forest.x[i] + (k === 1 ? reach : k === 2 ? -reach : 0);
-        const z = forest.z[i] + (k === 3 ? reach : k === 4 ? -reach : 0);
-        const cx = Math.floor((x - ox) / cell), cz = Math.floor((z - oz) / cell);
-        if (cx < 0 || cz < 0 || cx >= W || cz >= H) continue;
-        const c = cz * W + cx;
-        if (tier[c] >= 2 || (wear && wear[c] >= 300)) { chop(i, time); break; }
+      for (let k = i * 5, e = k + 5; k < e; k++) {
+        const c = reachCells[k];
+        if (c >= 0 && (tier[c] >= 2 || (wear && wear[c] >= 300))) { chop(i, time); break; }
       }
     }
   }
@@ -1147,6 +1169,7 @@ export function createTrees(ctx) {
      */
     setReflectionPass(on) {
       lodUniforms.uLodDist.value = on ? 0 : NEAR_DIST[ctx.quality?.name] ?? NEAR_DIST.medium;
+      lodUniforms.uExtraOff.value = on ? 1 : 0;
     },
     dispose() {
       for (const m of meshes) {

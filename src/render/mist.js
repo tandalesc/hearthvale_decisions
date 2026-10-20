@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { NOISE, GRADE_HEAD } from './shaderlib.js';
 import { GROUND_GLSL } from './ground.js';
 
-// Valley mist (High tier): four faint translucent sheets draped over the
+// Valley mist (High tier): three faint translucent sheets draped over the
 // ground round the view, 0.5-2.5 m above it, that gather over water and the low
 // valley floor and fade on rising ground. Soft noise drifts with the wind, so
 // the mist moves in slow banks. It lies thickest at dawn, on autumn days,
@@ -15,7 +15,7 @@ const SPAN = 300;      // metres
 const STEP = SPAN / (N - 1);
 // Several faint layers rather than one thick sheet: where a wall or trunk
 // passes through them the mist builds up gradually instead of in a band.
-const LAYERS = [0.45, 1.05, 1.7, 2.4];
+const LAYERS = [0.55, 1.4, 2.3];
 
 function sheetGeometry() {
   const pos = [], layer = [], idx = [];
@@ -75,6 +75,7 @@ varying vec3 vMistW;
 varying float vMistLow;
 varying float vMistLayer;
 void main() {
+  if (vMistLow * uMist < 0.01) discard;
   // Banks drifting with the wind, with finer wisps inside them.
   vec2 drift = uWind * uDecoTime * 0.6;
   vec2 p = vMistW.xz + drift + vMistLayer * 37.0;
@@ -82,7 +83,7 @@ void main() {
   float wisp = vnoise(p * 0.13 - drift * 0.5);
   float a = smoothstep(0.35, 0.8, bank) * (0.75 + 0.25 * wisp) * vMistLow * uMist;
   // Densest at the bottom, thinning upward.
-  a *= 0.2 * (1.0 - vMistLayer * 0.18);
+  a *= 0.26 * (1.0 - vMistLayer * 0.25);
   // Thin out right under the camera so the view never fills with grey.
   a *= smoothstep(6.0, 40.0, distance(vMistW, cameraPosition));
   if (a < 0.004) discard;

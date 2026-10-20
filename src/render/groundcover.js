@@ -36,27 +36,27 @@ import { PATH_RANGE } from './paths.js';
 // By the tier's groundCover setting (quality.js).
 const COVER = {
   none: null,
-  grass: { grassN: 120, grassCell: 1.25, flowerN: 0, flowerCell: 2.4 },
-  full: { grassN: 210, grassCell: 0.95, flowerN: 124, flowerCell: 1.6 },
+  grass: { grassN: 112, grassCell: 1.3, flowerN: 0, flowerCell: 2.4 },
+  full: { grassN: 176, grassCell: 1.1, flowerN: 80, flowerCell: 2.2 },
 };
-const HIDE_BEYOND = 260;        // camera distance (m)
+const HIDE_BEYOND = 210;        // camera distance (m); fades in from 0.6 of it
 const LOT_CELL = 2;             // lot mask resolution (m)
 const LOT_N = Math.ceil((GROUND_LIMIT - GROUND_ORIGIN) / LOT_CELL);
 const LOT_REBUILD_GAP = 1.0;    // seconds
 // Lots whose ground is worked or paved: no cover at all.
 const BARE_LOTS = new Set(['farm', 'market', 'square', 'quarry', 'quay', 'bridge', 'factory', 'warehouse', 'mill', 'monument', 'works', 'yard']);
 
-/** A tuft: five blades (one triangle each) fanned round the centre. */
+/** A tuft: four blades (one triangle each) fanned round the centre. */
 function tuftGeometry() {
   const pos = [], out = [];
-  const BLADES = 5;
+  const BLADES = 4;
   for (let i = 0; i < BLADES; i++) {
     const a = (i / BLADES) * Math.PI * 2 + (i % 2) * 0.4;
     const ox = Math.cos(a), oz = Math.sin(a);
     // Blade faces sideways to its lean; base corners either side of its root.
     const tx = -oz * 0.075, tz = ox * 0.075;
     const rx = ox * 0.07, rz = oz * 0.07;
-    const k = 0.75 + 0.25 * ((i * 7) % 5) / 4; // blades of a tuft differ in height
+    const k = 0.75 + 0.25 * ((i * 7) % 4) / 3; // blades of a tuft differ in height
     pos.push(rx - tx, 0, rz - tz, rx + tx, 0, rz + tz, rx * 1.4, k, rz * 1.4);
     for (let v = 0; v < 3; v++) out.push(ox, oz, i / BLADES);
   }
@@ -130,7 +130,13 @@ const VERTEX_PLACE = /* glsl */ `
   // Shrink toward the rim of the square, and with the camera's distance.
   vec2 rel = (base - uCoverCenter) / (uCoverN * uCoverCell * 0.5);
   float size = (1.0 - smoothstep(0.62, 0.97, length(rel))) * uCoverFade;
-
+  // Corners of the square lie past the rim: skip their lookups.
+  if (size < 0.02) {
+    coverWorld = vec3(0.0);
+    coverDead = true;
+    objectNormal = vec3(0.0, 1.0, 0.0);
+    vCoverCol = vec3(0.0);
+  } else {
   vec4 gt = groundBilinear(base);
   float gy = gt.r;
   float shore = gt.b;
@@ -258,6 +264,7 @@ const VERTEX_PLACE = /* glsl */ `
   vCoverCol = mix(col * 0.62, tipCol, tip);
   vCoverCol = mix(vCoverCol, vec3(0.80, 0.83, 0.88), snowK * 0.45 * tip);
   objectNormal = normalize(vec3(aOut.x * 0.35 * tip, 1.0, aOut.y * 0.35 * tip));
+  }
 `;
 
 // Flowers: the same placement (masks), then a seasonal palette for the heads.
@@ -271,6 +278,16 @@ const FLOWER_PLACE = /* glsl */ `
   vec2 base = (cell + 0.1 + 0.8 * vec2(h1, h2)) * uCoverCell;
   vec2 rel = (base - uCoverCenter) / (uCoverN * uCoverCell * 0.5);
   float size = (1.0 - smoothstep(0.62, 0.97, length(rel))) * uCoverFade;
+  // Cheap tests first: most cells are neither meadow nor garden.
+  vec2 luv0 = (base - uLotsRect.xy) / uLotsRect.zw;
+  float lot0 = inRect(luv0) > 0.5 ? texture2D(tLots, luv0).r : 0.0;
+  float zone0 = vnoise(base * 0.012 + 31.0);
+  if ((zone0 < 0.58 && lot0 < 0.2) || size < 0.02 || h4 > 0.9) {
+    coverWorld = vec3(0.0);
+    coverDead = true;
+    objectNormal = vec3(0.0, 1.0, 0.0);
+    vCoverCol = vec3(0.0);
+  } else {
   vec4 gt = groundBilinear(base);
   float gy = gt.r;
   float shore = gt.b;
@@ -295,7 +312,7 @@ const FLOWER_PLACE = /* glsl */ `
   // Flowers grow in two places only: tended gardens, and the wildflower
   // meadows (broad patches of open country, with drifts inside them). Open
   // pasture, verges and kept town land between them stay plain grass.
-  float meadowZone = smoothstep(0.58, 0.7, vnoise(base * 0.012 + 31.0)) * (1.0 - garden);
+  float meadowZone = smoothstep(0.58, 0.7, zone0) * (1.0 - garden);
   meadowZone *= 1.0 - smoothstep(0.15, 0.4, care);
   float drift = vnoise(base * 0.06 + 13.0);
   float keep = meadowZone * smoothstep(0.45, 0.68, drift) * 0.9;
@@ -333,6 +350,7 @@ const FLOWER_PLACE = /* glsl */ `
   p.xz += (windD * (0.1 + 0.4 * gust) * (0.4 + windL) + vec2(-windD.y, windD.x) * nod * 0.06) * p.y * 0.6;
   coverWorld = vec3(base.x + p.x, gy - 0.03 + p.y, base.y + p.z);
   objectNormal = vec3(0.0, 1.0, 0.0);
+  }
 `;
 
 const PROJECT = /* glsl */ `
@@ -478,7 +496,7 @@ export function createGroundCover(ctx) {
   function update(view, frame) {
     if (!spec) return;
     const d = frame.distance ?? 100;
-    const fade = 1 - THREE.MathUtils.smoothstep(d, HIDE_BEYOND * 0.7, HIDE_BEYOND);
+    const fade = 1 - THREE.MathUtils.smoothstep(d, HIDE_BEYOND * 0.6, HIDE_BEYOND);
     const shown = fade > 0.01;
     for (const mesh of [grass, flowers]) mesh.visible = shown && mesh.userData.active;
     if (!shown) return;
