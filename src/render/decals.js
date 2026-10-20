@@ -7,10 +7,10 @@ import { GROUND_AO, GROUND_AO_GLSL, bakeOcclusionSteps, setGroundField, aoDayFac
 //   1. Contact shadows under every building (multiply blend, terrain-following
 //      grid so slopes never show a floating edge).
 //   2. Contact blobs under every tree (multiply blend, one flat quad each).
-//   3. Coloured ground: park lawns with gravel paths, flower gardens for
-//      wealthy homes, dirt-and-plank yards around construction (lit Lambert).
 //      On High the denser-woods trees, which skip the shadow map, draw a
 //      soft cast shadow here instead: an ellipse thrown away from the sun.
+//   3. Coloured ground: park lawns with gravel paths, flower gardens for
+//      wealthy homes, dirt-and-plank yards around construction (lit Lambert).
 // Three draw calls. Instances are rebuilt only when lots change, and so is
 // the baked ground occlusion field (occlusion.js) the terrain multiplies in.
 
