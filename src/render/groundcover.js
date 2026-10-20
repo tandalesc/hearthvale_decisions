@@ -24,8 +24,9 @@ import { PATH_RANGE } from './paths.js';
 //   reeds          tall and upright along wild banks and in marshes
 //   bracken        wide arching fronds on the woodland floor, rust in autumn
 //   dune grass     sparse and pale behind beaches
-//   wildflowers    (separate mesh) drifts of colour that change with the
-//                  season: buttercups and daisies in spring, poppies and
+//   wildflowers    (separate mesh) only in tended gardens and in wildflower
+//                  meadows (broad patches of open country), in drifts that
+//                  change with the season: buttercups and daisies in spring, poppies and
 //                  cornflowers in summer, bluebells under the trees
 // Wind bends every blade and sends slow gust bands across the meadows.
 //
@@ -151,7 +152,7 @@ const VERTEX_PLACE = /* glsl */ `
   vec2 luv = (base - uLotsRect.xy) / uLotsRect.zw;
   float lot = inRect(luv) > 0.5 ? texture2D(tLots, luv).r : 0.0;
   open *= step(lot, 0.75);
-  float lawn = step(0.25, lot);
+  float lawn = step(0.2, lot);
   // The sim's landscaping level (-1 overgrown .. 1 formal).
   vec2 cuv = (base - uCareRect.xy) / uCareRect.zw;
   float care = inRect(cuv) > 0.5 ? texture2D(tCare, cuv).r * 2.0 - 1.0 : 0.0;
@@ -282,24 +283,31 @@ const FLOWER_PLACE = /* glsl */ `
   }
   vec2 luv = (base - uLotsRect.xy) / uLotsRect.zw;
   float lot = inRect(luv) > 0.5 ? texture2D(tLots, luv).r : 0.0;
-  open *= step(lot, 0.25);
+  open *= step(lot, 0.75);
+  float garden = step(0.2, lot);
+  float gardenTend = clamp((lot - 0.25) / 0.25, 0.0, 1.0) * garden;
   vec2 cuv = (base - uCareRect.xy) / uCareRect.zw;
   float care = inRect(cuv) > 0.5 ? texture2D(tCare, cuv).r * 2.0 - 1.0 : 0.0;
   vec2 wuv = (base - uWoodRect.xy) / uWoodRect.zw;
   float wood = inRect(wuv) > 0.5 ? texture2D(tWood, wuv).r : 0.0;
-  // Drifts: flowers come in patches, with a few strays between them.
-  float drift = vnoise(base * 0.06 + 13.0);
-  float keep = smoothstep(0.48, 0.7, drift) * 0.9 + 0.04;
-  // Mown land keeps few; the woods only their spring carpet.
-  keep *= 1.0 - 0.8 * smoothstep(0.15, 0.5, care);
-  keep *= 1.0 - 0.7 * smoothstep(28.0, 44.0, gy);
   float inWood = smoothstep(0.2, 0.4, wood);
+  // Flowers grow in two places only: tended gardens, and the wildflower
+  // meadows (broad patches of open country, with drifts inside them). Open
+  // pasture, verges and kept town land between them stay plain grass.
+  float meadowZone = smoothstep(0.58, 0.7, vnoise(base * 0.012 + 31.0)) * (1.0 - garden);
+  meadowZone *= 1.0 - smoothstep(0.15, 0.4, care);
+  float drift = vnoise(base * 0.06 + 13.0);
+  float keep = meadowZone * smoothstep(0.45, 0.68, drift) * 0.9;
+  // Gardens: a scatter of flowers where the lot is well kept.
+  keep += smoothstep(0.35, 0.7, gardenTend) * 0.4;
+  keep *= 1.0 - 0.7 * smoothstep(28.0, 44.0, gy);
   // Season: spring and summer only; heads close and fade in autumn.
   float y = uYearT;
   float spring = smoothstep(0.04, 0.1, y) * (1.0 - smoothstep(0.26, 0.32, y));
   float summer = smoothstep(0.26, 0.32, y) * (1.0 - smoothstep(0.55, 0.64, y));
   float season = max(spring, summer) * (1.0 - smoothstep(0.2, 0.6, uSnow));
-  keep *= mix(1.0, spring * 1.3, inWood);
+  // Bluebells: a spring carpet in the woods' meadow-side clearings only.
+  keep = mix(keep, keep * spring * 1.3, inWood);
   coverDead = h4 >= keep * open || size * season < 0.02;
   float isHead = step(0.5, aOut.z);
   // Palettes (linear): spring buttercup, daisy, lady's smock, primrose;
@@ -364,7 +372,8 @@ export function createGroundCover(ctx) {
   group.name = 'groundcover';
   scene.add(group);
 
-  // Lot mask: 0 open land, 0.5 garden / park lawn, 1 bare (yards, fields, paving).
+  // Lot mask: 0 open land, 0.25..0.5 garden / park lawn (by how well kept),
+  // 1 bare (yards, fields, paving).
   const lotData = new Uint8Array(LOT_N * LOT_N);
   const tLots = new THREE.DataTexture(lotData, LOT_N, LOT_N, THREE.RedFormat, THREE.UnsignedByteType);
   tLots.magFilter = THREE.NearestFilter;
@@ -427,7 +436,9 @@ export function createGroundCover(ctx) {
       const s = lot.summary;
       if (!s) continue;
       const bare = BARE_LOTS.has(s.type);
-      const v = bare ? 255 : 128;
+      // Gardens carry how well they are kept: 64 (neglected) .. 127 (tended).
+      const tend = Math.max(0, Math.min(1, lot.record?.tend ?? 0));
+      const v = bare ? 255 : 64 + Math.round(tend * 63);
       // A little margin round worked ground; gardens stop at the fence.
       const m = bare ? 1 : 0;
       const i0 = Math.max(0, Math.floor((s.x - s.w / 2 - m - GROUND_ORIGIN) / LOT_CELL));

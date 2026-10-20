@@ -12,7 +12,7 @@ import { createServer } from 'vite';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const args = Object.fromEntries(process.argv.slice(2).map((a) => a.replace(/^--/, '').split('=')));
+const args = Object.fromEntries(process.argv.slice(2).map((a) => { const [k, ...v] = a.replace(/^--/, '').split('='); return [k, v.join('=')]; }));
 const out = resolve(args.out ?? 'test-results/fidelity');
 const prefix = args.prefix ?? 'shot';
 const tier = args.tier ?? 'high';
@@ -31,6 +31,9 @@ const SHOTS = {
   'city-close': 'fixture=city&yearT=0.66&cx=-20&cz=0&dist=60&elev=30',
   'city-winter-dusk': 'fixture=city&yearT=0.9&cx=-20&cz=0&dist=90&elev=30',
 };
+
+// --query="fixture=town&..." shoots that one view (named 'custom') instead.
+if (args.query) { for (const k of Object.keys(SHOTS)) delete SHOTS[k]; SHOTS.custom = args.query; }
 
 const server = await createServer({
   configFile: resolve('vite.config.js'), logLevel: 'error',
