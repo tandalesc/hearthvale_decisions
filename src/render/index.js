@@ -162,6 +162,9 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
   reducedQuery?.addEventListener?.('change', syncReduced);
   syncReduced();
   let warmPending = true; // compile every material once the town is built
+  let warmUntil = -1;     // renderer time until which the first draw waits for that compile
+  let drawnOnce = false;
+  const WARM_WAIT_S = 4;
   let footVersion = -1; // buildings.version() last rasterised into the road mask
   const homePoint = { x: -20, z: 4 };
 
@@ -315,6 +318,26 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
     lights.update(rig.controls.target, frame.distance, time);
     lap('lights');
 
+    // Compile every material once the town is built, off the main thread where the
+    // browser can (KHR_parallel_shader_compile): things not drawn yet (stars, night and
+    // seasonal meshes) then never stall a frame compiling. Before the very first drawn
+    // frame, drawing waits for it (WARM_WAIT_S at most): compiling on first use blocked
+    // the page for the whole compile, seconds on some Windows GPUs. Later rebuilds
+    // (forest, terrain) compile in the background and keep drawing.
+    if (warmPending && view?.buildings?.length) {
+      warmPending = false;
+      const first = !drawnOnce;
+      if (first) warmUntil = time + WARM_WAIT_S;
+      const done = () => { if (first) { warmUntil = -1; forceFrame = true; } };
+      (tier.post ? post.warm(scene, camera) : renderer.compileAsync(scene, camera)).then(done, done);
+    }
+    if (time < warmUntil) {
+      forceFrame = true;
+      lap('render');
+      return;
+    }
+
+    drawnOnce = true;
     renderer.info.reset();
     water.setEmbankments(view?.embankments);
     // The mirror render draws the trees' far level only (one call per species).
@@ -341,12 +364,6 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
       post.render(scene, camera, time, THREE.MathUtils.clamp(focusNdc.y * 0.5 + 0.5, 0.25, 0.75));
     } else {
       renderer.render(scene, camera);
-    }
-    // Warm the shaders of things not drawn yet (stars, night and seasonal
-    // meshes), so their first appearance does not stall a frame compiling.
-    if (warmPending && view?.buildings?.length) {
-      warmPending = false;
-      (tier.post ? post.warm(scene, camera) : renderer.compileAsync(scene, camera)).catch(() => {});
     }
     lap('render');
 

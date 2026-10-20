@@ -139,6 +139,7 @@ export function setTerrainSeed(seed, version = 1, archetype = null) {
   }
   WATER_HALF = P.half;
   FORDS = W ? W.fords : P.fords;
+  KEY = null;
   return P.seed;
 }
 
@@ -157,7 +158,8 @@ export function terrainSeed() { return P.seed; }
 export function terrainVersion() { return W ? 2 : 1; }
 export function terrainArchetype() { return W ? W.archetype : null; }
 /** Cache key for anything derived from the terrain: seed, version and archetype. */
-export function terrainKey() { return W ? `${P.seed}:2:${W.archetype}` : `${P.seed}`; }
+export function terrainKey() { return (KEY ??= W ? `${P.seed}:2:${W.archetype}` : `${P.seed}`); }
+let KEY = null;   // terrainKey(), made once per setTerrainSeed (it is asked for per cell)
 /** The current valley's water bodies (null for version-1 and classic valleys). */
 export function terrainWaters() { return W; }
 /** Whether this valley has a river (every one does but the riverless archetypes). */
