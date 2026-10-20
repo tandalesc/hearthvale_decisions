@@ -610,7 +610,6 @@ attribute vec4 iTree;   // seed, priority, chop start time (0 = standing), flags
 uniform float uYearT;
 uniform vec3 uLodEye;
 uniform float uLodDist;
-uniform float uExtraOff;
 `;
 
 // Object space: the LOD split (each tree is drawn by exactly one level: the
@@ -653,12 +652,10 @@ const VERTEX_BEGIN = /* glsl */ `
   float tilt = 0.21 * smoothstep(0.0, 0.55, chopK);
   transformed.yz = mat2(cos(tilt), sin(tilt), -sin(tilt), cos(tilt)) * transformed.yz;
   transformed.y *= 1.0 - smoothstep(0.35, 1.0, chopK);
-  // Denser-woods trees (flag 2): off in the mirror pass and the shadow map.
-  float extraT = step(0.5, mod(floor(iTree.w * 0.5 + 0.01), 2.0));
+  // Denser-woods trees (flag 2) stay out of the shadow map: decals.js draws
+  // their shadows as cast blobs on the ground, far cheaper with thousands.
   #ifdef TREE_DEPTH
-    lodKeep *= 1.0 - extraT;
-  #else
-    lodKeep *= 1.0 - extraT * uExtraOff;
+    lodKeep *= 1.0 - step(0.5, mod(floor(iTree.w * 0.5 + 0.01), 2.0));
   #endif
   transformed *= step(chopK, 0.999) * lodKeep;
 `;
@@ -864,9 +861,7 @@ export function createTrees(ctx) {
   const up = new THREE.Vector3(0, 1, 0);
   // LOD split shared by both levels: the eye (main camera, also during the
   // shadow and reflection passes) and the near distance.
-  // uExtraOff: the denser-woods trees stay out of the river mirror (1 during
-  // that pass); they never cast into the shadow map (depth material).
-  const lodUniforms = { uLodEye: { value: new THREE.Vector3(0, 1e5, 0) }, uLodDist: { value: NEAR_DIST.high }, uExtraOff: { value: 0 } };
+  const lodUniforms = { uLodEye: { value: new THREE.Vector3(0, 1e5, 0) }, uLodDist: { value: NEAR_DIST.high } };
   const instanced = (k, lod, capacity) => {
     const { material, depth } = makeMaterials(grade, k, lod, lodUniforms);
     const mesh = new THREE.InstancedMesh(buildGeometry(k, lod), material, Math.max(1, capacity));
@@ -936,6 +931,7 @@ export function createTrees(ctx) {
   let lastBuildings = -1;
   let lastRoadsRef = null;
   let lastRoadsVersion = -1;
+  let lastRoadsCheck = -Infinity;
   let choppedThisFrame = 0;
   let nearDirty = true;
   const nearEye = new THREE.Vector3(0, 1e5, 0);
@@ -1117,7 +1113,10 @@ export function createTrees(ctx) {
     const time = primed ? frame.time : -1000;
     choppedThisFrame = 0;
     const roads = view?.roads;
-    if (roads && (roads !== lastRoadsRef || roads.version !== lastRoadsVersion)) {
+    // Roads change most frames in a busy town: check them a few times a
+    // second (a tree a road claims falls a moment later, unseen).
+    if (roads && (roads !== lastRoadsRef || roads.version !== lastRoadsVersion) && (!primed || frame.time - lastRoadsCheck >= 0.3)) {
+      lastRoadsCheck = frame.time;
       lastRoadsRef = roads;
       lastRoadsVersion = roads.version;
       clearRoads(roads, time);
@@ -1169,7 +1168,6 @@ export function createTrees(ctx) {
      */
     setReflectionPass(on) {
       lodUniforms.uLodDist.value = on ? 0 : NEAR_DIST[ctx.quality?.name] ?? NEAR_DIST.medium;
-      lodUniforms.uExtraOff.value = on ? 1 : 0;
     },
     dispose() {
       for (const m of meshes) {

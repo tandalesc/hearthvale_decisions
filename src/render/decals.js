@@ -9,6 +9,8 @@ import { GROUND_AO, GROUND_AO_GLSL, bakeOcclusionSteps, setGroundField, aoDayFac
 //   2. Contact blobs under every tree (multiply blend, one flat quad each).
 //   3. Coloured ground: park lawns with gravel paths, flower gardens for
 //      wealthy homes, dirt-and-plank yards around construction (lit Lambert).
+//      On High the denser-woods trees, which skip the shadow map, draw a
+//      soft cast shadow here instead: an ellipse thrown away from the sun.
 // Three draw calls. Instances are rebuilt only when lots change, and so is
 // the baked ground occlusion field (occlusion.js) the terrain multiplies in.
 
@@ -31,7 +33,10 @@ const KIND = { PARK: 0, GARDEN: 1, YARD: 2 };
 const CONTACT_VERT = /* glsl */ `
 attribute vec3 iCenter;   // x, ground y (flat quads), z
 attribute vec4 iShape;    // half x, half z, strength, chop start time (trees)
+                          // (strength < 0: a cast shadow, see below)
 uniform float uTime;
+uniform vec3 uSunDir;
+uniform float uNight;
 varying vec2 vLocal;
 varying vec2 vHalf;
 varying float vStrength;
@@ -47,6 +52,22 @@ void main() {
   #else
     vec2 local = position.xz * iShape.xy;
     vec3 world = vec3(iCenter.x + local.x, iCenter.y + 0.06, iCenter.z + local.y);
+    float castK = step(iShape.z, 0.0);
+    vec2 halfV = iShape.xy;
+    if (castK > 0.5) {
+      // A tree that does not draw into the shadow map (the denser woods on
+      // High): its crown's shadow as a soft ellipse thrown away from the sun,
+      // from the trunk outward, longer as the sun sinks.
+      vec2 away = -normalize(uSunDir.xz + vec2(1e-4));
+      float crownH = 3.4 * iShape.x / 2.3;
+      float reach = crownH * clamp(sqrt(1.0 - uSunDir.y * uSunDir.y) / max(uSunDir.y, 0.2), 0.0, 4.0);
+      float halfL = iShape.x * 0.85 + reach * 0.5;
+      vec2 side = vec2(-away.y, away.x);
+      halfV = vec2(halfL, iShape.y * 0.9);
+      local = position.xz * halfV;
+      vec2 xz = iCenter.xz + away * (reach * 0.55) + away * local.x + side * local.y;
+      world = vec3(xz.x, iCenter.y + 0.06, xz.y);
+    }
     // Drape on the shared ground where it exists (slopes, building pads).
     vec2 gHi = uGroundOrigin + (uGroundN - 2.0) * uGroundStep;
     if (all(greaterThan(world.xz, uGroundOrigin + 1.0)) && all(lessThan(world.xz, gHi))) {
@@ -55,9 +76,16 @@ void main() {
   #endif
   vLocal = local;
   vHalf = iShape.xy;
+  #ifndef FOLLOW_TERRAIN
+    vHalf = halfV;
+  #endif
   // Chopped trees lose their blob as they fall.
   float chop = iShape.w != 0.0 ? clamp((uTime - iShape.w) / 0.6, 0.0, 1.0) : 0.0;
-  vStrength = iShape.z * (1.0 - chop);
+  vStrength = abs(iShape.z) * (1.0 - chop);
+  #ifndef FOLLOW_TERRAIN
+    // Cast shadows follow the sun: gone at night and with the sun at the horizon.
+    if (castK > 0.5) vStrength *= (1.0 - 0.85 * uNight) * smoothstep(0.03, 0.15, uSunDir.y);
+  #endif
   vec4 mv = viewMatrix * vec4(world, 1.0);
   vFogDepth = -mv.z;
   gl_Position = projectionMatrix * mv;
@@ -98,6 +126,8 @@ function contactMaterial(grade, followTerrain) {
     uniforms: {
       ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
       uTime: grade.uniforms.uTime,
+      uSunDir: grade.uniforms.uSunDir,
+      uNight: grade.uniforms.uNight,
       tGround: grade.uniforms.tGround,
       uGroundOrigin: grade.uniforms.uGroundOrigin,
       uGroundStep: grade.uniforms.uGroundStep,
@@ -401,6 +431,9 @@ export function createDecals(ctx) {
       const r = (bush ? 1.1 : forest.kind[i] === 2 ? 1.9 : 2.3) * forest.scale[i];
       c[i * 3] = forest.x[i]; c[i * 3 + 1] = forest.y[i] + 0.12; c[i * 3 + 2] = forest.z[i];
       s[i * 4] = r; s[i * 4 + 1] = r; s[i * 4 + 2] = bush ? 0.28 : 0.36; s[i * 4 + 3] = chopT[i];
+      // Denser-woods trees (flag 2) cast no shadow-map shadow: their blob is
+      // the cast shadow instead (negative strength).
+      if (forest.flags[i] & 2) s[i * 4 + 2] = -(bush ? 0.34 : 0.52);
     }
     blobsBuilt = true;
     lastChop = shared.chopVersion;
