@@ -708,6 +708,96 @@ function nearIn(fp, c) {
   return k > 0 ? fp.nearIn[k - 1] : null;
 }
 
+// people.js segmentBlocked, for a road grid laid out as this module's: a sample every
+// half unit, ends included, in a wall cell, or (after the first) off the map or within a
+// walker's margin of a drawn piece. The samples are taken a cell at a time (sameCellRun):
+// a cell with no wall and no pieces near it passes them all, and so does one whose
+// pieces the stretch of leg through it cannot reach (piecesAlong). The same answer as
+// testing every sample.
+export function walkerSegmentBlocked(fp, x0, z0, x1, z1) {
+  const walls = fp.walls;
+  const steps = Math.ceil(Math.hypot(x1 - x0, z1 - z0) * 2);
+  // No length: the one sample is the start (x0 + 0 / 0 is NaN, which meets no cell).
+  if (steps === 0) return false;
+  const sx = (x1 - x0) / steps, sz = (z1 - z0) / steps;
+  for (let i = 0; i <= steps; i++) {
+    const x = x0 + ((x1 - x0) * i) / steps, z = z0 + ((z1 - z0) * i) / steps;
+    const cx = Math.floor((x - ORIGIN_X) / CELL), cz = Math.floor((z - ORIGIN_Z) / CELL);
+    const c = cellIndex(cx, cz);
+    if (c < 0) {
+      if (i > 0) return true;
+      continue;
+    }
+    if (walls[c]) return true;
+    const e = Math.min(steps, i + sameCellRun(x, z, cx, cz, sx, sz));
+    const list = fp.nearAt[c] ? nearIn(fp, c) : null;
+    if (list && piecesAlong(list, x0, z0, x1, z1, steps, Math.max(1, i), e)) return true;
+    i = e;
+  }
+  return false;
+}
+
+// people.js legOpen's outline test: one of the interior samples (i / steps along the
+// leg, 0 < i < steps) off the map or within a walker's margin of a drawn piece, as
+// outlineClear at each, taken a cell at a time as above.
+export function walkerLegOutlined(fp, x0, z0, x1, z1, steps) {
+  const sx = (x1 - x0) / steps, sz = (z1 - z0) / steps;
+  for (let i = 1; i < steps; i++) {
+    const x = x0 + ((x1 - x0) * i) / steps, z = z0 + ((z1 - z0) * i) / steps;
+    const cx = Math.floor((x - ORIGIN_X) / CELL), cz = Math.floor((z - ORIGIN_Z) / CELL);
+    const c = cellIndex(cx, cz);
+    if (c < 0) return true;
+    const e = Math.min(steps - 1, i + sameCellRun(x, z, cx, cz, sx, sz));
+    const list = fp.nearAt[c] ? nearIn(fp, c) : null;
+    if (list && piecesAlong(list, x0, z0, x1, z1, steps, i, e)) return true;
+    i = e;
+  }
+  return false;
+}
+
+// Samples k..e (j / n of the way from a to b), all in one cell, and some within a
+// walker's margin of a piece of the cell's list (inRect, as outlineClear)? When the
+// straight stretch from sample k to sample e passes every piece, grown by the margin and
+// a millionth of a unit, by at least that millionth, no sample on it can be inside one
+// (each lies within rounding, about 1e-13 here, of that stretch), so they are not tested.
+const ALONG_EPS = 1e-6;
+function piecesAlong(list, ax, az, bx, bz, n, k, e) {
+  if (k > e) return false;
+  const px = ax + ((bx - ax) * k) / n, pz = az + ((bz - az) * k) / n;
+  const qx = ax + ((bx - ax) * e) / n, qz = az + ((bz - az) * e) / n;
+  let near = false;
+  for (const r of list) if (stretchMeets(r, px, pz, qx, qz)) { near = true; break; }
+  if (!near) return false;
+  for (let j = k; j <= e; j++) {
+    const x = ax + ((bx - ax) * j) / n, z = az + ((bz - az) * j) / n;
+    for (const r of list) if (inRect(r, x, z, PERSON_MARGIN)) return true;
+  }
+  return false;
+}
+
+// Does the stretch from p to q come inside piece r grown by a walker's margin and
+// ALONG_EPS (or touch it)? Clipped against the piece's slabs in its own frame (inRect's).
+function stretchMeets(r, px, pz, qx, qz) {
+  const m = PERSON_MARGIN + ALONG_EPS, hx = r.hx + m, hz = r.hz + m;
+  let dx = px - r.x, dz = pz - r.z;
+  const lx = dx * r.c - dz * r.s, lz = dx * r.s + dz * r.c;
+  dx = qx - r.x;
+  dz = qz - r.z;
+  const ux = dx * r.c - dz * r.s - lx, uz = dx * r.s + dz * r.c - lz;
+  let t0 = 0, t1 = 1;
+  if (ux === 0) {
+    if (Math.abs(lx) >= hx) return false;
+  } else {
+    const a = (-hx - lx) / ux, b = (hx - lx) / ux;
+    t0 = Math.max(t0, Math.min(a, b));
+    t1 = Math.min(t1, Math.max(a, b));
+    if (t0 > t1) return false;
+  }
+  if (uz === 0) return Math.abs(lz) < hz;
+  const a = (-hz - lz) / uz, b = (hz - lz) / uz;
+  return Math.max(t0, Math.min(a, b)) <= Math.min(t1, Math.max(a, b));
+}
+
 // No water anywhere along the leg (every half unit, and its ends)?
 function legDry(ax, az, bx, bz) {
   const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.5));
@@ -741,12 +831,12 @@ function legClearOfOutlines(fp, ax, az, bx, bz) {
 // of a unit keeps rounding in the samples' own arithmetic from ever crossing an edge.
 const RUN_EPS = 1e-6;
 function sameCellRun(x, z, cx, cz, sx, sz) {
-  const along = (p, s, c, origin) => {
-    if (s === 0) return Infinity;
-    const room = (s > 0 ? (c + 1) * CELL + origin - p : p - (c * CELL + origin)) - RUN_EPS;
-    return room > 0 ? Math.floor(room / Math.abs(s)) - 1 : 0;
-  };
-  return Math.max(0, Math.min(along(x, sx, cx, ORIGIN_X), along(z, sz, cz, ORIGIN_Z)));
+  return Math.max(0, Math.min(runAlong(x, sx, cx, ORIGIN_X), runAlong(z, sz, cz, ORIGIN_Z)));
+}
+function runAlong(p, s, c, origin) {
+  if (s === 0) return Infinity;
+  const room = (s > 0 ? (c + 1) * CELL + origin - p : p - (c * CELL + origin)) - RUN_EPS;
+  return room > 0 ? Math.floor(room / Math.abs(s)) - 1 : 0;
 }
 
 // The leg's deepest sample inside a piece (grown by a walker's margin): {r, lx, lz}
@@ -1101,14 +1191,81 @@ function buildNavGrid(state, key, bucket, tick, prev) {
   const adj = adjacencyOf(r);
   const fp = footprints(state);
   const fords = fordsNearBridges(state);
-  const cost = new Float32Array(CELLS);
-  const wcode = new Uint8Array(CELLS);
-  for (let i = 0; i < CELLS; i++) {
-    wcode[i] = water[i] ? (isBridge(r, i) ? 3 : water[i]) : 0;
-    cost[i] = cellCostOf(r, t, i, fp, adj, fords);
+  const last = navInputs.get(state);
+  let cost, wcode;
+  if (last && last.r === r && last.t === t && inputViews(r, adj, fords)) {
+    // Every cell's cost and water code is a function of its own inputs alone: the cells
+    // whose inputs are as they were at the last build keep that build's values.
+    // Copied when a cell first changes, so a build that changes nothing shares the
+    // last one's arrays (as a footprint patch shares its water codes).
+    cost = last.cost;
+    wcode = last.water;
+    const redo = (i) => {
+      const w = water[i] ? (isBridge(r, i) ? 3 : water[i]) : 0;
+      if (w !== wcode[i]) {
+        if (wcode === last.water) wcode = wcode.slice();
+        wcode[i] = w;
+      }
+      const c = Math.fround(cellCostOf(r, t, i, fp, adj, fords));
+      if (!Object.is(c, cost[i])) {
+        if (cost === last.cost) cost = cost.slice();
+        cost[i] = c;
+      }
+    };
+    const now = inputViews(r, adj, fords), was = last.views;
+    for (let w = 0; w < CELLS / 4; w++) {
+      if (now.tier[w] === was.tier[w] && now.planned[w] === was.planned[w] && now.adj[w] === was.adj[w] && now.fords[w] === was.fords[w]) continue;
+      for (let i = w * 4; i < w * 4 + 4; i++) redo(i);
+    }
+    for (let i = 0; i < CELLS; i++) if (now.wear[i] !== was.wear[i]) redo(i);
+    if (fp.key !== last.fpKey) {
+      for (let i = 0; i < CELLS; i++) {
+        if ((fp.walls[i] ? 1 : 0) !== last.walls[i] || (fp.door[i] ? 1 : 0) !== last.door[i] || fp.field[i] !== last.field[i]) redo(i);
+      }
+    }
+  } else {
+    cost = new Float32Array(CELLS);
+    wcode = new Uint8Array(CELLS);
+    for (let i = 0; i < CELLS; i++) {
+      wcode[i] = water[i] ? (isBridge(r, i) ? 3 : water[i]) : 0;
+      cost[i] = cellCostOf(r, t, i, fp, adj, fords);
+    }
   }
+  noteNavInputs(state, r, t, adj, fp, fords, cost, wcode);
   const nodes = nodesFor(r, prev, navNodeDirty);
   return owned({ key, bucket, tick, footprintsOnly: false, fp, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, passCap: DOOR_COST, passOpen: TIER_COST[0], water: wcode, height: terrainGrid().height, ...nodes }, r);
+}
+
+// What each cell's cost and water code were last built from (cellCostOf's inputs: tier,
+// wear, flags, road adjacency, the fords closed by bridges, walls, door and field; the
+// terrain grid as a whole), with that build's costs and codes. In memory only; a footprint
+// patch in between changes nothing here, since the next build compares with this one.
+const navInputs = new WeakMap();
+function noteNavInputs(state, r, t, adj, fp, fords, cost, water) {
+  const prev = navInputs.get(state);
+  const keep = prev && prev.r === r ? prev : null;
+  const copy = (src, old) => (old && old.length === src.length ? (old.set(src), old) : src.slice());
+  const next = {
+    r, t, cost, water, fpKey: fp.key,
+    tier: copy(r.tier, keep?.tier), planned: copy(r.planned, keep?.planned), adj: copy(adj, keep?.adj),
+    fords: copy(fords, keep?.fords), wear: copy(r.wear, keep?.wear),
+    walls: keep?.walls ?? new Uint8Array(CELLS), door: keep?.door ?? new Uint8Array(CELLS), field: keep?.field ?? new Uint8Array(CELLS),
+  };
+  if (keep?.fpKey !== fp.key) {
+    for (let i = 0; i < CELLS; i++) { next.walls[i] = fp.walls[i] ? 1 : 0; next.door[i] = fp.door[i] ? 1 : 0; }
+    next.field.set(fp.field);
+  }
+  next.views = inputViews(next, next.adj, next.fords);
+  if (!next.views) { navInputs.delete(state); return; }
+  navInputs.set(state, next);
+}
+
+// The inputs as 32-bit words for comparing (four cells to a word for the byte arrays,
+// wear by its bits), or null when an array is not of the expected kind.
+function inputViews(r, adj, fords) {
+  const words = (a, kind) => (a instanceof kind && a.length === CELLS && a.byteOffset % 4 === 0 ? new Uint32Array(a.buffer, a.byteOffset, (a.length * kind.BYTES_PER_ELEMENT) / 4) : null);
+  const v = { tier: words(r.tier, Uint8Array), planned: words(r.planned, Uint8Array), adj: words(adj, Uint8Array), fords: words(fords, Uint8Array), wear: words(r.wear, Float32Array) };
+  return v.tier && v.planned && v.adj && v.fords && v.wear ? v : null;
 }
 
 // A new grid object (consumers compare identity and keys) sharing the water
@@ -1170,6 +1327,35 @@ export function structuralGrid(state) {
   structuralCache.set(state, grid);
   structuralDirty.set(r, new Set());
   return grid;
+}
+
+// structuralGrid(state).water[i], without bringing the grid up to date: where
+// structuralGrid would build it afresh (no grid yet, a new footprint or works), or patch
+// this cell (one beside a tier changed since), the cell's code is worked out as
+// structuralCell would; elsewhere it is read from the grid as it stands. Walkers ask this
+// of every wet sample of a leg (people.js fordCell), and updating the grid there, between
+// any two tier changes, copied the whole grid each time; it is now updated when a route
+// search or the centres next need it, to the same contents.
+export function structuralWaterAt(state, i) {
+  ensureRoads(state);
+  const r = state.roads;
+  const grid = structuralCache.get(state);
+  if (!grid || grid.roads !== r || grid.base !== `${r.navRev}:${footprintKey(state)}`) return structuralWaterOf(r, i);
+  const dirty = structuralDirty.get(r);
+  if (dirty?.size) {
+    const cx = i % GRID_W, cz = (i - cx) / GRID_W;
+    for (let z = Math.max(0, cz - 1); z <= Math.min(GRID_H - 1, cz + 1); z++)
+      for (let x = Math.max(0, cx - 1); x <= Math.min(GRID_W - 1, cx + 1); x++) {
+        if (dirty.has(z * GRID_W + x)) return structuralWaterOf(r, i);
+      }
+  }
+  return grid.water[i];
+}
+
+// structuralCell's water code for cell i as the roads are now.
+function structuralWaterOf(r, i) {
+  const w = terrainGrid().water[i];
+  return w ? (isBridge(r, i) ? 3 : w) : 0;
 }
 
 // The structural grid as walkers see it (people.js syncRoute): the same costs, with
@@ -1864,4 +2050,16 @@ function hasLampNear(r, cx, cz, rad) {
 export function riverCentre(z) { return riverX(z); }
 
 // Internals for tests and benchmarks.
-export const __test = { consolidateWear, bridgeGaps, decayAndRetier, seedReclaimedPaths };
+// The nav grid's costs and water codes worked out afresh for every cell (as buildNavGrid
+// did before it reused unchanged cells).
+function freshNavCells(state) {
+  const r = state.roads, t = terrainGrid(), adj = adjacencyOf(r), fp = footprints(state), fords = fordsNearBridges(state);
+  const cost = new Float32Array(CELLS), water = new Uint8Array(CELLS);
+  for (let i = 0; i < CELLS; i++) {
+    water[i] = t.water[i] ? (isBridge(r, i) ? 3 : t.water[i]) : 0;
+    cost[i] = cellCostOf(r, t, i, fp, adj, fords);
+  }
+  return { cost, water };
+}
+
+export const __test = { consolidateWear, bridgeGaps, decayAndRetier, seedReclaimedPaths, freshNavCells };
