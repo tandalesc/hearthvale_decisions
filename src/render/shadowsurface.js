@@ -20,8 +20,8 @@ uniform mat4 uCoverMatrix;
 uniform float uCoverOn;
 `;
 
-// Injected before <aomap_fragment> (patchMaterial), where the direct and
-// indirect light are still apart. Only surfaces at the shadow's own height
+// Injected after <lights_fragment_end> (patchMaterial), where the direct and
+// indirect light are still apart, ahead of the specular sum. Only surfaces at the shadow's own height
 // take it (the ground, a deck, a field), not roofs or walls above it.
 export const COVER_APPLY = /* glsl */ `
 #ifdef USE_FOG
@@ -34,7 +34,11 @@ export const COVER_APPLY = /* glsl */ `
       // The rim of the map fades, so the edge of the covered area never shows.
       vec2 rim = min(coverUv, 1.0 - coverUv);
       onIt *= smoothstep(0.0, 0.06, min(rim.x, rim.y));
-      reflectedLight.directDiffuse *= 1.0 - clamp(cover.r, 0.0, 1.0) * onIt;
+      float coverSun = 1.0 - clamp(cover.r, 0.0, 1.0) * onIt;
+      reflectedLight.directDiffuse *= coverSun;
+      #ifdef SPECULAR
+        gSpecSun *= coverSun; // the sun's highlight goes with the sun
+      #endif
       float contact = clamp(cover.g, 0.0, 1.0) * onIt;
       reflectedLight.directDiffuse *= 1.0 - contact;
       reflectedLight.indirectDiffuse *= 1.0 - contact;

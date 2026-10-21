@@ -34,10 +34,13 @@ export function patchMaterial(material, grade, spec) {
     if (spec.fragmentColor) f = f.replace('#include <color_fragment>', '#include <color_fragment>\n' + spec.fragmentColor);
     // The ground's shadow surface (shadowsurface.js): people's and soft tree
     // shadows take the sun away like the shadow map does.
-    if (!spec.noCover) f = f.replace('#include <aomap_fragment>', COVER_APPLY + '#include <aomap_fragment>');
     if (spec.fragmentNormal) f = f.replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + spec.fragmentNormal);
     if (spec.fragmentPars) f = f.replace('#include <lights_lambert_pars_fragment>', '#include <lights_lambert_pars_fragment>\n' + spec.fragmentPars);
     if (spec.fragmentLights) f = f.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + spec.fragmentLights);
+    // The ground's shadow surface (shadowsurface.js): people's and soft tree
+    // shadows take the sun away like the shadow map does. Right after the
+    // light loop, ahead of fragmentLights (the specular sun is dimmed too).
+    if (!spec.noCover) f = f.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + COVER_APPLY);
     if (spec.fragmentEmissive) f = f.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n' + spec.fragmentEmissive);
     if (spec.fragmentEnd) f = f.replace('#include <fog_fragment>', spec.fragmentEnd + '\n#include <fog_fragment>');
     shader.vertexShader = v;
