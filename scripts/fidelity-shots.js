@@ -4,6 +4,7 @@
 //
 //   node scripts/fidelity-shots.js --out DIR [--prefix fidelity-after] [--tier high]
 //        [--only town-summer,city-dusk] [--port 5231] [--dpr 1.25] [--noshot]
+//        [--extra="micro=0"]   (appended to every view's query, for A/B runs)
 //
 // Starts its own Vite server from the current directory (no HMR), so it can run
 // against another checkout by running it from there.
@@ -51,7 +52,7 @@ try {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('404')) errors.push(m.text().slice(0, 200)); });
-    await page.goto(`${url}/src/render/dev/render-dev.html?${q}&tier=${tier}&hud=0&freeze=1&speed=0`);
+    await page.goto(`${url}/src/render/dev/render-dev.html?${q}&tier=${tier}&hud=0&freeze=1&speed=0${args.extra ? `&${args.extra}` : ''}`);
     await page.waitForFunction(() => window.__frames?.() > 30, null, { timeout: 60000 }).catch(() => {});
     await page.waitForTimeout(Number(args.wait ?? 5000));
     // GPU time per drawn frame (EXT_disjoint_timer_query_webgl2), and the
