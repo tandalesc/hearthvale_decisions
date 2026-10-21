@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { PieceBatch } from './kit/batch.js';
 import { composeLot, createSpecPool, PIECES } from './kit/compose.js';
-import { createKitMaterials, createKitUniforms, setKitMicroDetail } from './kit/material.js';
+import { createKitMaterials, createKitUniforms, setKitDetail } from './kit/material.js';
 import * as G from './kit/geometry.js';
 import { LAYER_REFLECT } from './shaderlib.js';
 
@@ -67,11 +67,11 @@ function signature(b) {
 export function createBuildings({ scene, grade, lights, ground }) {
   const kitUniforms = createKitUniforms();
   const materials = new Map();
-  let microDetail = false;
+  const detail = { micro: false, specular: false };
   const materialFor = (variant) => {
     if (!materials.has(variant)) {
       const m = createKitMaterials(grade, { variant, shared: kitUniforms });
-      setKitMicroDetail(m.material, microDetail);
+      setKitDetail(m.material, detail);
       materials.set(variant, m);
     }
     return materials.get(variant);
@@ -292,11 +292,12 @@ export function createBuildings({ scene, grade, lights, ground }) {
     return n;
   }
 
-  /** Detail culling distance and roof relief (micro-detail) follow the quality tier. */
+  /** Detail culling distance, roof relief (micro-detail) and specular follow the quality tier. */
   function applyQuality(q) {
     kitUniforms.uDetailDist.value = q.name === 'low' ? 150 : q.name === 'medium' ? 220 : 300;
-    microDetail = Boolean(q.microDetail);
-    for (const { material } of materials.values()) setKitMicroDetail(material, microDetail);
+    detail.micro = Boolean(q.microDetail);
+    detail.specular = Boolean(q.specular);
+    for (const { material } of materials.values()) setKitDetail(material, detail);
   }
 
   /** Highlight one lot (or none): its instances are rewritten with a flag. */

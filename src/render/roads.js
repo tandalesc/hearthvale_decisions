@@ -381,6 +381,17 @@ vec2 stoneSlope(vec2 w, float scale, float amp, float edge, float round, float p
 }
 #endif
 
+#ifdef SPECULAR
+// Wet sheen (docs/design/micro-detail.md §6): gloss (x) and roughness (y) of
+// wet laid stone, cobbles (sett 0) or setts (1), from the same stones as
+// cobbles(): tops glossy, joints matte. sharp fades the mask to its average
+// once a stone is a few pixels across, so the gloss cannot alias.
+vec2 wetStone(vec2 w, float sett, float sharp) {
+  float top = mix(0.7, smoothstep(0.3, 0.75, cobbles(w * mix(1.0, 1.35, sett))), sharp);
+  return mix(vec2(0.3, 0.6), vec2(1.0, mix(0.22, 0.16, sett)), top);
+}
+#endif
+
 float pathHalf(float t) {
 ${HALF_GLSL}
   return ${PATH_HALF[5].toFixed(3)};
@@ -455,6 +466,18 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
   // Worn edge: a darker rim of trodden earth where an organic lane meets the grass.
   float rim = (1.0 - smoothstep(0.0, 0.35, e)) * (1.0 - planned);
   c *= 1.0 - 0.1 * rim;
+  #ifdef SPECULAR
+    // Wet sheen: gS is the strip's surface, gC what lies under it (bare
+    // dirt, alley, footway), composed below as c and col are. Mud and
+    // gravel get a dull sheen; stone is evaluated only in the rain.
+    bool sWet = uWet > 0.02;
+    float sSharp = smoothstep(0.1, 0.04, px);
+    vec2 sMud = vec2(0.35, 0.55);
+    vec2 gC = sMud * bareCover;
+    vec2 gS = mix(sMud, vec2(0.3, 0.5), smoothstep(2.4, 3.0, tier));
+    if (sWet && tier > 3.4) gS = mix(gS, wetStone(world.xz, step(4.7, tier), sSharp), smoothstep(3.4, 4.0, tier) * detail);
+    gS = mix(gS, vec2(0.8, 0.28), kerb * 0.85);
+  #endif
 
   // Street fabric (streets.js). Alleys: the lane between two buildings is
   // surfaced wall to wall, whatever its strip's width: trodden earth, then
@@ -471,6 +494,14 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
     alleyC *= 1.0 - 0.18 * smoothstep(0.15, 0.6, r.a);
     c = mix(c, alleyC, alleyOwn);
     col = mix(col, alleyC, alleyK);
+    #ifdef SPECULAR
+      vec2 gA = sMud;
+      if (sWet && pavedK > 0.0) gA = mix(gA, wetStone(world.xz, step(3.5, era), sSharp), pavedK * detail);
+      // The gutter runs with water.
+      gA = mix(gA, vec2(1.0, 0.1), gutter * 0.8);
+      gS = mix(gS, gA, alleyOwn);
+      gC = mix(gC, gA, alleyK);
+    #endif
   }
   // Footways: flagstones from the road's edge to the building fronts, a
   // granite kerb along the carriageway's own (smooth) edge with its face in
@@ -488,6 +519,15 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
     float kerbBand = smoothstep(-0.3, -0.25, sd) * (1.0 - smoothstep(-0.03, 0.0, sd));
     vec3 kerbC = vec3(0.70, 0.69, 0.66) * (0.94 + 0.1 * hash12(floor(world.xz * 1.1)));
     col = mix(col, kerbC, kerbBand * made * footK);
+    #ifdef SPECULAR
+      // Flags: slab tops glossy, joints matte (the joints are thin, so the
+      // mask gives way to its average sooner than the stones' does).
+      float fTop = 0.85;
+      if (sWet) fTop = mix(0.85, smoothstep(0.6, 0.95, flagstones(world.xz, size)), smoothstep(0.06, 0.025, px) * detail);
+      vec2 gF = mix(vec2(0.3, 0.6), vec2(0.85, 0.22), fTop);
+      gF = mix(gF, vec2(0.85, 0.25), kerbBand * made);
+      gC = mix(gC, gF, footK);
+    #endif
     // The kerb's face, a hand's height of shadow where it drops to the road.
     float face = smoothstep(-0.05, -0.01, sd) * (1.0 - smoothstep(0.01, 0.06, sd));
     c *= 1.0 - 0.45 * face * made * footK;
@@ -500,6 +540,11 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
   // Worn verge: grass darkens a touch for half a metre beside a strip.
   col *= 1.0 - 0.08 * smoothstep(-0.7, 0.0, sd) * (1.0 - cover) * step(0.004, pth.r) * (1.0 - max(alleyK, footK));
   col = mix(col, c, cover);
+  #ifdef SPECULAR
+    vec2 gG = mix(gC, gS, cover);
+    gSpecK = gG.x;
+    gSpecRough = gG.y;
+  #endif
   #ifdef MICRO_DETAIL
     // Relief on cobbles and setts, faded out once a stone is a few pixels
     // across (and skipped entirely there, which is most of a far view).

@@ -54,8 +54,12 @@ async function loadView() {
 }
 
 const { view, sync, source } = await loadView();
-// &micro=0|1 forces micro-detail off or on over the tier's default (A/B shots).
-const tierPatch = params.has('micro') ? { microDetail: params.get('micro') === '1' } : null;
+// &micro=0|1 and &spec=0|1 force micro-detail and specular off or on over the
+// tier's default (A/B shots).
+const tierPatch = params.has('micro') || params.has('spec') ? {
+  ...(params.has('micro') ? { microDetail: params.get('micro') === '1' } : {}),
+  ...(params.has('spec') ? { specular: params.get('spec') === '1' } : {}),
+} : null;
 const world = createWorld(document.querySelector('#world'), { quality: tier, tierPatch });
 world.setDayCycle(params.get('cycle') ?? 'seasonal');
 world.setSimSpeed(Number(params.get('speed') ?? 1));
