@@ -1,4 +1,6 @@
-# Simulation in a worker (design, not implemented)
+# Simulation in a worker (design)
+
+> **Implemented** (2026-10-21): `src/sim-worker.js`, `src/sim-host.js`, `src/sim-session.js`, `src/sim/render-mirror.js`, `src/sim-snapshot.js`. The results are in PERFORMANCE.md ("The sim in a Web Worker"). The text below is the design as written before it was built.
 
 At 20× a game year lasts about 6 s, and each one opens at dawn with a building burst.
 On the busiest of those ticks the sim takes 8–10 ms; when a month or year job lands on

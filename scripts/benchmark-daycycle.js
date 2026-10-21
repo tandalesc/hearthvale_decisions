@@ -149,6 +149,9 @@ try {
         } else c.step = st.stepMs;
         d.steps = [];
         d.applyMs = 0;
+      } else if (!d.active) {
+        d.steps = [];
+        d.applyMs = 0;
       }
       return r;
     };
