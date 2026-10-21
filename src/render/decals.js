@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { patchMaterial, hashId, NOISE } from './shaderlib.js';
 import { GROUND_GLSL } from './ground.js';
 import { GROUND_AO, GROUND_AO_GLSL, bakeOcclusionSteps, setGroundField, aoDayFactor, bakedWeights } from './occlusion.js';
+import { SUN_MASK_GLSL } from './sunmask.js';
 
 // Ground decals (design-visual §3.3, §6): what sells "sitting on the table".
 //   1. Contact shadows under every building (multiply blend, terrain-following
@@ -46,6 +47,7 @@ varying float vFogDepth;
 varying vec3 vCore; // a cast shadow's contact core: offset from the trunk over its radius, strength
 varying float vCast;   // 1: a tree's cast shadow (capsule), 0: a round contact blob
 varying vec2 vCapsule; // the cast capsule: half its spine, radius
+varying vec3 vWorld;
 ${HEIGHT_GLSL}
 void main() {
   #ifdef FOLLOW_TERRAIN
@@ -106,6 +108,7 @@ void main() {
       vStrength *= (1.0 - 0.85 * uNight) * smoothstep(0.03, 0.15, uSunDir.y);
     }
   #endif
+  vWorld = world;
   vec4 mv = viewMatrix * vec4(world, 1.0);
   vFogDepth = -mv.z;
   gl_Position = projectionMatrix * mv;
@@ -122,6 +125,12 @@ varying float vFogDepth;
 varying vec3 vCore;
 varying float vCast;
 varying vec2 vCapsule;
+varying vec3 vWorld;
+#ifdef MASK_MIN
+#include <packing>
+uniform vec3 uSunDir;
+${SUN_MASK_GLSL}
+#endif
 void main() {
   float shade;
   #ifdef FOLLOW_TERRAIN
@@ -140,18 +149,28 @@ void main() {
   #endif
   float fogK = smoothstep(fogNear, fogFar, vFogDepth);
   float dark = vStrength * shade;
+  // The contact part (a round blob, or a cast shadow's core under the trunk)
+  // is shade from the sky too: it stays even in a building's shadow.
+  float contactDark = vCast > 0.5 ? 0.0 : dark;
   #ifndef FOLLOW_TERRAIN
     // A cast shadow's core under the trunk: the darker of the two, never both.
-    if (vCore.z > 0.0) dark = max(dark, vCore.z * (1.0 - smoothstep(0.15, 1.0, length(vCore.xy))));
+    if (vCore.z > 0.0) {
+      contactDark = vCore.z * (1.0 - smoothstep(0.15, 1.0, length(vCore.xy)));
+      dark = max(dark, contactDark);
+    }
   #endif
   float k = 1.0 - dark * (1.0 - fogK);
+  float kContact = 1.0 - contactDark * (1.0 - fogK);
   if (k > 0.995) discard;
   #ifdef MASK_MIN
     // Tree shadows as a mask, not a stack: this pass leaves the colour alone
     // (the huge value loses every min) and keeps, in alpha, the lowest light
     // factor any shadow asks for here; the apply pass multiplies by it once.
     // Overlapping crowns read as one shade, not darker where they cross.
-    gl_FragColor = vec4(vec3(60000.0), k);
+    // The sun's shadow map has already shaded some ground: ask only for the
+    // darkening beyond it (sunmask.js), so a tree shadow over a building's
+    // shadow is one shade too.
+    gl_FragColor = vec4(vec3(60000.0), min(maskOverMap(k, vWorld, uSunDir), kContact));
   #elif defined(MASK_APPLY)
     gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
   #else
@@ -163,7 +182,7 @@ void main() {
 
 // pass: undefined (multiply), 'min' or 'apply' (the two halves of the tree
 // shadows' mask: see CONTACT_FRAG; people.js blobs do the same).
-function contactMaterial(grade, followTerrain, pass) {
+function contactMaterial(grade, followTerrain, pass, sunMask = null) {
   const defines = followTerrain ? { FOLLOW_TERRAIN: 1 } : {};
   if (pass === 'min') defines.MASK_MIN = 1;
   if (pass === 'apply') defines.MASK_APPLY = 1;
@@ -182,6 +201,7 @@ function contactMaterial(grade, followTerrain, pass) {
       uGroundOrigin: grade.uniforms.uGroundOrigin,
       uGroundStep: grade.uniforms.uGroundStep,
       uGroundN: grade.uniforms.uGroundN,
+      ...(pass === 'min' ? sunMask?.uniforms ?? {} : {}),
     },
     vertexShader: CONTACT_VERT,
     fragmentShader: CONTACT_FRAG,
@@ -363,7 +383,7 @@ export function createDecals(ctx) {
   // Tree blobs.
   const blobGeo = gridGeometry(2);
   const blobSet = instanceSet(blobGeo, [['iCenter', 3], ['iShape', 4]], 16);
-  const blobMesh = new THREE.Mesh(blobGeo, contactMaterial(grade, false, 'min'));
+  const blobMesh = new THREE.Mesh(blobGeo, contactMaterial(grade, false, 'min', ctx.sunMask));
   const blobApply = new THREE.Mesh(blobGeo, contactMaterial(grade, false, 'apply'));
   // Coloured ground.
   const colorGeo = gridGeometry(6);
@@ -374,10 +394,12 @@ export function createDecals(ctx) {
   // Coloured ground first, then darkening on top of it.
   colorMesh.renderOrder = 1;
   lotMesh.renderOrder = 1.1;
-  // The tree shadows' two passes run back to back, after the lots' contact
-  // shadows and before people's blobs (1.5), which use the alpha the same way.
+  // The tree shadows and people's blobs share one mask (people.js BLOB_VERT):
+  // both MIN passes write the frame's alpha first (trees 1.12, people 1.5),
+  // then the apply passes (trees 1.505, people 1.51), so a walker in a tree's
+  // shadow, or two crowns crossing, never darkens twice.
   blobMesh.renderOrder = 1.12;
-  blobApply.renderOrder = 1.13;
+  blobApply.renderOrder = 1.505;
   for (const m of [colorMesh, lotMesh, blobMesh, blobApply]) {
     m.frustumCulled = false;
     m.castShadow = false;

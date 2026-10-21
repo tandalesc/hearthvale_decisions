@@ -4,6 +4,7 @@ import { GROUND_GLSL } from './ground.js';
 import { deckProfile } from '../sim/bridges.js';
 import { railStyle, railInner, RAIL_TOP } from '../sim/gatherings.js';
 import { surfaceLevelAt } from '../terrain.js';
+import { SUN_MASK_GLSL } from './sunmask.js';
 
 // Villagers (design-visual §4.5): one instanced mesh for everyone, animated
 // entirely in the vertex shader. The sim's render view owns the per-person
@@ -645,17 +646,15 @@ vec3 personColor() {
 // their walkers at the full frame rate. In 'full' mode (uSunShadow 0) only
 // the contact is drawn.
 //
-// Never darker than one shadow:
-//  - in building or tree shade there is no direct sun to take away, so the
-//    cast fades by the sun shadow map's lit fraction at the feet (looked up
-//    here in the vertex shader, the same for every vertex of a blob; the map's
-//    matrix only changes when the map re-renders, so it stays valid between
-//    its few-Hz refreshes). The faint contact stays.
-//  - overlapping blobs keep the darkest one, not the product: two draws of
-//    the same quads. The first (MIN blending) leaves the framebuffer's colour
-//    alone and keeps, in its alpha, the lowest light factor any blob asks for
-//    at that pixel (opaque and blended ground leave alpha at 1). The second
-//    multiplies the colour by that alpha once and puts the alpha back to 1.
+// Never darker than one shadow: shadows are a mask, not a stack. Overlapping
+// blobs, and blobs over the trees' ground shadows (decals.js), keep the darkest
+// one, not the product: the MIN pass leaves the framebuffer's colour alone and
+// keeps, in its alpha, the lowest light factor any blob or tree shadow asks for
+// at that pixel (opaque and blended ground leave alpha at 1); the trees' MIN
+// pass runs first (1.12), this one next (1.5), then each apply pass (trees
+// 1.505, people 1.51) multiplies the colour by that alpha once and puts it back
+// to 1. (Shade from the sun's shadow map, buildings', is lighting, not mask:
+// a walker's blob still darkens it a little.)
 // Never down a ledge: a quad vertex whose surface drops away from the plane
 // under the feet (a deck's or quay's edge, a parapet face, a bank) stays on
 // that plane and fades out.
@@ -674,17 +673,13 @@ uniform float uFigureScale;
 uniform vec3 uSunDir;
 uniform float uSunShadow; // 0 = contact only; else direct-sun share (rain dims it)
 uniform float uNight;
-// The sun's shadow map (lights.js): RGBA-packed depth, as three r180 draws it.
-uniform sampler2D uSunMap;
-uniform mat4 uSunMatrix;
-uniform vec3 uSunMapInfo; // map size in texels, depth bias, 1 when the map is usable
 varying vec2 vUv;
 varying float vWade;
 varying float vEdge;    // 0 where the quad is held up over a ledge (fades out)
 varying vec4 vDeckAB;   // the deck a walker stands on (ends), for an exact edge clip
 varying float vDeckHalf; // its half-width; below 0 when not on a deck
 varying vec2 vWorldXZ;  // this fragment's ground position
-varying float vLit;     // sun reaching the ground under this vertex (shade: 0)
+varying float vWorldY;  // and its height (the shadow map's lookup)
 varying vec2 vLocal;    // metres from the feet: (away from the sun, across)
 varying vec4 vShape;    // cast length, near radius, far radius, sun strength
 varying float vContact; // contact radius
@@ -701,26 +696,6 @@ float surfaceNear(vec2 xz, float s0) {
 // River surface height (water.js WATER_Y); wading walkers stand below it.
 const float WATER_LEVEL = 0.025;
 const float MAX_STRETCH = 2.6; // shadow length per body height (sun ~21 deg)
-#ifndef BLOB_APPLY
-// Sun visibility at world point wp: 0 in shade, 1 in sun, bilinear between
-// the four nearest texels (three's texture2DCompare on unpackRGBAToDepth).
-float sunLitAt(vec3 wp) {
-  vec4 c = uSunMatrix * vec4(wp, 1.0);
-  vec3 sc = c.xyz / c.w;
-  sc.z += uSunMapInfo.y;
-  if (sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0) return 1.0;
-  float size = uSunMapInfo.x;
-  vec2 px = sc.xy * size - 0.5;
-  vec2 f = fract(px);
-  vec2 uv = (floor(px) + 0.5) / size;
-  float t = 1.0 / size;
-  float a = step(sc.z, unpackRGBAToDepth(texture2D(uSunMap, uv)));
-  float b = step(sc.z, unpackRGBAToDepth(texture2D(uSunMap, uv + vec2(t, 0.0))));
-  float e = step(sc.z, unpackRGBAToDepth(texture2D(uSunMap, uv + vec2(0.0, t))));
-  float g = step(sc.z, unpackRGBAToDepth(texture2D(uSunMap, uv + vec2(t, t))));
-  return mix(mix(a, b, f.x), mix(e, g, f.x), f.y);
-}
-#endif
 void main() {
   vec3 base = drapedBase(iPos, iVel, iA.x);
   float d = distance(base, cameraPosition);
@@ -733,16 +708,29 @@ void main() {
   vContact = 1.0;
   vSlope = vec2(0.0);
   vEdge = 1.0;
-  vLit = 1.0;
   vDeckAB = vec4(0.0);
   vDeckHalf = -1.0;
   vWorldXZ = base.xz;
+  vWorldY = base.y;
   // Wading at a ford: the blob becomes a ripple ring on the water surface.
   vWade = step(base.y, WATER_LEVEL - 0.04);
   vec3 transformed;
   if (vWade > 0.5) {
     transformed = vec3(base.x, WATER_LEVEL + 0.012, base.z) + vec3(position.x, 0.0, position.z) * 0.65 * fs * on;
   } else {
+  #ifdef BLOB_APPLY
+    // The apply pass only multiplies in what the MIN pass left in the alpha,
+    // and multiplying by 1 changes nothing: so a flat quad over the longest
+    // shadow the walker can cast is enough, drawn without a depth test (the
+    // MIN pass was depth-tested). None of the surface and slope work below.
+    float S = fs * uFigureScale;
+    vec2 away = -uSunDir.xz / max(length(uSunDir.xz), 1e-4);
+    vec2 side = vec2(away.y, -away.x);
+    float far = 1.75 * S * MAX_STRETCH + 1.1 * S;
+    float along = mix(-0.6 * S, far, position.z * 0.5 + 0.5);
+    vec2 off = away * along + side * (position.x * 1.1 * S);
+    transformed = base + vec3(off.x, 0.0, off.y) * on;
+  #else
     float S = fs * uFigureScale;
     // Sun on the ground: direction away from it, and how strongly it casts.
     float sunY = clamp(uSunDir.y, 0.0, 1.0);
@@ -762,18 +750,6 @@ void main() {
       n = normalize(vec3(-hx, 2.0 * E, -hz));
     }
     float ndl = dot(n, uSunDir);
-    #ifndef BLOB_APPLY
-      // In shade there is no direct sun for the walker to block: fade the
-      // cast by how much sun reaches the feet. Four taps around a point a
-      // little up and toward the sun (clear of the ground's own depth), so the
-      // fade is soft over about a metre.
-      if (uSunMapInfo.z > 0.5 && sun > 0.001 && on > 0.5) {
-        vec3 c = base + n * 0.3 + uSunDir * 0.4;
-        vec3 sx = vec3(side.x, 0.0, side.y) * 0.3 * S;
-        vec3 ax = vec3(away.x, 0.0, away.y) * 0.3 * S;
-        sun *= 0.25 * (sunLitAt(c + sx + ax) + sunLitAt(c + sx - ax) + sunLitAt(c - sx + ax) + sunLitAt(c - sx - ax));
-      }
-    #endif
     // Body height: head top 1.65, a hat adds a little.
     float height = (1.65 + (iB.w > 0.5 ? 0.1 : 0.0)) * S;
     // Where the shadow of the head lands: the ray from it, away from the sun,
@@ -820,14 +796,9 @@ void main() {
     } else {
       p.y = base.y;
     }
-    #ifndef BLOB_APPLY
-      // Where the cast runs on into shade (a lit walker beside a building's
-      // shadow), that ground has no sun to lose either: fade the cast there
-      // too, per vertex, so it never darkens a shaded pixel twice.
-      if (uSunMapInfo.z > 0.5 && sun > 0.001 && on > 0.5) vLit = sunLitAt(p + n * 0.3 + uSunDir * 0.4);
-    #endif
     // A little more lift on steep ground so the draped quad never dips under it.
     transformed = p + vec3(0.0, 0.05 + 0.25 * (1.0 - n.y), 0.0);
+    vWorldY = p.y;
     vWorldXZ = p.xz;
     vLocal = vec2(along, across);
     vShape = vec4(len, r0, r1, sun);
@@ -836,6 +807,7 @@ void main() {
     // measure distances along the surface (a circle on a slope, not in plan).
     vec2 grad = -n.xz / max(n.y, 0.2);
     vSlope = vec2(dot(grad, away), dot(grad, side));
+  #endif
   }
   vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
   gl_Position = projectionMatrix * mvPosition;
@@ -845,12 +817,17 @@ void main() {
 
 const BLOB_FRAG = /* glsl */ `
 #include <common>
+#include <packing>
 #include <fog_pars_fragment>
+uniform vec3 uSunDir;
+#ifndef BLOB_APPLY
+${SUN_MASK_GLSL}
+#endif
+varying float vWorldY;
 // Ground light factor in full shadow: about the sky-lit share (0.34).
 const float SHADE_DEPTH = 0.66;
 #define BLOB_BIG 60000.0
 varying float vEdge;
-varying float vLit;
 varying vec4 vDeckAB;
 varying float vDeckHalf;
 varying vec2 vWorldXZ;
@@ -897,22 +874,23 @@ void main() {
     float t = len > 1e-3 ? clamp(vLocal.x / len, 0.0, 1.0) : 0.0;
     // Narrower across than along (a body, not a disc); still convex.
     float dist = length(vec2(vLocal.x - t * len, vLocal.y * 1.3));
-    float sunA = bump(dist / mix(vShape.y, vShape.z, t)) * mix(1.0, 0.5, t) * 0.74 * vShape.w * vLit;
+    float sunA = bump(dist / mix(vShape.y, vShape.z, t)) * mix(1.0, 0.5, t) * 0.74 * vShape.w;
     // Union of the two (no crease where they meet); faded where held up over a ledge.
     // vEdge is blended linearly across each triangle; sharpened here so only
     // the part over the walking surface shows, not a half-faded wash beyond it.
-    float a = (1.0 - (1.0 - contact) * (1.0 - sunA)) * smoothstep(0.7, 1.0, vEdge);
+    float keep = smoothstep(0.7, 1.0, vEdge);
     // A walker on a deck: nothing past the deck's edge (onto a parapet or its side).
     if (vDeckHalf > 0.0) {
       vec2 d = vDeckAB.zw - vDeckAB.xy;
       float t = dot(vWorldXZ - vDeckAB.xy, d) / max(dot(d, d), 1e-6);
       float off = length(vWorldXZ - (vDeckAB.xy + d * clamp(t, 0.0, 1.0)));
-      a *= 1.0 - smoothstep(vDeckHalf - 0.35, vDeckHalf - 0.2, off);
+      keep *= 1.0 - smoothstep(vDeckHalf - 0.35, vDeckHalf - 0.2, off);
     }
     // Haze thins the shadow with distance (hvAtmosphere's curve, atmosphere.js).
     #ifdef USE_FOG
-      a *= 1.0 - hvHazeAmount(vFogDepth);
+      keep *= 1.0 - hvHazeAmount(vFogDepth);
     #endif
+    float a = (1.0 - (1.0 - contact) * (1.0 - sunA)) * keep;
     // Min pass: colour untouched (BLOB_BIG is above any HDR value), alpha the
     // light factor, so the darkest blob at a pixel wins. Apply pass: colour
     // times that factor (src 0), alpha back to 1. It multiplies the ground, so
@@ -920,7 +898,12 @@ void main() {
     #ifdef BLOB_APPLY
       gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
     #else
-      gl_FragColor = vec4(vec3(BLOB_BIG), 1.0 - SHADE_DEPTH * a);
+      // Where the sun's shadow map has already shaded this ground, ask only
+      // for the darkening beyond it (sunmask.js): the darker one, never both.
+      // The contact under the feet is shade from the sky too, not only the
+      // sun's, so it stays in a building's shadow (or the walker floats).
+      float lit = maskOverMap(1.0 - SHADE_DEPTH * a, vec3(vWorldXZ.x, vWorldY, vWorldXZ.y), uSunDir);
+      gl_FragColor = vec4(vec3(BLOB_BIG), min(lit, 1.0 - SHADE_DEPTH * contact * keep));
     #endif
   }
 }
@@ -1039,9 +1022,7 @@ export function createPeople(ctx) {
     uSunShadow: { value: 1 },
     uStrength: { value: 0.26 },
     ...deckUniforms,
-    uSunMap: { value: null },
-    uSunMatrix: { value: lights.sun.shadow.matrix },
-    uSunMapInfo: { value: new THREE.Vector3(1, 0, 0) },
+    ...(ctx.sunMask?.uniforms ?? {}),
   });
   const blobOptions = {
     uniforms: blobUniforms,
@@ -1063,6 +1044,8 @@ export function createPeople(ctx) {
   const blobApplyMaterial = new THREE.ShaderMaterial({
     ...blobOptions,
     defines: { BLOB_APPLY: 1 },
+    // Its quad is flat and loose (BLOB_VERT): no depth test, nothing to lose.
+    depthTest: false,
     blendEquation: THREE.AddEquation,
     blendSrc: THREE.DstColorFactor,
     blendDst: THREE.DstAlphaFactor,
@@ -1205,13 +1188,6 @@ export function createPeople(ctx) {
 
     // Direct-sun share for the blob, every drawn frame: rain dims the sun.
     blobUniforms.uSunShadow.value = contactOnly ? 0 : Math.min(1, (grade.current?.sunI ?? 2.8) / 2.3);
-    // The sun's shadow map, for the cast's fade in shade. The map can be
-    // recreated (tier change), so look it up each frame; its matrix is the
-    // light's own, which three updates whenever the map re-renders.
-    const shadow = lights.sun.shadow;
-    const map = lights.sun.castShadow && ctx.renderer?.shadowMap?.enabled ? shadow.map?.texture ?? null : null;
-    blobUniforms.uSunMap.value = map;
-    blobUniforms.uSunMapInfo.value.set(shadow.mapSize.x, shadow.bias, map ? 1 : 0);
 
     if (castShadow && count > 0) {
       lodUniforms.uShadowFocus.value.copy(frame.target);

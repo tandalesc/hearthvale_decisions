@@ -8,6 +8,7 @@ import { pace, powerState, effectiveTier, pixelRatioFor, createRefreshMeter, SAV
 import { createLights } from './lights.js';
 import { createSky } from './sky.js';
 import { createRoadSplat } from './roads.js';
+import { createSunMask } from './sunmask.js';
 import { createTerrain } from './terrain.js';
 import { createGround } from './ground.js';
 import { createWater } from './water.js';
@@ -80,6 +81,8 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
   const ctx = {
     renderer, scene, camera, grade, lights, roads, buildings, ground, heightAt: ground.sample, quality: tier,
     townCentre: null, canvas, rig, labelsOn: true,
+    // The sun's shadow map for the ground-shadow mask (trees', people's).
+    sunMask: createSunMask(lights, renderer),
   };
   rig.setGround(ground.sample);
   const people = createPeople(ctx);
@@ -354,6 +357,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
     buildings.events.length = 0;
     ground.flush(time);
     lights.update(rig.controls.target, frame.distance, time);
+    ctx.sunMask.update(grade);
     lap('lights');
 
     // Compile every material once the town is built, off the main thread where the
