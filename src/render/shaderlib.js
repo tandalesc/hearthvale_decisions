@@ -90,6 +90,21 @@ export const MICRO_NORMAL = /* glsl */ `
   }
 `;
 
+// Micro-detail for surfaces whose frame the fragment does not know (kit
+// instances turn by yaw): Mikkelsen 2010, "Bump Mapping Unparametrized
+// Surfaces on the GPU" (three's perturbNormalArb), but with the position
+// derivatives left unnormalised, so dHdxy in metres per pixel gives the true
+// slope. The caller passes derivatives it took where control flow is uniform.
+export const MICRO_ARB = /* glsl */ `
+vec3 microPerturb(vec3 n, vec3 dPdx, vec3 dPdy, vec2 dHdxy, float faceDir) {
+  vec3 r1 = cross(dPdy, n);
+  vec3 r2 = cross(n, dPdx);
+  float det = dot(dPdx, r1) * faceDir;
+  vec3 grad = sign(det) * (dHdxy.x * r1 + dHdxy.y * r2);
+  return normalize(abs(det) * n - grad);
+}
+`;
+
 /** Deterministic 0..1 hash of an integer id (instance jitter, never Math.random). */
 export function hashId(id, salt = 0) {
   let h = (id * 374761393 + salt * 668265263) | 0;

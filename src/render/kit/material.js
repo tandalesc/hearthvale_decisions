@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { patchMaterial, NOISE, GRADE_HEAD } from '../shaderlib.js';
+import { patchMaterial, NOISE, GRADE_HEAD, MICRO_ARB } from '../shaderlib.js';
 import { GROUND_GLSL } from '../ground.js';
 import { CROP_GLSL } from './crops.js';
 
@@ -230,6 +230,16 @@ vec4 facade(float s, float h, float len, float F, float kind, float seed, float 
 `;
 
 const FRAGMENT_COLOR = /* glsl */ `
+  #ifdef MICRO_DETAIL
+    // Micro-detail (docs/design/micro-detail.md): screen derivatives of the
+    // instance-frame position and the view position, taken here where control
+    // flow is uniform. Pattern code adds the gradient of its analytic height
+    // (per metre of vLocal) to mGradL; FRAGMENT_NORMAL chains it to screen
+    // space and tilts the normal.
+    vec3 mLdx = dFdx(vLocal), mLdy = dFdy(vLocal);
+    vec3 mPdx = dFdx(-vViewPosition), mPdy = dFdy(-vViewPosition);
+    vec3 mGradL = vec3(0.0);
+  #endif
   float part = vPartAO.x;
   vec3 col = vBase;
   // params.y = lit (0/1) + 2 when the lot is selected.
@@ -358,6 +368,29 @@ const FRAGMENT_COLOR = /* glsl */ `
       float roofSharp = smoothstep(3.0, 8.0, course / max(fwidth(h), 1e-4));
       col *= 1.0 - (0.2 * line + 0.08 * joint) * roofSharp;
       col *= 0.92 + (rk > 1.5 ? 0.16 : 0.1) * mix(0.5, shade, roofSharp);
+      #ifdef MICRO_DETAIL
+        // Relief: each course laps the one below, so a tile's height above the
+        // roof plane falls from lap at its butt to 0 at its head, then steps
+        // up at the next course line; the staggered joints are grooves half
+        // as deep. The butt edge and the groove walls are never narrower than
+        // 1.5 px, and the whole slope fades with roofSharp.
+        float mFade = roofSharp * facadeOn;
+        if (mFade > 0.0) {
+          float lap = rk < 1.5 ? 0.015 : 0.008;
+          float t = fract(cy);
+          float e = max(0.06, 1.5 * (abs(mLdx.y) + abs(mLdy.y)) / course);
+          float u = min(t / e, 1.0);
+          float sE = u * u * (3.0 - 2.0 * u);
+          // H = lap (1 - t) smoothstep(0, e, t)
+          float dHdcy = lap * ((1.0 - t) * 6.0 * u * (1.0 - u) / e - sE);
+          float fj = fract(jx) - 0.5;
+          float wj = max(0.06, 1.5 * (abs(mLdx.x + mLdx.z) + abs(mLdy.x + mLdy.z)) / (course * 1.1));
+          float v = min((0.5 - abs(fj)) / wj, 1.0);
+          // H -= 0.5 lap (1 - smoothstep(0, wj, 0.5 - |fj|))
+          float dHdjx = -0.5 * lap * 6.0 * v * (1.0 - v) / wj * sign(fj);
+          mGradL += mFade * (vec3(0.0, dHdcy / course, 0.0) + vec3(dHdjx / (course * 1.1)) * vec3(1.0, 0.0, 1.0));
+        }
+      #endif
       // Ridge tiles.
       col = mix(col, col * 0.7, smoothstep(0.16, 0.12, ridge) * step(0.0, ridge));
     } else {
@@ -419,6 +452,14 @@ varying float vCropH;
 #endif
 `;
 
+// Micro-detail: the gradient the pattern code left in mGradL, chained to
+// screen space through the derivatives taken at the top of FRAGMENT_COLOR.
+const FRAGMENT_NORMAL = /* glsl */ `
+  #ifdef MICRO_DETAIL
+    if (mGradL != vec3(0.0)) normal = microPerturb(normal, mPdx, mPdy, vec2(dot(mGradL, mLdx), dot(mGradL, mLdy)), faceDirection);
+  #endif
+`;
+
 /** Uniforms shared by every kit material variant. */
 export function createKitUniforms() {
   return {
@@ -443,8 +484,9 @@ export function createKitMaterials(grade, { variant = '', shared } = {}) {
     vertexNormal: VERTEX_NORMAL,
     vertexBegin: VERTEX_OFFSET,
     vertexEnd: VERTEX_END,
-    fragmentHead: FRAGMENT_HEAD + PALETTE_GLSL.replace('uniform float uYearT;', '') + CROP_VARYINGS + 'float gEmissive = 0.0;\n',
+    fragmentHead: FRAGMENT_HEAD + PALETTE_GLSL.replace('uniform float uYearT;', '') + CROP_VARYINGS + 'float gEmissive = 0.0;\n' + `#ifdef MICRO_DETAIL\n${MICRO_ARB}\n#endif\n`,
     fragmentColor: FRAGMENT_COLOR,
+    fragmentNormal: FRAGMENT_NORMAL,
     fragmentEmissive: /* glsl */ `
       // Lit windows glow warm at night; a dim glow at dusk.
       float nightW = smoothstep(0.25, 0.7, uNight);
@@ -461,6 +503,21 @@ export function createKitMaterials(grade, { variant = '', shared } = {}) {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + VERTEX_OFFSET);
   };
   depth.customProgramCacheKey = () => `kitdepth:${variant}`;
+  material.userData.kitKey = `kit:${variant}`;
 
   return { material, depth };
+}
+
+/**
+ * Micro-detail relief on roof courses (High only; docs/design/micro-detail.md).
+ * Off compiles exactly the shader the kit had before.
+ */
+export function setKitMicroDetail(material, on) {
+  material.defines ??= {};
+  if (on === Boolean(material.defines.MICRO_DETAIL)) return;
+  if (on) material.defines.MICRO_DETAIL = 1;
+  else delete material.defines.MICRO_DETAIL;
+  const key = on ? `${material.userData.kitKey}:micro` : material.userData.kitKey;
+  material.customProgramCacheKey = () => key;
+  material.needsUpdate = true;
 }
