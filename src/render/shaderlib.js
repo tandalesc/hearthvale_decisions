@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { COVER_GLSL, COVER_APPLY } from './shadowsurface.js';
 
 // Small helpers for patching Three's built-in materials with our grade
 // uniforms and shader snippets via onBeforeCompile.
@@ -29,6 +30,9 @@ export function patchMaterial(material, grade, spec) {
     if (spec.vertexNormal) v = v.replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n' + spec.vertexNormal);
     if (spec.vertexEnd) v = v.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n' + spec.vertexEnd);
     if (spec.fragmentColor) f = f.replace('#include <color_fragment>', '#include <color_fragment>\n' + spec.fragmentColor);
+    // The ground's shadow surface (shadowsurface.js): people's and soft tree
+    // shadows take the sun away like the shadow map does.
+    if (!spec.noCover) f = f.replace('#include <aomap_fragment>', COVER_APPLY + '#include <aomap_fragment>');
     if (spec.fragmentNormal) f = f.replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + spec.fragmentNormal);
     if (spec.fragmentEmissive) f = f.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n' + spec.fragmentEmissive);
     if (spec.fragmentEnd) f = f.replace('#include <fog_fragment>', spec.fragmentEnd + '\n#include <fog_fragment>');
@@ -41,7 +45,7 @@ export function patchMaterial(material, grade, spec) {
 }
 
 // Grade uniforms shared by every patched shader.
-export const GRADE_HEAD = /* glsl */ `
+export const GRADE_HEAD = COVER_GLSL + /* glsl */ `
 uniform float uTime;
 // Clock for decorative motion (sails, sway, boats, flags): frozen under reduced motion.
 uniform float uDecoTime;

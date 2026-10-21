@@ -8,7 +8,7 @@ import { pace, powerState, effectiveTier, pixelRatioFor, createRefreshMeter, SAV
 import { createLights } from './lights.js';
 import { createSky } from './sky.js';
 import { createRoadSplat } from './roads.js';
-import { createSunMask } from './sunmask.js';
+import { createShadowSurface } from './shadowsurface.js';
 import { createTerrain } from './terrain.js';
 import { createGround } from './ground.js';
 import { createWater } from './water.js';
@@ -81,8 +81,8 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
   const ctx = {
     renderer, scene, camera, grade, lights, roads, buildings, ground, heightAt: ground.sample, quality: tier,
     townCentre: null, canvas, rig, labelsOn: true,
-    // The sun's shadow map for the ground-shadow mask (trees', people's).
-    sunMask: createSunMask(lights, renderer),
+    // The ground's shadow surface: people's and soft tree shadows.
+    shadowSurface: createShadowSurface(renderer, grade),
   };
   rig.setGround(ground.sample);
   const people = createPeople(ctx);
@@ -209,6 +209,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
     grade.uniforms.uWeatherDetail.value = tier.weather ? 1 : 0;
     renderer.setPixelRatio(pixelRatioFor(window.devicePixelRatio, tier, power));
     lights.applyQuality(tier);
+    ctx.shadowSurface.applyQuality(tier);
     terrain.applyQuality(tier);
     water.applyQuality(tier);
     buildings.applyQuality(tier);
@@ -357,7 +358,6 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
     buildings.events.length = 0;
     ground.flush(time);
     lights.update(rig.controls.target, frame.distance, time);
-    ctx.sunMask.update(grade);
     lap('lights');
 
     // Compile every material once the town is built, off the main thread where the
@@ -381,6 +381,9 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
 
     drawnOnce = true;
     renderer.info.reset();
+    // People's and soft tree shadows into the shadow surface, before anything
+    // lit reads it (the mirror and the frame).
+    ctx.shadowSurface.render(rig.controls.target, frame.distance, camera.position);
     water.setEmbankments(view?.embankments);
     // The mirror render draws the trees' far level only (one call per species).
     trees.setReflectionPass?.(true);
@@ -580,7 +583,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
     camera: rig,
     /** Dev and test access (not part of the contract). */
     get internals() {
-      return { scene, renderer, grade, lights, buildings, water, terrain, ground, roads };
+      return { scene, renderer, grade, lights, buildings, water, terrain, ground, roads, shadowSurface: ctx.shadowSurface };
     },
     dispose() {
       disposed = true;

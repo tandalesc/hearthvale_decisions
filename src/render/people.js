@@ -4,7 +4,6 @@ import { GROUND_GLSL } from './ground.js';
 import { deckProfile } from '../sim/bridges.js';
 import { railStyle, railInner, RAIL_TOP } from '../sim/gatherings.js';
 import { surfaceLevelAt } from '../terrain.js';
-import { SUN_MASK_GLSL } from './sunmask.js';
 
 // Villagers (design-visual §4.5): one instanced mesh for everyone, animated
 // entirely in the vertex shader. The sim's render view owns the per-person
@@ -646,15 +645,13 @@ vec3 personColor() {
 // their walkers at the full frame rate. In 'full' mode (uSunShadow 0) only
 // the contact is drawn.
 //
-// Never darker than one shadow: shadows are a mask, not a stack. Overlapping
-// blobs, and blobs over the trees' ground shadows (decals.js), keep the darkest
-// one, not the product: the MIN pass leaves the framebuffer's colour alone and
-// keeps, in its alpha, the lowest light factor any blob or tree shadow asks for
-// at that pixel (opaque and blended ground leave alpha at 1); the trees' MIN
-// pass runs first (1.12), this one next (1.5), then each apply pass (trees
-// 1.505, people 1.51) multiplies the colour by that alpha once and puts it back
-// to 1. (Shade from the sun's shadow map, buildings', is lighting, not mask:
-// a walker's blob still darkens it a little.)
+// One shadow surface: the blob is drawn into the ground's shadow coverage map
+// (shadowsurface.js) before the frame: R how much of the sun the walker blocks
+// there, G the contact under the feet, B the surface's height. Lit surfaces at
+// that height take the sun away there exactly as the sun's shadow map does, so
+// a walker's shadow and a building's are one kind of shade: union, never
+// stacked, no seam where they meet, as deep as the scene's own shade. On the
+// screen only waders' ripple rings are drawn (BLOB_APPLY).
 // Never down a ledge: a quad vertex whose surface drops away from the plane
 // under the feet (a deck's or quay's edge, a parapet face, a bank) stays on
 // that plane and fades out.
@@ -670,6 +667,7 @@ attribute vec2 iC;
 uniform float uTime;
 uniform float uLodFar;
 uniform float uFigureScale;
+uniform vec3 uEye;
 uniform vec3 uSunDir;
 uniform float uSunShadow; // 0 = contact only; else direct-sun share (rain dims it)
 uniform float uNight;
@@ -698,7 +696,11 @@ const float WATER_LEVEL = 0.025;
 const float MAX_STRETCH = 2.6; // shadow length per body height (sun ~21 deg)
 void main() {
   vec3 base = drapedBase(iPos, iVel, iA.x);
-  float d = distance(base, cameraPosition);
+  #ifdef BLOB_COVER
+    float d = distance(base, uEye); // drawn from above: measure from the main camera
+  #else
+    float d = distance(base, cameraPosition);
+  #endif
   // Hidden indoors and well before the people themselves fade out.
   float fs = fadedScale(iC.x);
   float on = step(0.01, fs) * (1.0 - step(uLodFar * 0.75, d));
@@ -719,28 +721,9 @@ void main() {
     transformed = vec3(base.x, WATER_LEVEL + 0.012, base.z) + vec3(position.x, 0.0, position.z) * 0.65 * fs * on;
   } else {
   #ifdef BLOB_APPLY
-    // The apply pass only multiplies in what the MIN pass left in the alpha,
-    // and multiplying by 1 changes nothing: so it skips the surface and slope
-    // work below and draws the same shadow outline (contact disc and sun
-    // capsule) as if on level ground, flat and without a depth test (the MIN
-    // pass was depth-tested); the fragment discards outside the outline.
-    float S = fs * uFigureScale;
-    float sunY = clamp(uSunDir.y, 0.0, 1.0);
-    vec2 away = -uSunDir.xz / max(length(uSunDir.xz), 1e-4);
-    vec2 side = vec2(away.y, -away.x);
-    float sun = uSunShadow * smoothstep(0.02, 0.2, sunY);
-    float height = (1.65 + (iB.w > 0.5 ? 0.1 : 0.0)) * S;
-    // The MIN pass's length on level ground, a little longer for slopes.
-    float len = sun > 0.001 ? min(length(uSunDir.xz) * height / max(sunY, 0.05) * 1.25, height * MAX_STRETCH) : 0.0;
-    // A third wider than the MIN pass's shape, so it always covers it.
-    float r0 = 0.42 * S * 1.3, r1 = r0 + 0.14 * len * 1.3, rc = 0.5 * S * 1.3;
-    float along = mix(-max(r0, rc), len + r1, position.z * 0.5 + 0.5);
-    float across = position.x * max(r1, rc);
-    vec2 off = away * along + side * across;
-    transformed = base + vec3(off.x, 0.0, off.y) * on;
-    vLocal = vec2(along, across);
-    vShape = vec4(len, r0, r1, max(sun, 1e-3));
-    vContact = rc;
+    // The screen pass draws only the ripple rings of waders now: shadows go
+    // to the shadow surface (BLOB_COVER). Nothing to draw here.
+    transformed = base;
   #else
     float S = fs * uFigureScale;
     // Sun on the ground: direction away from it, and how strongly it casts.
@@ -831,9 +814,6 @@ const BLOB_FRAG = /* glsl */ `
 #include <packing>
 #include <fog_pars_fragment>
 uniform vec3 uSunDir;
-#ifndef BLOB_APPLY
-${SUN_MASK_GLSL}
-#endif
 varying float vWorldY;
 // Ground light factor in full shadow: about the sky-lit share (0.34).
 const float SHADE_DEPTH = 0.66;
@@ -857,6 +837,9 @@ float bump(float x) {
   return k * k * k;
 }
 void main() {
+  #ifdef BLOB_COVER
+    if (vWade > 0.5) discard;
+  #endif
   if (vWade > 0.5) {
     // Two soft rings breathing outward around the legs.
     float r = length(vUv);
@@ -906,18 +889,15 @@ void main() {
     // light factor, so the darkest blob at a pixel wins. Apply pass: colour
     // times that factor (src 0), alpha back to 1. It multiplies the ground, so
     // it keeps the ground's own colour at noon, at dusk and on snow.
-    #ifdef BLOB_APPLY
-      // Only over the shadow's own outline (a capsule and a disc, not the
-      // loose quad): nothing else is touched.
-      if (a < 0.003 && contact < 0.003 && sunA < 0.003) discard;
-      gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    #ifdef BLOB_COVER
+      // The shadow surface (shadowsurface.js): how much of the sun the walker
+      // blocks here (a body blocks it all at the core), the contact, and the
+      // height of the surface it lies on. The lighting takes the sun away.
+      float t2 = len > 1e-3 ? clamp(vLocal.x / len, 0.0, 1.0) : 0.0;
+      float blocked = bump(dist / mix(vShape.y, vShape.z, t2)) * mix(1.0, 0.7, t2) * step(1e-3, vShape.w) * keep;
+      gl_FragColor = vec4(blocked, contact * 0.66 * keep, vWorldY, 1.0);
     #else
-      // Where the sun's shadow map has already shaded this ground, ask only
-      // for the darkening beyond it (sunmask.js): the darker one, never both.
-      // The contact under the feet is shade from the sky too, not only the
-      // sun's, so it stays in a building's shadow (or the walker floats).
-      float lit = maskOverMap(1.0 - SHADE_DEPTH * a, vec3(vWorldXZ.x, vWorldY, vWorldXZ.y), uSunDir);
-      gl_FragColor = vec4(vec3(BLOB_BIG), min(lit, 1.0 - SHADE_DEPTH * contact * keep));
+      discard;
     #endif
   }
 }
@@ -1036,7 +1016,7 @@ export function createPeople(ctx) {
     uSunShadow: { value: 1 },
     uStrength: { value: 0.26 },
     ...deckUniforms,
-    ...(ctx.sunMask?.uniforms ?? {}),
+    uEye: ctx.shadowSurface?.uniforms.uEye ?? { value: new THREE.Vector3() },
   });
   const blobOptions = {
     uniforms: blobUniforms,
@@ -1052,7 +1032,20 @@ export function createPeople(ctx) {
   };
   // Pass 1: min(dst, src) per channel (blend factors unused): alpha keeps the
   // darkest light factor, colour is untouched (the src colour is huge).
-  const blobMaterial = new THREE.ShaderMaterial({ ...blobOptions, blendEquation: THREE.MinEquation });
+  // The shadow surface pass (shadowsurface.js): coverage is the union (MAX).
+  const blobMaterial = new THREE.ShaderMaterial({
+    ...blobOptions,
+    defines: { BLOB_COVER: 1 },
+    fog: false,
+    transparent: false,
+    depthTest: false,
+    depthWrite: false,
+    polygonOffset: false,
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.MaxEquation,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneFactor,
+  });
   // Pass 2: rgb = src * dst + dst * dstAlpha (src 0: dst times the factor; a
   // ripple's src brightens), alpha = 1. Each pixel is darkened once.
   const blobApplyMaterial = new THREE.ShaderMaterial({
@@ -1074,19 +1067,19 @@ export function createPeople(ctx) {
   mesh.castShadow = false;
   mesh.customDepthMaterial = depthMaterial;
   mesh.visible = false;
+  // Shadows: drawn into the shadow surface before the frame (shadowsurface.js).
   const blobs = new THREE.Mesh(new THREE.InstancedBufferGeometry(), blobMaterial);
   blobs.name = 'people-blobs';
   blobs.frustumCulled = false;
-  // After the ground decals (1, 1.1), before water (2); the two passes run
-  // back to back so nothing blends in between.
-  blobs.renderOrder = 1.5;
   blobs.visible = false;
+  // On screen, only the ripple rings of waders at a ford.
   const blobsApply = new THREE.Mesh(blobs.geometry, blobApplyMaterial);
   blobsApply.name = 'people-blobs-apply';
   blobsApply.frustumCulled = false;
   blobsApply.renderOrder = 1.51;
   blobsApply.visible = false;
-  scene.add(mesh, blobs, blobsApply);
+  scene.add(mesh, blobsApply);
+  (ctx.shadowSurface?.scene ?? scene).add(blobs);
 
   let stride = STRIDE; // 16, or 20 when the view carries segment ends
   let fadeAttr = null;   // per-row [change time, scale before]
