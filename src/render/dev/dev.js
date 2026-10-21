@@ -54,7 +54,9 @@ async function loadView() {
 }
 
 const { view, sync, source } = await loadView();
-const world = createWorld(document.querySelector('#world'), { quality: tier });
+// &micro=0|1 forces micro-detail off or on over the tier's default (A/B shots).
+const tierPatch = params.has('micro') ? { microDetail: params.get('micro') === '1' } : null;
+const world = createWorld(document.querySelector('#world'), { quality: tier, tierPatch });
 world.setDayCycle(params.get('cycle') ?? 'seasonal');
 world.setSimSpeed(Number(params.get('speed') ?? 1));
 if (params.has('overlay')) world.setOverlay(params.get('overlay'));

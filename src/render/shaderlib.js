@@ -13,6 +13,7 @@ import * as THREE from 'three';
  *  vertexEnd      GLSL appended after `#include <worldpos_vertex>`
  *  fragmentHead   GLSL prepended to the fragment shader
  *  fragmentColor  GLSL appended after `#include <color_fragment>` (edit `diffuseColor`)
+ *  fragmentNormal GLSL appended after `#include <normal_fragment_maps>` (edit the view-space `normal`)
  *  fragmentEmissive GLSL appended after `#include <emissivemap_fragment>` (edit `totalEmissiveRadiance`)
  *  fragmentEnd    GLSL appended after `#include <opaque_fragment>`... (edit gl_FragColor before fog)
  */
@@ -28,6 +29,7 @@ export function patchMaterial(material, grade, spec) {
     if (spec.vertexNormal) v = v.replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n' + spec.vertexNormal);
     if (spec.vertexEnd) v = v.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n' + spec.vertexEnd);
     if (spec.fragmentColor) f = f.replace('#include <color_fragment>', '#include <color_fragment>\n' + spec.fragmentColor);
+    if (spec.fragmentNormal) f = f.replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + spec.fragmentNormal);
     if (spec.fragmentEmissive) f = f.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n' + spec.fragmentEmissive);
     if (spec.fragmentEnd) f = f.replace('#include <fog_fragment>', spec.fragmentEnd + '\n#include <fog_fragment>');
     shader.vertexShader = v;
@@ -71,6 +73,21 @@ float vnoise(vec2 p) {
   return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x),
              mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
 }
+`;
+
+// Micro-detail (docs/design/micro-detail.md): pattern code adds the slope of
+// its analytic height (metres per metre, world space) to gBumpW, and
+// MICRO_NORMAL tilts the shading normal by it. This is Mikkelsen's surface
+// gradient for a volumetric height: the slope projected onto the surface,
+// so no tangents or UVs are needed. Lambert lighting only: no specular to alias.
+export const MICRO_HEAD = /* glsl */ `
+vec3 gBumpW = vec3(0.0);
+`;
+export const MICRO_NORMAL = /* glsl */ `
+  {
+    vec3 gV = mat3(viewMatrix) * gBumpW;
+    normal = normalize(normal - (gV - dot(gV, normal) * normal));
+  }
 `;
 
 /** Deterministic 0..1 hash of an integer id (instance jitter, never Math.random). */

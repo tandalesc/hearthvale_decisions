@@ -33,14 +33,15 @@ import { createMist } from './mist.js';
 
 const OVERLAYS = { none: 0, value: 1, roads: 2, health: 3 };
 
-export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } = {}) {
+// tierPatch: dev and benchmark override merged over every tier (e.g. {microDetail: false}).
+export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', tierPatch = null } = {}) {
   const requested = quality === 'auto' ? loadQualityOverride() : quality;
   const probe = canvas.getContext('webgl2', { antialias: true, powerPreference: 'default' });
   // What Auto would draw (first guess, then the tuner); tierName is what is
   // drawn after the Battery saver has had its say.
   let autoTier = guessTier(probe);
   let tierName = requested === 'auto' ? autoTier : requested;
-  let tier = { ...TIERS[tierName] };
+  let tier = { ...TIERS[tierName], ...tierPatch };
   let qualityMode = requested;
   let saverMode = SAVER_MODES.includes(batterySaver) ? batterySaver : 'off';
   let battery = null; // {charging, level} once the Battery API answers
@@ -188,7 +189,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
 
   function applyQuality() {
     tierName = effectiveTier(qualityMode, autoTier, power);
-    tier = { ...TIERS[tierName] };
+    tier = { ...TIERS[tierName], ...tierPatch };
     ctx.quality = tier;
     frame.tier = tierName;
     grade.uniforms.uWeatherDetail.value = tier.weather ? 1 : 0;

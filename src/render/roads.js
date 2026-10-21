@@ -248,6 +248,37 @@ float cobbles(vec2 p) {
   return smoothstep(0.5, 0.36, d) * (0.9 + 0.2 * hash12(floor(p)));
 }
 
+#ifdef MICRO_DETAIL
+// Micro-detail: the world-space slope (dH/dx, dH/dz) of the same stones as
+// cobbles(p * scale), drawn as relief by the normal (shaderlib MICRO_NORMAL).
+// Each stone is a rounded square (superellipse, no crease along its
+// diagonals) with a chamfered edge, a crown (round: 1 domed cobbles, 0
+// flat-topped setts) and a small tilt of its own, as if bedded by hand.
+// pxM is the pixel footprint in metres: the chamfer never gets narrower than
+// 1.5 pixels, which band-limits the relief instead of letting it shimmer.
+vec2 stoneSlope(vec2 w, float scale, float amp, float edge, float round, float pxM) {
+  float k = 1.8 * scale;
+  vec2 p = w * k;
+  p.x += step(1.0, mod(floor(p.y), 2.0)) * 0.5;
+  vec2 f = fract(p) - 0.5;
+  vec2 a = abs(f) * vec2(1.1, 1.0);
+  vec2 a2 = a * a;
+  float d4 = a2.x * a2.x + a2.y * a2.y;
+  float d = sqrt(sqrt(d4));
+  // d(d)/df = sign(f) * stretch * a^3 / d^3.
+  vec2 dd = sign(f) * vec2(1.1, 1.0) * a2 * a / max(d4 / max(d, 1e-4), 1e-6);
+  float e1 = 0.5 - max(0.5 - edge, pxM * k * 1.5);
+  float t = clamp((0.5 - d) / (0.5 - e1), 0.0, 1.0);
+  float S = t * t * (3.0 - 2.0 * t);
+  float dS = -6.0 * t * (1.0 - t) / (0.5 - e1);
+  float crown = 1.0 - round * 4.0 * d * d;
+  float dhdd = dS * crown - S * round * 8.0 * d;
+  float hs = hash12(floor(p) + vec2(7.0, 3.0));
+  vec2 tilt = (vec2(hs, fract(hs * 13.7)) - 0.5) * 0.12 * S;
+  return (dhdd * dd) * amp * k + tilt;
+}
+#endif
+
 float pathHalf(float t) {
 ${HALF_GLSL}
   return ${PATH_HALF[5].toFixed(3)};
@@ -322,6 +353,19 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
   // Worn verge: grass darkens a touch for half a metre beside a strip.
   col *= 1.0 - 0.08 * smoothstep(-0.7, 0.0, sd) * (1.0 - cover) * step(0.004, pth.r);
   col = mix(col, c, cover);
+  #ifdef MICRO_DETAIL
+    // Relief on cobbles and setts, faded out once a stone is a few pixels
+    // across (and skipped entirely there, which is most of a far view).
+    float paved = smoothstep(3.4, 4.0, tier) * cover * (1.0 - kerb * 0.85) * detail;
+    float reliefK = paved * smoothstep(0.12, 0.06, px);
+    if (reliefK > 0.0) {
+      float setK = smoothstep(4.4, 5.0, tier);
+      vec2 sl = vec2(0.0);
+      if (setK < 1.0) sl += stoneSlope(world.xz, 1.0, 0.035, 0.34, 1.0, px) * (1.0 - setK);
+      if (setK > 0.0) sl += stoneSlope(world.xz, 1.35, 0.02, 0.42, 0.25, px) * setK;
+      gBumpW.xz += sl * reliefK;
+    }
+  #endif
   return vec4(col, max(cover, bareCover * 0.8));
 }
 `;

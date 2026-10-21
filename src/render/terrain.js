@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import * as T from '../terrain.js';
-import { patchMaterial, NOISE, LAYER_REFLECT, GRADE_HEAD, hashId } from './shaderlib.js';
+import { patchMaterial, NOISE, LAYER_REFLECT, GRADE_HEAD, MICRO_HEAD, MICRO_NORMAL, hashId } from './shaderlib.js';
 import { ROAD_GLSL } from './roads.js';
 import { GROUND_GLSL, GROUND_ORIGIN, GROUND_LIMIT, shoreCharacter } from './ground.js';
 import './atmosphere.js';
@@ -306,8 +306,9 @@ function makeMaterial(grade, roads, variant) {
         : variant === 'ring' ? 'vShore = aShore.x; vBeach = aShore.y;'
           : 'vShore = abs(aRiverU) - uWaterHalf; vBeach = 0.0;'}
     `,
-    fragmentHead: 'uniform float uWaterHalf;\nuniform float uRiverEnd;\nuniform float uFloodplain;\n' + (strip ? 'varying vec2 vBankS;\n' : '') + SHADE_GLSL,
+    fragmentHead: 'uniform float uWaterHalf;\nuniform float uRiverEnd;\nuniform float uFloodplain;\n' + (strip ? 'varying vec2 vBankS;\n' : '') + MICRO_HEAD + SHADE_GLSL,
     fragmentColor: SHADE_FRAGMENT,
+    fragmentNormal: `#ifdef MICRO_DETAIL\n${MICRO_NORMAL}\n#endif\n`,
   });
   useHaze(material, grade);
   material.userData.variant = variant;
@@ -565,13 +566,17 @@ export function createTerrain({ scene, grade, roads, quality }) {
   scene.add(group);
 
   function applyQuality(q) {
-    const want = q.cloudShadow ? 1 : 0;
+    const cloud = q.cloudShadow ? 1 : 0;
+    // Stone relief on the paving (micro-detail); the far ring draws no roads.
+    const micro = q.microDetail ? 1 : 0;
     for (const m of materials) {
-      const has = m.defines.CLOUD_SHADOW ? 1 : 0;
-      if (want === has) continue;
-      if (want) m.defines.CLOUD_SHADOW = 1;
+      const wantMicro = m.userData.variant === 'ring' ? 0 : micro;
+      if (cloud === (m.defines.CLOUD_SHADOW ? 1 : 0) && wantMicro === (m.defines.MICRO_DETAIL ? 1 : 0)) continue;
+      if (cloud) m.defines.CLOUD_SHADOW = 1;
       else delete m.defines.CLOUD_SHADOW;
-      const key = `terrain:${m.userData.variant}:${want}`;
+      if (wantMicro) m.defines.MICRO_DETAIL = 1;
+      else delete m.defines.MICRO_DETAIL;
+      const key = `terrain:${m.userData.variant}:${cloud}:${wantMicro}`;
       m.customProgramCacheKey = () => key;
       m.needsUpdate = true;
     }

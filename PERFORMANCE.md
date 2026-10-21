@@ -1,3 +1,13 @@
+# Micro-detail: stone relief on the paving (2026-10-21)
+
+**What changed.** On High only, cobbles and setts on the road splat tilt the shading normal by the slope of their own analytic shape (`stoneSlope` in `src/render/roads.js`, applied as a surface gradient by `MICRO_NORMAL` in `src/render/shaderlib.js`). There are no textures, tangents or extra geometry. It is gated by the `microDetail` tier flag through the terrain's `MICRO_DETAIL` define, so Low and Medium compile the same shader as before. The relief fades out as the pixel footprint grows from 6 to 12 cm, so it is not computed in far views. Design, survey and rollout plan: `docs/design/micro-detail.md`.
+
+**Cost.** `scripts/micro-detail-ab.js` (new) flips the define in one loaded page and times interleaved blocks. With the terrain drawn alone, which is an upper bound, it costs +0.02 to +0.06 ms per pass on an M5 Pro (1–2.5 % of the terrain). In whole frames, and in `fidelity-shots.js --noshot` against `a5347fc`, the change is lost in the noise. The machine was heavily shared (load average 11–22) while these were measured.
+
+**Dev hooks.** `&micro=0|1` on the render dev page (the `tierPatch` option of `createWorld`) and `fidelity-shots.js --extra="micro=0"`.
+
+---
+
 # The sim in a Web Worker (2026-10-21)
 
 **What changed.** The town's state now lives in a dedicated module worker (`src/sim-worker.js`). `stepTick`, the route planner (it starts its navigation worker from there), the decision client, the prose keeper, player actions and saves all run there. The main thread draws a mirrored render view (`src/sim/render-mirror.js`) and UI snapshots (`src/sim-snapshot.js`), so no tick can hold up a frame. Design: `docs/design/sim-worker.md`; the brief it was built from: `docs/handoff-sim-worker.md`.
