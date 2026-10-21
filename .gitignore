@@ -8,3 +8,5 @@ local.env
 *.local.env
 .claude/
 *.tmp.mjs
+.dev.vars*
+.wrangler/
