@@ -146,12 +146,32 @@ void main() {
   #endif
   float k = 1.0 - dark * (1.0 - fogK);
   if (k > 0.995) discard;
-  // Multiply blending: the framebuffer is scaled by this colour.
-  gl_FragColor = vec4(vec3(k), 1.0);
+  #ifdef MASK_MIN
+    // Tree shadows as a mask, not a stack: this pass leaves the colour alone
+    // (the huge value loses every min) and keeps, in alpha, the lowest light
+    // factor any shadow asks for here; the apply pass multiplies by it once.
+    // Overlapping crowns read as one shade, not darker where they cross.
+    gl_FragColor = vec4(vec3(60000.0), k);
+  #elif defined(MASK_APPLY)
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+  #else
+    // Multiply blending: the framebuffer is scaled by this colour.
+    gl_FragColor = vec4(vec3(k), 1.0);
+  #endif
 }
 `;
 
-function contactMaterial(grade, followTerrain) {
+// pass: undefined (multiply), 'min' or 'apply' (the two halves of the tree
+// shadows' mask: see CONTACT_FRAG; people.js blobs do the same).
+function contactMaterial(grade, followTerrain, pass) {
+  const defines = followTerrain ? { FOLLOW_TERRAIN: 1 } : {};
+  if (pass === 'min') defines.MASK_MIN = 1;
+  if (pass === 'apply') defines.MASK_APPLY = 1;
+  const blend = pass === 'min'
+    ? { blending: THREE.CustomBlending, blendEquation: THREE.MinEquation }
+    : pass === 'apply'
+      ? { blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.DstColorFactor, blendDst: THREE.DstAlphaFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.ZeroFactor }
+      : { blending: THREE.MultiplyBlending, premultipliedAlpha: true };
   return new THREE.ShaderMaterial({
     uniforms: {
       ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
@@ -165,11 +185,10 @@ function contactMaterial(grade, followTerrain) {
     },
     vertexShader: CONTACT_VERT,
     fragmentShader: CONTACT_FRAG,
-    defines: followTerrain ? { FOLLOW_TERRAIN: 1 } : {},
+    defines,
     transparent: true,
     depthWrite: false,
-    blending: THREE.MultiplyBlending,
-    premultipliedAlpha: true,
+    ...blend,
     toneMapped: false,
     fog: true,
     polygonOffset: true,
@@ -212,6 +231,7 @@ function instanceSet(geometry, layout, capacity) {
   set.commit = (count) => {
     geometry.instanceCount = count;
     set.mesh && (set.mesh.visible = count > 0);
+    set.twin && (set.twin.visible = count > 0);
     for (const a of Object.values(set.attrs)) {
       a.clearUpdateRanges();
       a.needsUpdate = true;
@@ -343,7 +363,8 @@ export function createDecals(ctx) {
   // Tree blobs.
   const blobGeo = gridGeometry(2);
   const blobSet = instanceSet(blobGeo, [['iCenter', 3], ['iShape', 4]], 16);
-  const blobMesh = new THREE.Mesh(blobGeo, contactMaterial(grade, false));
+  const blobMesh = new THREE.Mesh(blobGeo, contactMaterial(grade, false, 'min'));
+  const blobApply = new THREE.Mesh(blobGeo, contactMaterial(grade, false, 'apply'));
   // Coloured ground.
   const colorGeo = gridGeometry(6);
   const colorSet = instanceSet(colorGeo, [['iCenter', 3], ['iDecal', 4], ['iColor', 3]], 64);
@@ -353,14 +374,18 @@ export function createDecals(ctx) {
   // Coloured ground first, then darkening on top of it.
   colorMesh.renderOrder = 1;
   lotMesh.renderOrder = 1.1;
-  blobMesh.renderOrder = 1.1;
-  for (const m of [colorMesh, lotMesh, blobMesh]) {
+  // The tree shadows' two passes run back to back, after the lots' contact
+  // shadows and before people's blobs (1.5), which use the alpha the same way.
+  blobMesh.renderOrder = 1.12;
+  blobApply.renderOrder = 1.13;
+  for (const m of [colorMesh, lotMesh, blobMesh, blobApply]) {
     m.frustumCulled = false;
     m.castShadow = false;
     group.add(m);
   }
   lotSet.mesh = lotMesh;
   blobSet.mesh = blobMesh;
+  blobSet.twin = blobApply;
   colorSet.mesh = colorMesh;
   lotGeo.instanceCount = 0;
   blobGeo.instanceCount = 0;
@@ -585,6 +610,7 @@ export function createDecals(ctx) {
         m.geometry.dispose();
         m.material.dispose();
       }
+      blobApply.material.dispose();
       aoBake = null;
       setGroundField(null);
       GROUND_AO.uGroundAO.value.set(0, 0);
