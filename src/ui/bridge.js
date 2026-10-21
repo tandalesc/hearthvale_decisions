@@ -3,6 +3,8 @@
 // for files that do not exist yet, so the app builds and runs either way.
 // URL params: ?stub=1 forces the stub sim, ?renderer=stub the stub renderer.
 
+import {realSim, SELECTORS, ACTIONS} from '../sim-api.js';
+
 const simIndex = import.meta.glob('../sim/index.js');
 const simView = import.meta.glob('../sim/view.js');
 const simFixtures = import.meta.glob('../sim/fixtures.js');
@@ -11,12 +13,6 @@ const simRenderView = import.meta.glob('../sim/render-view.js');
 const renderMods = import.meta.glob(['../render/index.js', '../render/world.js', '../render/renderer.js']);
 const factsMods = import.meta.glob('../sim/narrative-facts.js');
 const narratorMods = import.meta.glob('../narrator-client.js');
-
-const SELECTORS = ['selectTopBar', 'selectDocket', 'selectBodies', 'selectRuleBook', 'selectTensions', 'selectFactions',
-  'selectChronicle', 'selectEraProgress', 'selectUnlocks', 'selectInspect',
-  // Optional: later-era surfaces and disasters.
-  'selectEvents', 'selectBudget', 'selectCompass', 'selectEndPreview', 'selectCentres', 'selectApproval', 'selectBudgetSeason', 'selectAdvisers'];
-const ACTIONS = ['rule', 'dissolveBody', 'setIndividualCap', 'strikeBudgetLine', 'approveAllBudgets', 'trimAllToFit', 'hireAdviser', 'dismissAdviser', 'setAdviserMode', 'redrawSlate', 'letStand'];
 
 async function first(globs) {
   for (const load of Object.values(globs)) {
@@ -30,23 +26,7 @@ export async function loadSim(params) {
   const [index, view] = wantStub ? [null, null] : await Promise.all([first(simIndex), first(simView)]);
   if (index?.stepTick && index?.createState && view?.selectDocket) {
     const [fixtures, ser, rv] = await Promise.all([first(simFixtures), first(simSerialize), first(simRenderView)]);
-    const pick = (name, ...mods) => mods.find((m) => typeof m?.[name] === 'function')?.[name];
-    return {
-      kind: 'real',
-      pace: index.PACE ?? 1,
-      createState: index.createState,
-      stepTick: index.stepTick,
-      serialize: pick('serialize', index, ser),
-      restore: pick('restore', index, ser),
-      fixtureState: pick('fixtureState', fixtures, index),
-      loadFixture: pick('loadFixture', index, fixtures),
-      seedCode: pick('seedCode', index),
-      parseSeed: pick('parseSeed', index),
-      createRenderView: pick('createRenderView', rv, index),
-      view: Object.fromEntries(SELECTORS.map((n) => [n, pick(n, view, index)])),
-      actions: Object.fromEntries(ACTIONS.map((n) => [n, pick(n, index, view)])),
-      dev: {},
-    };
+    return realSim({index, view, fixtures, ser, rv});
   }
   const [stub, stubView] = await Promise.all([import('./dev/stub-sim.js'), import('./dev/stub-view.js')]);
   return {
@@ -89,6 +69,8 @@ export async function loadNarrator(simKind) {
     // Kept notes (saved in the town) and background prose for cards.
     peekNote: client.peekNote ?? null,
     noteFor: client.noteFor ?? null,
+    keepNote: client.keepNote ?? null,
+    touchNote: client.touchNote ?? null,
     startProseKeeper: client.startProseKeeper ?? null,
   };
 }

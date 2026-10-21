@@ -85,7 +85,7 @@ test('the dock holds one crest, the Council: a badge for every request, a tip, a
   const errors = await open(page, {fixture: 'city', stub: true});
   await expect(page.locator('.dock .crest-btn')).toHaveCount(1);
   const crest = page.locator('.dock [data-body="council"]');
-  const want = await hv(page, () => window.hearthvale.state().docket.filter((c) => c.kind !== 'report').length);
+  const want = await hv(page, async () => (await window.hearthvale.snapshot()).docket.filter((c) => c.kind !== 'report').length);
   await expect(crest.locator('.badge')).toHaveText(String(want));
   await crest.hover();
   await expect(page.locator('.tip')).toContainText('Council');

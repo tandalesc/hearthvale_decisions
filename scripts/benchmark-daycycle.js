@@ -3,13 +3,19 @@
 // about 6 s, so a few minutes covers dozens of dawns. Every drawn frame is
 // recorded with its phase of day, its animation-frame interval (raf; over 25 ms
 // is a missed frame), the frame callback's CPU split into view sync / world /
-// UI, the sim step (main.js runs it in a task of its own after the frame: read
-// from hearthvale.view().stepMs; on a build without it, the rest of the frame
-// callback), the renderer's per-stage CPU, GPU time
+// UI, the sim step, the renderer's per-stage CPU, GPU time
 // (EXT_disjoint_timer_query_webgl2), whether the shadow map re-rendered and how
 // much mist was drawn. The summary buckets frames by phase and compares dawn and
 // early morning (phase 0.2-0.4) with the rest of the day, and a CPU profile is
 // split the same way (main-thread work between frames counts toward the next).
+//
+// The sim step: with the sim worker (hearthvale.simHost 'worker') it is off this
+// thread, read from each step's reply (host.onStep: the worker's step and view-sync
+// time), and the main thread's share is applying the reply to the render mirror
+// (apply). On the main thread (?simWorker=0) it runs in a task of its own after the
+// frame (host.onStep too; on a build without a host, hearthvale.view().stepMs, and
+// before that the rest of the frame callback).
+// --inline runs the town with ?simWorker=0.
 //
 // node scripts/benchmark-daycycle.js --speed=20 --duration=30000 --dpr=2
 // Options: --quality=high --save=PATH (in place of the city fixture)
@@ -75,10 +81,19 @@ try {
       return r;
     });
   }, quality);
-  await page.goto(`${base}/?fixture=city`);
+  await page.goto(`${base}/?fixture=city${opts.inline ? '&simWorker=0' : ''}`);
   await page.waitForFunction(() => window.hearthvale?.renderer === 'real', null, {timeout: 60000});
-  const initial = await page.evaluate(({quality, speed, distance}) => {
+  const initial = await page.evaluate(async ({quality, speed, distance}) => {
     const h = window.hearthvale, w = h.world, d = window.__day;
+    // Steps answered and mirror applies since the last drawn frame count toward it.
+    d.steps = [];
+    d.applyMs = 0;
+    h.host?.onStep?.((r) => d.steps.push({ms: r.ms, syncMs: r.syncMs ?? 0}));
+    const mirror = h.host?.mirror;
+    if (mirror) {
+      const apply = mirror.apply;
+      mirror.apply = function (...a) { const t = performance.now(); const r = apply.apply(this, a); d.applyMs += performance.now() - t; return r; };
+    }
     w.setQuality(quality);
     w.setBatterySaver('off');
     h.setSpeed(speed);
@@ -97,7 +112,7 @@ try {
     w.update = function (...args) {
       const c = d.cur;
       const v = args[0];
-      if (v && v !== wrappedView) {
+      if (v && v !== wrappedView && typeof v.sync === 'function') {
         wrappedView = v;
         const sync = v.sync;
         v.sync = function (...a) { const t = performance.now(); const r = sync.apply(this, a); if (d.cur) d.cur.sync = performance.now() - t; return r; };
@@ -126,11 +141,23 @@ try {
         c.tris = renderer.info.render.triangles;
         const st = h.view();
         c.stages = st.cpu;
-        c.step = st.stepMs;
+        if (h.host?.onStep) {
+          c.step = d.steps.reduce((x, y) => x + y.ms, 0);
+          c.workerSync = d.steps.reduce((x, y) => x + y.syncMs, 0);
+          c.apply = d.applyMs;
+          c.steps = d.steps.length;
+        } else c.step = st.stepMs;
+        d.steps = [];
+        d.applyMs = 0;
+      } else if (!d.active) {
+        d.steps = [];
+        d.applyMs = 0;
       }
       return r;
     };
-    return {renderer: gl.getParameter(gl.RENDERER), timer: !!tq, people: h.state().people.length, buildings: h.state().buildings.length, tier: w.quality()};
+    // (A build from before the worker has no inSim: same numbers from its live state.)
+    const town = h.inSim ? await h.inSim((s) => ({people: s.people.length, buildings: s.buildings.length})) : {people: h.state().people.length, buildings: h.state().buildings.length};
+    return {renderer: gl.getParameter(gl.RENDERER), timer: !!tq, simHost: h.simHost ?? 'inline', ...town, tier: w.quality()};
   }, {quality, speed, distance: Number(opts.distance ?? 0)});
   if (opts.ab) await page.evaluate((ab) => {
     const w = window.hearthvale.world, {renderer, lights, scene} = w.internals, d = window.__day;
@@ -160,11 +187,13 @@ try {
   writeFileSync(`${out}/${label}.cpuprofile`, JSON.stringify(profile));
   const final = await page.evaluate(() => ({tier: window.hearthvale.world.quality(), reached: window.hearthvale.reachedSpeed()}));
 
-  // The sim step's time: its own task (stepMs), else what the frame callback
-  // spent outside sync, world and UI. main: all main-thread time for the frame.
+  // The sim step's time: its own task or the worker (step), else what the frame
+  // callback spent outside sync, world and UI. main: all main-thread time for the
+  // frame (with the worker: the frame callback and the mirror applies, not the step).
+  const inWorker = initial.simHost === 'worker';
   for (const f of frames) {
     f.sim = f.step ?? f.cpu - f.world - f.sync - f.ui;
-    f.main = f.cpu + (f.step ?? 0);
+    f.main = f.cpu + (inWorker ? f.apply ?? 0 : f.step ?? 0);
   }
   // Bucket by phase of day (0 midnight, 0.5 noon).
   const BUCKETS = 20;
@@ -179,7 +208,7 @@ try {
     rows.push({
       phase: (b / BUCKETS).toFixed(2), n: fs.length,
       rafP95: r2(q(fs.map((f) => f.raf), 0.95)), mainMean: r2(mean(fs.map((f) => f.main))), mainP95: r2(q(fs.map((f) => f.main), 0.95)),
-      simMean: r2(mean(fs.map((f) => f.sim))), syncMean: r2(mean(fs.map((f) => f.sync))), uiMean: r2(mean(fs.map((f) => f.ui))),
+      simMean: r2(mean(fs.map((f) => f.sim))), syncMean: r2(mean(fs.map((f) => f.sync))), uiMean: r2(mean(fs.map((f) => f.ui))), applyMean: r2(mean(fs.map((f) => f.apply ?? 0))),
       worldMean: r2(mean(fs.map((f) => f.world))), gpuMean: r2(mean(gpu)), gpuP95: r2(q(gpu, 0.95)),
       shadow: r2(fs.filter((f) => f.shadow).length / fs.length), mist: r2(fs.filter((f) => f.mist).length / fs.length), mistAmount: r2(mean(fs.map((f) => f.mist))),
       calls: Math.round(mean(fs.map((f) => f.calls))),
@@ -196,7 +225,8 @@ try {
   // Dawn and early morning (phase 0.2-0.4) against the rest of the day.
   for (const [name, fs] of [['dawn', frames.filter((f) => f.phase >= 0.2 && f.phase < 0.4)], ['rest', frames.filter((f) => !(f.phase >= 0.2 && f.phase < 0.4))]]) {
     summary[name] = {frames: fs.length, mainMean: r2(mean(fs.map((f) => f.main))), mainP95: r2(q(fs.map((f) => f.main), 0.95)),
-      simMean: r2(mean(fs.map((f) => f.sim))), worldMean: r2(mean(fs.map((f) => f.world))),
+      simMean: r2(mean(fs.map((f) => f.sim))), simP95: r2(q(fs.map((f) => f.sim), 0.95)), worldMean: r2(mean(fs.map((f) => f.world))),
+      applyMean: r2(mean(fs.map((f) => f.apply ?? 0))), applyP95: r2(q(fs.map((f) => f.apply ?? 0), 0.95)), uiMean: r2(mean(fs.map((f) => f.ui))),
       missed: r2(fs.filter((f) => f.raf > 25).length / (fs.length || 1))};
   }
   if (opts.ab) {
@@ -251,7 +281,7 @@ try {
   console.table(diffTotal);
   // The worst frames, with what they were doing.
   console.table([...frames].sort((a, b) => b.raf - a.raf).slice(0, 12).map((f) => ({
-    raf: r2(f.raf), main: r2(f.main), sim: r2(f.sim), sync: r2(f.sync), ui: r2(f.ui), world: r2(f.world), gpu: r2(f.gpu), phase: r2(f.phase), yearT: r2(f.yearT), shadow: f.shadow, mist: f.mist,
+    raf: r2(f.raf), main: r2(f.main), sim: r2(f.sim), sync: r2(f.sync), apply: r2(f.apply), ui: r2(f.ui), world: r2(f.world), gpu: r2(f.gpu), phase: r2(f.phase), yearT: r2(f.yearT), shadow: f.shadow, mist: f.mist,
   })));
 } finally {
   await browser.close();

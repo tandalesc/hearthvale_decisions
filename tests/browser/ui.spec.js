@@ -23,7 +23,7 @@ test('a hamlet starts minimal and has no build toolbar', async ({page}) => {
 
 test('ruling a card folds it away, spends coin and writes the chronicle', async ({page}) => {
   await open(page, {fixture: 'hamlet', stub: true});
-  const before = await hv(page, () => window.hearthvale.state().stats?.coin ?? window.hearthvale.state().treasury);
+  const before = await hv(page, async () => { const s = await window.hearthvale.snapshot(); return s.stats?.coin ?? s.treasury; });
   await hv(page, () => window.hearthvale.app.openDocket());
   await settle(page);
   const card = page.locator('.dk .card:not(.is-next)').first();
@@ -33,7 +33,7 @@ test('ruling a card folds it away, spends coin and writes the chronicle', async 
   await expect(page.locator('.dk .docket .empty')).toBeVisible();
   // The ruling passes through the notice stack as a happening.
   await expect(page.locator('.notice-minor', {hasText: title.trim()})).toBeAttached();
-  const after = await hv(page, () => window.hearthvale.state().stats?.coin ?? window.hearthvale.state().treasury);
+  const after = await hv(page, async () => { const s = await window.hearthvale.snapshot(); return s.stats?.coin ?? s.treasury; });
   expect(after).toBeLessThan(before);
 });
 
@@ -293,17 +293,17 @@ test('saves restore, and an old save starts a new town with a notice', async ({p
   await page.locator('[data-act="save"]').click();
   await expect(page.locator('.toast')).toContainText('saved');
   // Saves live in IndexedDB now; the reload below proves the round trip.
-  const year = await hv(page, () => window.hearthvale.state().time.year);
+  const year = await hv(page, async () => (await window.hearthvale.snapshot()).time.year);
   await hv(page, () => window.hearthvale.setSpeed(0));
   await page.reload();
   await page.waitForFunction(() => window.hearthvale?.app);
-  expect(await hv(page, () => window.hearthvale.state().time.year)).toBe(year);
+  expect(await hv(page, async () => (await window.hearthvale.snapshot()).time.year)).toBe(year);
 });
 
 test('tapping a building opens the inspector', async ({page}) => {
   await open(page, {fixture: 'town', stub: true});
-  const point = await hv(page, () => {
-    const s = window.hearthvale.state();
+  const point = await hv(page, async () => {
+    const s = await window.hearthvale.snapshot();
     const b = s.buildings.find((x) => {
       const p = window.hearthvale.screenPoint(x.x, x.z);
       return p && p.x > 120 && p.x < 900 && p.y > 140 && p.y < 700 && document.elementFromPoint(p.x, p.y)?.id === 'world';
@@ -391,7 +391,7 @@ test('real sim: fixtures drive the docket, bodies and Rule Book, and rulings lan
   expect(await page.locator('.dk-index [data-page]').count()).toBeGreaterThanOrEqual(4);
   await hv(page, () => window.hearthvale.app.council.close());
   await page.locator('.rail [data-view="rules"]').click();
-  expect(await page.locator('.drawer .rule').count()).toBeGreaterThanOrEqual(5);
+  await expect.poll(() => page.locator('.drawer .rule').count()).toBeGreaterThanOrEqual(5);
   await page.keyboard.press('Escape');
   await hv(page, () => window.hearthvale.app.openDocket());
   await settle(page);
@@ -425,10 +425,10 @@ test('real sim: a fresh town runs at 5× without UI errors', async ({page}) => {
   const errors = await open(page, {paused: false});
   await hv(page, () => window.hearthvale.setSpeed(5));
   // Poll rather than sleep: a busy machine gives the page few frames.
-  await expect.poll(() => hv(page, () => window.hearthvale.state().time.month + window.hearthvale.state().time.year * 12), {timeout: 45000}).toBeGreaterThan(2);
+  await expect.poll(() => hv(page, async () => { const t = (await window.hearthvale.snapshot()).time; return t.month + t.year * 12; }), {timeout: 45000}).toBeGreaterThan(2);
   await hv(page, () => window.hearthvale.setSpeed(0));
   await settle(page);
-  const t = await hv(page, () => window.hearthvale.state().time);
+  const t = await hv(page, async () => (await window.hearthvale.snapshot()).time);
   await expect(page.locator('.topbar .when')).toContainText(`Year ${t.year}`);
   expect(errors).toEqual([]);
 });
@@ -449,7 +449,7 @@ test('starting a new town asks first, then begins at year 0 with a hamlet', asyn
   await page.addInitScript(() => localStorage.setItem('hearthvale-ui', JSON.stringify({moments: 'never'})));
   await open(page, {paused: false, stub: true});
   await hv(page, () => window.hearthvale.setSpeed(5));
-  await expect.poll(() => hv(page, () => window.hearthvale.state().time.year), {timeout: 30000}).toBeGreaterThan(0);
+  await expect.poll(() => hv(page, async () => (await window.hearthvale.snapshot()).time.year), {timeout: 30000}).toBeGreaterThan(0);
   await page.locator('.settings-btn').click();
   await page.locator('[data-act="save"]').click();
   await page.locator('.settings [data-act="new"]').click();
@@ -457,12 +457,12 @@ test('starting a new town asks first, then begins at year 0 with a hamlet', asyn
   await expect(page.locator('.confirm-layer')).toContainText('Start a new town?');
   await page.locator('.confirm-layer [data-act="cancel"]').click();
   await expect(page.locator('.confirm-layer')).toHaveCount(0);
-  expect(await hv(page, () => window.hearthvale.state().time.year)).toBeGreaterThan(0);
+  expect(await hv(page, async () => (await window.hearthvale.snapshot()).time.year)).toBeGreaterThan(0);
   await page.locator('.settings-btn').click();
   await page.locator('.settings [data-act="new"]').click();
   await Promise.all([page.waitForNavigation(), page.locator('.confirm-layer [data-act="start"]').click()]);
   await page.waitForFunction(() => window.hearthvale?.app);
-  expect(await hv(page, () => window.hearthvale.state().time.year)).toBe(0);
+  expect(await hv(page, async () => (await window.hearthvale.snapshot()).time.year)).toBe(0);
   expect(await page.locator('.metric[data-key="people"] .metric-val').textContent()).toBe('28');
 });
 
@@ -472,8 +472,8 @@ test('real sim: tapping a building opens the inspector with a header, a note and
   await page.route('**/api/narrate', (route) => route.abort());
   await open(page, {fixture: 'town'});
   test.skip(await hv(page, () => window.hearthvale.sim) !== 'real', 'real sim not present');
-  const point = await hv(page, () => {
-    const s = window.hearthvale.state();
+  const point = await hv(page, async () => {
+    const s = await window.hearthvale.snapshot();
     for (const b of s.buildings) {
       const p = window.hearthvale.screenPoint(b.x, b.z);
       if (p && p.x > 120 && p.x < 900 && p.y > 140 && p.y < 700 && document.elementFromPoint(p.x, p.y)?.id === 'world') return {x: p.x, y: p.y - 4};

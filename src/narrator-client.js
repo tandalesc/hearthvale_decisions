@@ -241,7 +241,7 @@ function savedNote(state, ref) {
   return (savesNotes(state) ? state.notes[ref] : memoryNotes.get(state)?.get(ref)) ?? null;
 }
 
-function keepNote(state, ref, key, text) {
+export function keepNote(state, ref, key, text) {
   if (savesNotes(state)) { simAction('setEntityNote')(state, ref, {key, text}); return; }
   if (!memoryNotes.has(state)) memoryNotes.set(state, new Map());
   const notes = memoryNotes.get(state);
@@ -250,7 +250,7 @@ function keepNote(state, ref, key, text) {
   while (notes.size > 300) notes.delete(notes.keys().next().value);
 }
 
-function touchNote(state, ref) {
+export function touchNote(state, ref) {
   if (savesNotes(state)) simAction('touchEntityNote')?.(state, ref);
   else {
     const notes = memoryNotes.get(state);
@@ -275,17 +275,24 @@ export function peekNote(state, query) {
   };
 }
 
-export async function noteFor(state, query, {signal, onToken, onMeta, peek = null, client = null, regenerate = false} = {}) {
+// notes: {set(ref, key, text), touch(ref)} to keep notes somewhere else than `state`
+// (the inspector's host, when the town runs in the sim worker; then state is null and
+// peek is required).
+export async function noteFor(state, query, {signal, onToken, onMeta, peek = null, client = null, regenerate = false, notes = null} = {}) {
   const p = peek ?? peekNote(state, query);
   if (!p) return null;
   if (p.saved && !regenerate) {
-    touchNote(state, p.ref);
+    if (notes) notes.touch(p.ref);
+    else touchNote(state, p.ref);
     onMeta?.({source: 'saved'});
     return {text: p.saved.text, source: 'saved', stale: p.status === 'changed', when: p.saved.when, ref: p.ref, key: p.key};
   }
   let source = 'model';
   const text = await (client ?? {narrate}).narrate(p.facts, {signal, onToken, onMeta: (m) => { source = m.source; onMeta?.(m); }});
-  if (source === 'model' || source === 'cache') keepNote(state, p.ref, p.key, text);
+  if (source === 'model' || source === 'cache') {
+    if (notes) notes.set(p.ref, p.key, text);
+    else keepNote(state, p.ref, p.key, text);
+  }
   return {text, source, stale: false, ref: p.ref, key: p.key};
 }
 

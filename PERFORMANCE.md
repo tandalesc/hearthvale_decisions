@@ -1,3 +1,72 @@
+# The sim in a Web Worker (2026-10-21)
+
+**What changed.** The town's state now lives in a dedicated module worker (`src/sim-worker.js`). `stepTick`, the route planner (it starts its navigation worker from there), the decision client, the prose keeper, player actions and saves all run there. The main thread draws a mirrored render view (`src/sim/render-mirror.js`) and UI snapshots (`src/sim-snapshot.js`), so no tick can hold up a frame. Design: `docs/design/sim-worker.md`; the brief it was built from: `docs/handoff-sim-worker.md`.
+
+**Result.** `scripts/benchmark-daycycle.js --speed=20`, High, DPR 2, on an M5 Pro. The baseline is `7380658` (a `git archive` of it, run with this commit's script). Runs alternated base, worker, base, worker; the values below are two runs each. A missed frame is an animation-frame interval over 25 ms. "Main" is all main-thread time for a frame. Before, that was the frame callback plus the sim step. With the worker, it is the frame callback plus applying the step's reply to the mirror.
+
+| | dawn frames missed | long frames / 30 s | dawn main mean | dawn main p95 | rest-of-day main mean | reached |
+|---|---:|---:|---:|---:|---:|---:|
+| city fixture, before | 2 % / 4 % | 7 / 13 | 11.7 / 12.5 ms | 22.3 / 25.8 ms | 6.9 / 7.1 ms | 19.2× / 19.3× |
+| city fixture, worker | 0 % / 1 % | 1 / 2 | 2.6 / 2.6 ms | 5.2 / 5.0 ms | 2.2 / 2.2 ms | 20.0× / 19.7× |
+| year-165 metro, before | 7 % / 12 % | 21 / 36 | 13.0 / 13.8 ms | 24.7 / 28.8 ms | 7.5 / 7.6 ms | 20× / 20× |
+| year-165 metro, worker | 0 % / 0 % | 1 / 1 | 3.0 / 3.0 ms | 8.9 / 9.3 ms | 2.4 / 2.6 ms | 19.7× / 19.8× |
+
+- **The one long frame left** in each worker run is the frame where the CPU profiler starts (phase 0.34). The baseline runs have it too. Main-thread frames over 8 ms that remain are the renderer's own work (`world`): lots re-composed after a year-end restyle, path tiles. The sim takes no main-thread time.
+- **Applying a step's reply to the mirror** takes 0.07–0.08 ms per frame at dawn (p95 0.2 ms). The worker's message handler, apply included, is about 0.1 ms per frame in the CPU profile.
+- **The sim's own time is unchanged.** In the worker it is 8.6–9.5 ms per step at dawn, about what it was on the main thread (8.5–10 ms). The worker's step budget is 30 ms (main thread: 10 ms), and the town reached 19.7–20×.
+- **GPU time is unchanged** (6.2–7.3 ms against 6.0–6.8 ms).
+- **`?simWorker=0`** (the inline fallback, one run): 2 % of dawn frames missed, dawn main 11.9 ms, 19.3×. That is the baseline's numbers, so the snapshot layer costs the inline path nothing measurable.
+- **The 57 ms autosave serialize** on the city now runs in the worker too.
+
+**Simulation output is unchanged.** `scripts/benchmark-city.js --speed=20 --seconds=30` hashes `c0e2092717006adb` (city) and `3448e520a03bcc89` (town) before and after. `tests/sim-worker.test.js` drives the worker module through `worker_threads`, with a synchronous route planner, for 360 frames at 20× (some of them late) on the town and the city. It gets the same `serialize(state)` hash as an inline run of the same frames, done as `main.js` stepped them before.
+
+## How it fits together
+
+1. **One session, two hosts.**
+   - `src/sim-session.js` is one running town: init, step, the view sync, actions, snapshots, saves, notes and the test hooks.
+   - `src/sim-host.js` wraps it in two ways. `createWorkerHost` sends messages to `sim-worker.js`. `createInlineHost` calls the session on the main thread and keeps the old step-after-the-frame task. The inline host is used for `?simWorker=0`, the stub sim, and a worker that fails to start (within 20 s).
+   - The same session code serves both hosts, so they cannot drift apart. `app.js` and `main.js` treat every answer as possibly a Promise.
+2. **Step pacing.**
+   - Each drawn frame posts `{owed, now, speed}`, but only once the last step has been answered. Until then, owed time accumulates, capped at 0.25 s.
+   - A frame never waits: it draws the last mirrored view, and walkers are carried on to the frame's time.
+   - `services.now` and walker row stamps use the main thread's clock, sent in the message. The step budget uses the worker's own clock.
+   - Reached speed is computed from the `ticks` in each reply.
+3. **The render mirror.** It has exactly `createRenderView`'s shape, so `src/render` is unchanged.
+   - Walker rows: the dirty range, as transferred copies.
+   - Buildings: the records in the render view's events, plus any record whose object changed. A round-robin slice of records is also compared field for field, about one full pass a second, which catches changes no event announced. Records are patched in place on stable objects.
+   - Roads: `wear` is compared with a copy every step. `tier`, `planned` and `low` are compared when `roads.version` changes or a cell is dirty. The changed rectangle of each grid is sent and patched into stable arrays.
+   - Small fields every step. `aesthetics` and `landscape` only when their revision changes.
+   - The mirror replaces an object exactly when the sim replaced its own, and patches it otherwise. So the renderer's identity checks (`lot.record !== b`, a new `roads` or `roads.tier`, a new people buffer) fire as they did.
+   - `roads.dirty`, `peopleDirty` and `buildingEvents` are the union of what arrived since the renderer last cleared them. The worker clears the sim's own `roads.dirty` after each sync.
+   - `tests/render-mirror.test.js` checks the mirror against the live view field for field, every frame, through a year end and an era change, along with these identities.
+4. **The UI.**
+   - `doRefresh` asks for one snapshot of every selector it shows. It has one request out at a time and draws what comes back. Views opened while a snapshot was on its way ask for another.
+   - Actions are awaited. The same action is not sent again while one is on its way, so a fast double click rules once.
+   - The inspector reads bundles (`selectInspect`, the narrator's facts, the kept note). `noteFor` writes notes back through the host (`notes.set` and `notes.touch`).
+   - The Council is handed the app's current data when it opens, so a card asked for by id is found before the next snapshot lands.
+5. **Saves and boot.**
+   - Boot creates, restores or loads the fixture in the worker. The worker replies with the terrain, and the main thread calls `useTerrain` before the renderer starts.
+   - The worker serializes saves. The thumbnail, the IndexedDB write, the writer claim and the toasts stay on the main thread.
+   - `pagehide` saves are best effort. The `visibilitychange → hidden` save covers almost every real case.
+6. **Worker death.**
+   - A worker that fails to load falls back to inline.
+   - After start, an uncaught error, or 15 s of silence while steps wait, prompts a ping. No answer within 5 s means the worker is dead: the loop stops, and a notice offers to reopen the town from its last save.
+   - Calls that may run long on purpose (opening a town, a save, test hooks) hold the watchdog off.
+7. **Dev and test hooks.**
+   - `hearthvale.inSim(fn, ...args)` runs `fn`'s source where the town is, with `(state, sim, ...args)`, and returns JSON; `sim.docket` is the docket module.
+   - `hearthvale.snapshot()` is an async clone of the whole state.
+   - `hearthvale.state()` returns the live state only on the inline host.
+   - The eight Playwright specs that touched state use these hooks. `benchmark-daycycle.js` reads the worker's step time from each reply (`host.onStep`) and the mirror's apply time; `--inline` runs `?simWorker=0`.
+   - `benchmark-desktop.js` and `benchmark-longframes.js` read the town through `host.inSim`.
+
+## Remaining
+
+- **Bundle.** The worker bundle is 760 KB: the sim, plus three's math through `sim/outline.js` → `render/kit/compose.js`. The main thread still loads the sim modules for the inline fallback, the renderer's pure imports and the narrator.
+- **UI timing.** UI snapshots are drawn in their own task, not in the frame callback. `benchmark-daycycle.js`'s `ui` column is now near 0; the draw shows in the CPU profile instead.
+- **Building scan.** The round-robin record check costs the worker about one record's `JSON.stringify` per sixtieth of the town per step. If a later change makes the sim announce every record change with `touchBuilding`, this could go.
+
+---
+
 # 20× dawn hitch pass (2026-10-20)
 
 **What the hitch was.** It was not fog, mist or shadows. In seasonal mode the year carries the day (`daylight.js`), so every year opens at dawn, and at 20× a year lasts about 6 s. The first tenth of each year is when the town builds: the year's founding attempts, new homes, the year-end restyles and household moves. Every building placed or reshaped made each walker's route be checked again on the main thread (`people.js checkFootprints`). Through the whole day at 20× the GPU stayed at about 6 ms a frame, and the renderer's CPU at about 3 ms. The sim went from about 4.5 ms a frame to 10–12 ms in the early morning.

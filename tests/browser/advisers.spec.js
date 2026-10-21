@@ -4,14 +4,11 @@
 // answered (Let it stand / Change). Real sim on the city fixture, run on past
 // its first budget season (when the bench opens).
 import {test} from '@playwright/test';
-import {expect, hv, open, regionIssues, settle, smallTargets} from './helpers.js';
+import {expect, hv, inSim, open, regionIssues, settle, smallTargets} from './helpers.js';
 
 async function toBench(page) {
-  await hv(page, async () => {
-    const sim = await import('/src/sim/index.js');
-    const s = window.hearthvale.state();
+  await inSim(page, (s, sim) => {
     for (let i = 0; i < 9000 && !(s.time.year === 93 && s.time.month === 1); i++) sim.stepTick(s, 4, {}, {skipPeople: true});
-    window.hearthvale.app.refresh();
   });
   await settle(page);
   // The bench's notice waits for the year's to go, so the two never crowd the stack.
@@ -23,13 +20,11 @@ async function toBench(page) {
   await settle(page);
 }
 // A plan from the Agricultural Council (land and trade), as a body would bring it.
-const bringPlan = (page, tag) => hv(page, async (t) => {
-  const docket = await import('/src/sim/docket.js');
-  const s = window.hearthvale.state();
+const bringPlan = (page, tag) => inSim(page, (s, sim, t) => {
+  const docket = sim.docket;
   const card = docket.addCard(s, docket.makeCard(s, {kind: 'proposal', from: 'agri-council', templateId: 'seed-exchange', category: 'food',
     title: `A seed exchange (${t})`, why: 'Farmers would swap their best seed.', cost: 40, subjects: [`test:${t}`],
     options: [{key: 'do', label: 'Set it up', tradeoff: 'Small cost.', cost: 40, effects: [{tag: `test:${t}`}]}]}));
-  window.hearthvale.app.refresh();
   return card ? {id: card.id, option: card.advice?.option ?? null, act: !!card.advice?.act} : null;
 }, tag);
 
@@ -61,8 +56,8 @@ test('desktop: the bench opens with one notice; hire from the slate by area; mod
   await expect(card.locator('.adv-seg [aria-pressed="true"]')).toHaveText('Routine');
   await card.locator('.adv-seg [data-mode="all"]').click();
   await expect(card.locator('.adv-seg [aria-pressed="true"]')).toHaveText('All in their area');
-  expect(await hv(page, () => window.hearthvale.state().advisers.seats.find((x) => x.adviserId).mode)).toBe('all');
-  expect(await hv(page, () => window.hearthvale.state().advisers.seats.find((x) => x.adviserId).area)).toBe('land');
+  expect(await inSim(page, (s) => s.advisers.seats.find((x) => x.adviserId).mode)).toBe('all');
+  expect(await inSim(page, (s) => s.advisers.seats.find((x) => x.adviserId).area)).toBe('land');
   expect(await smallTargets(page)).toEqual([]);
   // Dismiss: asked first; cancelling keeps them.
   await card.locator('[data-act="dismiss"]').click();
@@ -74,7 +69,7 @@ test('desktop: the bench opens with one notice; hire from the slate by area; mod
   await page.locator('.confirm-layer [data-act="dismiss"]').click();
   await settle(page);
   await expect(page.locator('.dk-advisers .adv-card.is-candidate').first()).toBeVisible();
-  expect(await hv(page, () => window.hearthvale.state().advisers.roster[0].leftWhy)).toBe('dismissed');
+  expect(await inSim(page, (s) => s.advisers.roster[0].leftWhy)).toBe('dismissed');
   expect(errors).toEqual([]);
 });
 
@@ -82,12 +77,8 @@ test('an advised card: the banner says who answers and why; Let it stand applies
   const errors = await open(page, {fixture: 'city'});
   test.skip(await hv(page, () => window.hearthvale.sim) !== 'real', 'real sim not present');
   await toBench(page);
-  await hv(page, async () => {
-    const sim = await import('/src/sim/index.js');
-    const s = window.hearthvale.state();
-    sim.hireAdviser(s, s.advisers.slate.candidates[0].id, 'land');
-    window.hearthvale.app.notices.dismissAll();
-  });
+  await inSim(page, (s, sim) => { sim.hireAdviser(s, s.advisers.slate.candidates[0].id, 'land'); });
+  await hv(page, () => window.hearthvale.app.notices.dismissAll());
   const one = await bringPlan(page, 'one');
   expect(one.act).toBe(true);
   await hv(page, (id) => window.hearthvale.app.openCouncil({cardId: id}), one.id);
@@ -95,14 +86,14 @@ test('an advised card: the banner says who answers and why; Let it stand applies
   const card = page.locator(`.dk .card[aria-labelledby="t-${one.id}"]`);
   const banner = card.locator('.advice');
   await expect(banner).toBeVisible();
-  const adviser = await hv(page, () => window.hearthvale.state().advisers.roster[0].name);
+  const adviser = await inSim(page, (s) => s.advisers.roster[0].name);
   await expect(banner.locator('b')).toContainText(`${adviser} will`);
   await expect(banner.locator('li').first()).toBeVisible();
   // The Advisers page lists it for review.
   await expect(page.locator('.dk-index [data-page="advisers"] .dk-filter-count')).toHaveText('1');
   await banner.locator('[data-advice="stand"]').click();
-  await expect.poll(() => hv(page, (id) => window.hearthvale.state().docket.some((c) => c.id === id), one.id)).toBe(false);
-  const h1 = await hv(page, (id) => window.hearthvale.state().cardHistory.findLast((c) => c.id === id), one.id);
+  await expect.poll(() => inSim(page, (s, sim, id) => s.docket.some((c) => c.id === id), one.id)).toBe(false);
+  const h1 = await inSim(page, (s, sim, id) => s.cardHistory.findLast((c) => c.id === id), one.id);
   expect(h1.advisedBy).toBeTruthy();
   expect(h1.overruled).toBeFalsy();
   expect(h1.choice).toBe(one.option);
@@ -116,10 +107,10 @@ test('an advised card: the banner says who answers and why; Let it stand applies
   await expect(card2.locator('.advice-change')).toBeVisible();
   const other = two.option === 'do' ? '.minor[data-option="not_now"]' : '.option[data-option="do"]';
   await card2.locator(other).click();
-  await expect.poll(() => hv(page, (id) => window.hearthvale.state().docket.some((c) => c.id === id), two.id)).toBe(false);
-  const h2 = await hv(page, (id) => window.hearthvale.state().cardHistory.findLast((c) => c.id === id), two.id);
+  await expect.poll(() => inSim(page, (s, sim, id) => s.docket.some((c) => c.id === id), two.id)).toBe(false);
+  const h2 = await inSim(page, (s, sim, id) => s.cardHistory.findLast((c) => c.id === id), two.id);
   expect(h2.overruled).toBe(true);
-  expect(await hv(page, () => window.hearthvale.state().advisers.roster[0].stats.changed)).toBe(1);
+  expect(await inSim(page, (s) => s.advisers.roster[0].stats.changed)).toBe(1);
   expect(errors).toEqual([]);
 });
 

@@ -69,10 +69,13 @@ const NAV_VIEWS = ['rules', 'people', 'tensions', 'chronicle', 'places'];
 const NAV_SNAP = {council: 2, rules: 2, chronicle: 2};
 const UNLOCK_NAMES = {places: 'Places', ruleBook: 'The Rule Book', people: 'People', tensions: 'Tensions', overlays: 'The map', bodies: 'Body dashboards', debates: 'Debates', approval: 'Approval'};
 
+// host.ui(req) gives a snapshot of the town (src/sim-snapshot.js), host.inspect(target)
+// the inspector's bundle and host.act(name, ...args) an action's result: at once when
+// the sim runs on this thread, as Promises when it runs in the sim worker. The app
+// never reads the state itself.
 export function createApp(host) {
-  const {sim, prefs, audio} = host;
+  const {prefs, audio} = host;
   let world = host.world;
-  const V = sim.view;
   mountSprite();
 
   const root = h('div.ui', {'data-layout': 'desk', 'data-sheet': '0'});
@@ -87,7 +90,7 @@ export function createApp(host) {
     bodyName: (id) => bodyNames[id] ?? (id === 'moot' ? 'The Council' : titleCase(id)),
     bodyIcon: (id) => bodyIcon({id, kind: data.bodies.find((b) => b.id === id)?.kind}),
     coin: () => data.top?.coin,
-    townName: () => host.state()?.townName ?? null,
+    townName: () => data.townName ?? null,
     reachedSpeed: () => host.reachedSpeed?.() ?? null,
     unlocks: () => data.unlocks,
     sound: (name, arg) => audio?.play(name, arg),
@@ -104,7 +107,13 @@ export function createApp(host) {
     toggleMute: () => prefs.set('muted', !prefs.get('muted')),
     openEraPopover: (anchor, place = 'above') => openPopover(anchor, eraContent(data.era), {label: 'Toward the next age', place}),
     focusDocket,
-    inspect: (pick) => M.inspect(safe(() => V.selectInspect?.(host.state(), pick), null)),
+    // The inspector's bundle for a pick: {model, facts, peek}, or a Promise of it.
+    loadInspect: (pick) => {
+      const b = host.inspect(pick);
+      return typeof b?.then === 'function' ? b.then(inspectOf, () => null) : inspectOf(b);
+    },
+    // The bundle the last refresh brought for this pick, or null.
+    inspected: (pick) => (data.inspect && sameTarget(data.inspect.target, pick) ? inspectOf(data.inspect) : null),
     focusWorld: (at) => world?.focus?.(at, 900),
     openBody: (id) => openCouncil({page: id}),
     openPlaces: () => (layout === 'phone' ? setPhoneTab('places') : setDrawer('places')),
@@ -114,7 +123,7 @@ export function createApp(host) {
     moreChronicle: () => { chronicleLimit += CHRONICLE_PAGE * 2; refresh(true); },
     onInspectorChange: (open) => onInspectorChange(open),
     narrator: host.narrator ?? null,
-    state: () => host.state(),
+    notes: host.notes ?? null,
     canFollow: () => typeof world?.follow === 'function',
     follow: (pick) => world?.follow?.(pick.personId),
   };
@@ -169,6 +178,9 @@ export function createApp(host) {
       toggleClass(root, 'council-open', true);
       audio?.play('slide');
       if (layout === 'phone' && (phoneTab !== 'council' || sheet.index === 0)) setPhoneTab('council', NAV_SNAP.council);
+      // Open on what the app has now; the snapshot asked for next (from the worker,
+      // a moment later) brings the Rule Book's areas and anything newer.
+      feedCouncil();
       refresh(true);
     },
     onClose: () => {
@@ -188,7 +200,7 @@ export function createApp(host) {
     renderStats: () => safe(() => world?.stats?.(), null),
     power: () => safe(() => world?.power?.(), null),
     simMs: () => host.simMs(),
-    getIndividualCap: () => host.state()?.settings?.individualCap ?? 2000,
+    getIndividualCap: () => data.individualCap ?? 2000,
     setIndividualCap: (v) => host.setIndividualCap(v),
     save: (manual) => host.save(manual),
     exportSave: () => host.exportSave(),
@@ -459,26 +471,45 @@ export function createApp(host) {
   }
 
   // ---------- actions ----------
+  // An action runs where the town is, and its result may come back later. The same
+  // action is not sent again while one is on its way, so a fast double click cannot
+  // rule twice.
+  const inFlight = new Set();
+  function act(name, args, then) {
+    const key = JSON.stringify([name, ...args]);
+    if (inFlight.has(key)) return;
+    const result = host.act(name, ...args);
+    if (typeof result?.then !== 'function') return then(result);
+    inFlight.add(key);
+    result.then((r) => { inFlight.delete(key); then(r); }, (err) => {
+      inFlight.delete(key);
+      console.warn('[hearthvale] action failed', err);
+      then({ok: false, text: 'That could not be done just now.'});
+    });
+  }
+
   // Budgets: strike a plan line, or answer the whole season at once.
   function onBudget(name, ...args) {
-    const result = host.act(name, ...args);
-    if (result && result.ok === false) {
-      notices.toast(M.actionError(result));
-      return;
-    }
-    audio?.play(name === 'strikeBudgetLine' ? 'tick' : 'chime');
-    refresh(true);
+    act(name, args, (result) => {
+      if (result && result.ok === false) {
+        notices.toast(M.actionError(result));
+        return;
+      }
+      audio?.play(name === 'strikeBudgetLine' ? 'tick' : 'chime');
+      refresh(true);
+    });
   }
 
   // Advisers: hire, mode, see others, let an answer stand.
   function onAdviser(name, ...args) {
-    const result = host.act(name, ...args);
-    if (result && result.ok === false) {
-      notices.toast(M.actionError(result));
-      return;
-    }
-    audio?.play(name === 'setAdviserMode' ? 'tick' : 'chime');
-    refresh(true);
+    act(name, args, (result) => {
+      if (result && result.ok === false) {
+        notices.toast(M.actionError(result));
+        return;
+      }
+      audio?.play(name === 'setAdviserMode' ? 'tick' : 'chime');
+      refresh(true);
+    });
   }
 
   function confirmDismissAdviser(adviser) {
@@ -486,28 +517,28 @@ export function createApp(host) {
     confirmDialog({
       title: `Dismiss ${adviser.name}?`,
       text: `They are paid half a year's salary (${Math.round(adviser.salary / 2)} coin). The answers they have staged come back to you, and a new slate is drawn.${adviser.standing >= 60 ? ` They are well thought of: the ${adviser.trade === 'farm' ? 'farmers' : 'people of their trade'} will be sore.` : ''}`,
-      actions: [{id: 'dismiss', label: 'Dismiss them', kind: 'danger', run: () => {
-        const result = host.act('dismissAdviser', adviser.id);
+      actions: [{id: 'dismiss', label: 'Dismiss them', kind: 'danger', run: () => act('dismissAdviser', [adviser.id], (result) => {
         if (result?.ok === false) return notices.toast(M.actionError(result));
         notices.toast(`${adviser.name} is dismissed.`);
         refresh(true);
-      }}],
+      })}],
     });
   }
 
   function onRule(card, option) {
-    const result = host.act('rule', card.id, option.key);
-    if (result && result.ok === false) {
-      notices.toast(M.actionError(result));
-      return;
-    }
-    audio?.play(card.kind === 'report' ? 'tick' : 'chime');
-    refresh(true);
+    act('rule', [card.id, option.key], (result) => {
+      if (result && result.ok === false) {
+        notices.toast(M.actionError(result));
+        return;
+      }
+      audio?.play(card.kind === 'report' ? 'tick' : 'chime');
+      refresh(true);
+    });
   }
 
   // ---------- growth, moments, nudges ----------
   let passSpeed = 0;
-  function detectChanges(state) {
+  function detectChanges() {
     const {unlocks, bodies, top, cards} = data;
     passSpeed = momentPaused || host.speed();
     if (prevUnlocks) {
@@ -524,7 +555,7 @@ export function createApp(host) {
     prevUnlocks = {...unlocks};
 
     if (prevEra != null && top.era > prevEra) {
-      showMoment({eyebrow: `A new age · ${ERA_NAMES[top.era]}`, title: `Hearthvale is a ${top.eraName?.toLowerCase() ?? 'new place'} now`, text: lastMoment(state) ?? 'The town has grown into a new age.', icon: 'spark', sound: 'fanfare', camera: true});
+      showMoment({eyebrow: `A new age · ${ERA_NAMES[top.era]}`, title: `Hearthvale is a ${top.eraName?.toLowerCase() ?? 'new place'} now`, text: lastMoment() ?? 'The town has grown into a new age.', icon: 'spark', sound: 'fanfare', camera: true});
     }
     prevEra = top.era;
 
@@ -663,7 +694,7 @@ export function createApp(host) {
     }
   }
 
-  function lastMoment(state) {
+  function lastMoment() {
     const e = [...data.chronicle].reverse().find((x) => x.kind === 'moment');
     return e?.text;
   }
@@ -739,55 +770,114 @@ export function createApp(host) {
   applyPrefs();
 
   // ---------- refresh ----------
+  // A refresh asks the host for a snapshot of everything it shows (host.ui) and draws
+  // it: at once on the inline host, when it comes from the sim worker. One request is
+  // out at a time; a forced refresh asked for meanwhile follows it.
   let lastRefresh = -Infinity, frameView = null, refreshing = false, again = false;
+  let asking = false, askAgain = false;
+  // Waiting for the next drawn snapshot (app.refresh()'s Promise).
+  let drawWaiters = [];
+  function nextDraw() {
+    if (!asking && !askAgain && !refreshing) return Promise.resolve();
+    return new Promise((resolve) => drawWaiters.push(resolve));
+  }
+  function settleDraw() {
+    if (asking || askAgain) return;
+    const w = drawWaiters;
+    drawWaiters = [];
+    for (const fn of w) fn();
+  }
 
   // Moments pause the town, and setSpeed asks for a refresh; never nest one
   // refresh inside another (change detection would run twice).
   function refresh(force) {
+    exclusive(() => doRefresh(force));
+  }
+
+  function exclusive(fn) {
     if (refreshing) {
       again = true;
       return;
     }
     refreshing = true;
     try {
-      doRefresh(force);
+      fn();
     } finally {
       refreshing = false;
     }
     if (again) {
       again = false;
       queueMicrotask(() => refresh(true));
-    }
+    } else settleDraw();
   }
 
   function doRefresh(force) {
     const now = performance.now();
+    if (asking) {
+      if (force) askAgain = true;
+      return;
+    }
     if (!force && now - lastRefresh < REFRESH_MS) return;
     lastRefresh = now;
-    const state = host.state();
-    if (!state) return;
-    const top = M.top(safe(() => V.selectTopBar(state), data.top ?? {}));
-    const unlocks = safe(() => V.selectUnlocks(state), {chronicle: true, docket: true});
-    const cards = (safe(() => V.selectDocket(state), []) ?? []).map(M.card);
-    const bodies = (safe(() => V.selectBodies(state), []) ?? []).filter((b) => b.status !== 'dissolved').map(M.body);
+    const factions = now - factionsAt > 2000;
+    if (factions) factionsAt = now;
+    const req = {recent: RECENT_LINES, factions, want: wantedViews(), chronicleLimit, inspect: inspector.open ? inspector.target : null};
+    const reply = host.ui(req);
+    if (typeof reply?.then !== 'function') {
+      if (reply) draw(reply);
+      return;
+    }
+    asking = true;
+    reply.then((snap) => {
+      asking = false;
+      if (snap) exclusive(() => draw(snap));
+      if (askAgain) {
+        askAgain = false;
+        refresh(true);
+      }
+      settleDraw();
+    }, (err) => {
+      asking = false;
+      settleDraw();
+      if (!safe.warned) { safe.warned = true; console.warn('[hearthvale] the town did not answer', err); }
+    });
+  }
+
+  // The views on screen, for the snapshot: the drawer's (or the sheet's), the Council's
+  // page, and the Rule Book's categories while the Council or the Rule Book is shown.
+  function wantedViews() {
+    const phone = layout === 'phone';
+    const visible = phone ? [phoneTab] : [activeDrawer].filter(Boolean);
+    const councilShown = council.isOpen || (phone && phoneTab === 'council');
+    if (councilShown && council.page) visible.push(council.page);
+    if (councilShown && !visible.includes('rules')) visible.push('rules');
+    return visible;
+  }
+
+  function draw(snap) {
+    const now = performance.now();
+    const top = M.top(snap.top ?? data.top ?? {});
+    const unlocks = snap.unlocks ?? {chronicle: true, docket: true};
+    const cards = (snap.docket ?? []).map(M.card);
+    const bodies = (snap.bodies ?? []).filter((b) => b.status !== 'dissolved').map(M.body);
     if (!bodies.some((b) => b.id === 'moot')) bodies.unshift({id: 'moot', kind: 'moot', name: 'The Council', metrics: [], rules: []});
-    const eraRaw = safe(() => V.selectEraProgress(state), null);
+    const eraRaw = snap.eraProgress ?? null;
     const era = M.era(eraRaw && {...eraRaw, year: eraRaw.year ?? top.year, floorYear: eraRaw.floorYear ?? (Number.isFinite(eraRaw.yearsToFloor) && eraRaw.yearsToFloor > 0 ? top.year + eraRaw.yearsToFloor : undefined)});
-    const chronicle = M.chronicle(safe(() => V.selectChronicle(state, {limit: RECENT_LINES}), []) ?? []);
-    const events = safe(() => V.selectEvents?.(state), []) ?? [];
-    const centres = safe(() => V.selectCentres?.(state), null);
+    const chronicle = M.chronicle(snap.chronicle ?? []);
+    const events = snap.events ?? [];
+    const centres = snap.centres ?? null;
     const liveCentres = (centres?.centres ?? []).filter((c) => !c.mergedInto);
     if (unlocks.places == null) unlocks.places = liveCentres.length >= 2;
     bodyNames = Object.fromEntries(bodies.map((b) => [b.id, b.name]));
-    if (now - factionsAt > 2000) {
-      factionsAt = now;
-      factionNames = Object.fromEntries((safe(() => V.selectFactions(state), []) ?? []).map((f) => [f.id, f.name]));
-    }
-    const season = unlocks.budgets ? safe(() => V.selectBudgetSeason?.(state), null) : null;
-    const advisers = unlocks.advisers ? safe(() => V.selectAdvisers?.(state), null) : null;
-    data = {top, unlocks, cards, bodies, era, chronicle, events, centres, season, advisers, here: liveCentres.length >= 2 ? centreUnderCamera(liveCentres) : null};
+    if ('factions' in snap) factionNames = Object.fromEntries((snap.factions ?? []).map((f) => [f.id, f.name]));
+    const season = unlocks.budgets ? snap.season ?? null : null;
+    const advisers = unlocks.advisers ? snap.advisers ?? null : null;
+    data = {
+      top, unlocks, cards, bodies, era, chronicle, events, centres, season, advisers, here: liveCentres.length >= 2 ? centreUnderCamera(liveCentres) : null,
+      townName: snap.townName ?? null, individualCap: snap.individualCap ?? null, inspect: snap.inspect ?? null,
+    };
 
-    detectChanges(state);
+    detectChanges();
     topbar.update(top, unlocks, data.here ? liveCentres.find((c) => c.id === data.here) : null);
     const timeData = {speed: host.speed(), top, era, muted: prefs.get('muted')};
     if (layout === 'phone') peekTime.update(timeData); else stripTime.update(timeData);
@@ -795,23 +885,45 @@ export function createApp(host) {
     passHappenings(chronicle);
     renderRail();
     renderNav();
-    updateViews(state);
+    updateViews(snap);
     inspector.refresh();
     const uNight = world?.internals?.grade?.uniforms?.uNight?.value;
     nightBeat = prefs.get('dayCycle') !== 'off' && (Number.isFinite(uNight) ? uNight > 0.5 : (frameView?.time?.yearT ?? 0) > 0.965);
     applyTheme();
     updateInsets();
     syncLabels();
+    const sound = snap.audio ?? {};
     audio?.update({
-      season: top.season, night: nightBeat ? 1 : 0, wind: Math.hypot(...(state.weather?.wind ?? [0.3, 0])),
-      population: top.people, festival: (state.worldEvents ?? []).some((e) => e.kind === 'festival' || e.kind === 'market'),
-      building: (state.projects ?? []).length, running: host.speed() > 0,
-      yearT: frameView?.time?.yearT, era: top.era, rain: state.weather?.rain, snow: state.weather?.snow,
+      season: top.season, night: nightBeat ? 1 : 0, wind: Math.hypot(...(sound.wind ?? [0.3, 0])),
+      population: top.people, festival: Boolean(sound.festival),
+      building: sound.building ?? 0, running: host.speed() > 0,
+      yearT: frameView?.time?.yearT, era: top.era, rain: sound.rain, snow: sound.snow,
       centres: liveCentres, world,
     });
   }
 
-  function updateViews(state) {
+  // Views the snapshot did not bring (opened while it was on its way) keep what they
+  // show, and a new snapshot is asked for.
+  // The Council's data: the last snapshot's cards and bodies, and the areas with their
+  // rules from the last snapshot that brought the Rule Book.
+  let councilCats = [];
+  function feedCouncil() {
+    council.update({
+      cards: data.cards,
+      bodies: data.bodies,
+      cats: councilCats,
+      phone: layout === 'phone',
+      unlockedRules: Boolean(data.unlocks.ruleBook),
+      unlocks: data.unlocks,
+      fresh,
+      season: data.season,
+      advisers: data.advisers,
+    });
+  }
+
+  function updateViews(snap) {
+    const panels = snap.panels ?? {};
+    const brought = new Set(snap.want ?? []);
     const phone = layout === 'phone';
     const visible = phone ? [phoneTab] : [activeDrawer].filter(Boolean);
     // The Council shows one body's page at a time (the Town Council's too);
@@ -822,51 +934,45 @@ export function createApp(host) {
     const needRules = visible.includes('rules') || councilShown;
     // The Rule Book view lists rules in force; the Council names every open area.
     let allCats = [];
-    if (needRules) {
-      const raw = safe(() => V.selectRuleBook(state), []) ?? [];
+    if (needRules && brought.has('rules')) {
+      const raw = panels.ruleBook ?? [];
       rules = M.ruleBook(raw);
       allCats = raw.filter((c) => c.open !== false).map((c) => ({id: c.id, name: c.name ?? c.title}));
     }
-    if (councilShown) {
+    if (councilShown && brought.has('rules')) {
       // Area names for every category the cards use, with the rules in force.
       const inForce = new Map((rules ?? []).map((c) => [c.id, c]));
-      council.update({
-        cards: data.cards,
-        bodies: data.bodies,
-        cats: allCats.map((c) => ({...c, policies: inForce.get(c.id)?.policies ?? []})),
-        phone,
-        unlockedRules: Boolean(data.unlocks.ruleBook),
-        unlocks: data.unlocks,
-        fresh,
-        season: data.season,
-        advisers: data.advisers,
-      });
+      councilCats = allCats.map((c) => ({...c, policies: inForce.get(c.id)?.policies ?? []}));
+      feedCouncil();
       fresh.delete(`body:${council.page}`);
     }
     // Closed, the Chronicle starts again from its latest page.
     if (!visible.includes('chronicle')) chronicleLimit = CHRONICLE_PAGE;
+    let missing = false;
     for (const id of visible) {
       if (id === 'council') continue;
+      if (id !== 'places' && !brought.has(id)) { missing = true; continue; }
       if (id === 'rules') views.rules.update(rules);
       else if (id === 'people') {
-        views.people.update(data.top, safe(() => V.selectFactions(state), []) ?? [], {
-          show: data.unlocks.compass, compass: data.unlocks.compass ? safe(() => V.selectCompass?.(state), null) : null,
-          showApproval: Boolean(data.unlocks.approval), approval: data.unlocks.approval ? safe(() => V.selectApproval?.(state), null) : null,
+        views.people.update(data.top, panels.factions ?? [], {
+          show: data.unlocks.compass, compass: data.unlocks.compass ? panels.compass ?? null : null,
+          showApproval: Boolean(data.unlocks.approval), approval: data.unlocks.approval ? panels.approval ?? null : null,
         });
       }
       else if (id === 'chronicle') {
-        const lines = M.chronicle(safe(() => V.selectChronicle(state, {limit: chronicleLimit}), []) ?? []);
-        const total = state.chronicle?.entries?.length ?? lines.length;
-        views.chronicle.update(lines, {show: data.unlocks.endPreview, summary: data.unlocks.endPreview ? safe(() => V.selectEndPreview?.(state), null) : null, centres: (data.centres?.centres ?? []).filter((c) => !c.mergedInto).map((c) => ({id: c.id, name: c.name})), earlier: total > lines.length});
+        const lines = M.chronicle(panels.chronicle ?? []);
+        const total = panels.chronicleTotal ?? lines.length;
+        views.chronicle.update(lines, {show: data.unlocks.endPreview, summary: data.unlocks.endPreview ? panels.endPreview ?? null : null, centres: (data.centres?.centres ?? []).filter((c) => !c.mergedInto).map((c) => ({id: c.id, name: c.name})), earlier: total > lines.length});
       }
-      else if (id === 'tensions') views.tensions.update(M.tensions(safe(() => V.selectTensions(state), [])));
+      else if (id === 'tensions') views.tensions.update(M.tensions(panels.tensions ?? []));
       else if (id === 'places') views.places.update(data.centres, data.here);
       else {
         const body = data.bodies.find((b) => b.id === id);
-        const purse = id === 'moot' && data.unlocks.budget ? safe(() => V.selectBudget?.(state), null) : null;
+        const purse = id === 'moot' && data.unlocks.budget ? panels.budget ?? null : null;
         if (body) bodyView(id).update(body, {cards: data.cards, unlocks: data.unlocks, purse});
       }
     }
+    if (missing || (needRules && !brought.has('rules'))) queueMicrotask(() => refresh(true));
     if (councilShown) council.fit();
   }
 
@@ -980,13 +1086,12 @@ export function createApp(host) {
     confirmDialog({
       title: `Dissolve ${name}?`,
       text: `It will stop bringing you plans. Its rules stay in force.${body.power >= 0.5 ? ' It has many backers, and they will be angry.' : ''}`,
-      actions: [{id: 'dissolve', label: 'Dissolve it', kind: 'danger', run: () => {
-        const result = host.act('dissolveBody', bodyId);
+      actions: [{id: 'dissolve', label: 'Dissolve it', kind: 'danger', run: () => act('dissolveBody', [bodyId], (result) => {
         if (result === false || result?.ok === false) return notices.toast(M.actionError(result));
         notices.toast(`${cap(name)} is no more.`);
         council.setPage('moot');
         refresh(true);
-      }}],
+      })}],
     });
   }
 
@@ -1081,7 +1186,12 @@ export function createApp(host) {
       frameView = view ?? frameView;
       refresh(false);
     },
-    refresh: () => refresh(true),
+    // Resolves once the town as it is now is drawn (at once on the inline host).
+    refresh: () => {
+      if (asking) askAgain = true;
+      else refresh(true);
+      return nextDraw();
+    },
     setWorld(next) {
       world = next;
       labelsShown = null;
@@ -1107,6 +1217,15 @@ export function createApp(host) {
     sheet,
     settings,
   };
+}
+
+// The inspector's bundle with the selector's model mapped for the header.
+function inspectOf(b) {
+  return b ? {model: M.inspect(b.model ?? null), facts: b.facts ?? null, peek: b.peek ?? null} : null;
+}
+
+function sameTarget(a, b) {
+  return Boolean(a && b) && (a.personId ?? null) === (b.personId ?? null) && (a.buildingId ?? null) === (b.buildingId ?? null);
 }
 
 function safe(fn, fallback) {

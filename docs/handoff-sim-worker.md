@@ -1,5 +1,7 @@
 # Handoff: run the simulation in a Web Worker
 
+> **Done** (2026-10-21). Built as described below; see PERFORMANCE.md, "The sim in a Web Worker", for the results and how the pieces fit.
+
 **Task: build it.** Move the simulation step off the main thread so that no sim tick can delay a rendered frame. This is an implementation task, not a design task. A design already exists (below). Write code and ship it working.
 
 ## Why
