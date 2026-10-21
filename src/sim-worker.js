@@ -15,6 +15,10 @@ import * as docket from './sim/docket.js';
 import {narrativeFacts} from './sim/narrative-facts.js';
 import {peekNote, keepNote, touchNote, startProseKeeper} from './narrator-client.js';
 import {createDecisionClient} from './decision-client.js';
+// Static, never import(): a chunk split off this worker imports its shared code back
+// from the worker's own file, and Safari then runs that file a second time in the same
+// worker, whose second copy (session null) takes over the messages.
+import {createRoutePlanner} from './route-planner.js';
 import {realSim} from './sim-api.js';
 import {createSimSession} from './sim-session.js';
 import {createMirrorSource} from './sim/render-mirror.js';
@@ -32,7 +36,6 @@ const ops = {
   async setup(opts = {}) {
     let routes = null;
     try {
-      const {createRoutePlanner} = await import('./route-planner.js');
       routes = createRoutePlanner({
         worker: opts.routes?.worker ?? true,
         // A clock that never advances: each tick runs its full slice cap (tests).
