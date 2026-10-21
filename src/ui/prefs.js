@@ -9,6 +9,7 @@ export const DEFAULT_PREFS = {
   batterySaver: 'off',      // off | battery (when unplugged) | always
   dayCycle: 'seasonal',     // seasonal | slow | off
   peopleShadows: 'blob',    // blob: soft sun-aware blobs | full: walkers also cast real shadows
+  treeShadows: 'soft',      // soft: sun-aware ground shadows | detailed: trees in the shadow map (Low: blobs)
   motion: 'full',           // full | reduced
   theme: 'auto',            // auto | light | night
   textSize: 'normal',       // normal | large

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { patchMaterial, NOISE, GRADE_HEAD, MICRO_ARB } from '../shaderlib.js';
 import { GROUND_GLSL } from '../ground.js';
-import { CROP_GLSL } from './crops.js';
+import { CROP_GLSL, FIELD_ROWS } from './crops.js';
 
 // The building material: Lambert, patched so every face picks its colour
 // family from aPart and the instance colours, and walls draw analytic
@@ -31,10 +31,19 @@ const VERTEX_OFFSET = /* glsl */ `
   #ifdef CROP_PIECE
     // What grows in this row now (crops.js): its height and width.
     gCrop = cropNow(position, iStyle.z, iStyle.x, iParams.w);
-    metric.y *= gCrop.h;
-    metric.z *= gCrop.w;
+    if (aPartAO.x > 6.5 && aPartAO.x < 7.5) {
+      // A row keeps to its own lane, never wider than the gap to the next, so
+      // neighbouring ridges never cross at a shallow angle (they flickered at
+      // low heights). Its foot is tucked just under the bed, and an empty row
+      // (cut, ploughed, lifted) sinks out of sight instead of lying flat on
+      // the soil, where the two surfaces fought.
+      float lane = 0.46 * iScale.z / ${FIELD_ROWS.toFixed(1)};
+      metric.z = clamp(metric.z * gCrop.w, -lane, lane);
+      metric.y = gCrop.h < 0.05 ? -0.12 : aMetric.y > 0.0 ? metric.y * gCrop.h : -0.02;
+    }
     vCropFlower = vec4(gCrop.flowerCol, gCrop.flower);
     vCropH = gCrop.h;
+    vCropId = gCrop.id;
   #endif
   #ifdef ROTOR
     // Windmill sails turn about the hub (local z axis), speed by wind.
@@ -47,7 +56,7 @@ const VERTEX_OFFSET = /* glsl */ `
     // Drape: every field vertex sits on the shared ground height (the same
     // texture the terrain mesh uses), lifted by its crop height.
     vec3 wposC = (instanceMatrix * vec4(transformed, 1.0)).xyz;
-    float gy = groundHeight(wposC.xz) + metric.y + 0.03;
+    float gy = groundHeight(wposC.xz) + metric.y + 0.05;
     transformed.y = (gy - instanceMatrix[3].y) / max(iScale.y, 1e-4);
   #endif
   #ifdef DETAIL_PIECE
@@ -414,6 +423,22 @@ const FRAGMENT_COLOR = /* glsl */ `
   } else if (part > 6.5 && part < 7.5) {
     col *= 0.85 + 0.25 * vnoise(vLocal.xz * 0.9 + seed * 11.0);
     #ifdef CROP_PIECE
+      // Plants, not a smooth ridge: stalks across grain rows with paler ears
+      // at the top, leafy clumps in roots, greens and clover, fine flecks in a
+      // sward; every row darker at its foot, where the leaves shade the soil.
+      float relH = clamp(vLocal.y / max(0.42 * vCropH, 0.04), 0.0, 1.0);
+      float cid = floor(vCropId + 0.5);
+      if (cid < 1.5 || cid > 3.5 && cid < 4.5) {
+        float stalk = abs(fract(vLocal.x * 7.0 + vnoise(vLocal.xz * 3.0) * 0.8) - 0.5) * 2.0;
+        col *= 0.84 + 0.16 * smoothstep(0.15, 0.45, stalk);
+        col = mix(col, col * 1.16 + vec3(0.035, 0.028, 0.0), smoothstep(0.62, 0.95, relH));
+      } else if (cid < 6.5) {
+        float leaf = vnoise(vLocal.xz * 9.0 + vec2(vLocal.y * 6.0, seed * 13.0));
+        col *= 0.78 + 0.34 * smoothstep(0.2, 0.75, leaf);
+      } else {
+        col *= 0.9 + 0.2 * hash12(floor(vLocal.xz * 24.0));
+      }
+      col *= 0.72 + 0.28 * smoothstep(0.0, 0.55, relH);
       // Flowers: specks over the share of the crop in bloom (all of a
       // rapeseed field at its peak, a scatter of clover or buttercups).
       float bloom = vnoise(vLocal.xz * 14.0 + seed * 7.0);
@@ -449,6 +474,7 @@ const CROP_VARYINGS = /* glsl */ `
 #ifdef CROP_PIECE
 varying vec4 vCropFlower;
 varying float vCropH;
+varying float vCropId;
 #endif
 `;
 
@@ -476,6 +502,9 @@ export function createKitMaterials(grade, { variant = '', shared } = {}) {
   if (variant.includes('detail')) defines.DETAIL_PIECE = 1;
 
   const material = new THREE.MeshLambertMaterial({ color: 0xffffff, side: variant.includes('double') ? THREE.DoubleSide : THREE.FrontSide });
+  // Fields lie a few centimetres over the terrain: pulled toward the eye in
+  // depth as well, so the ground never flickers through the soil bed.
+  if (defines.CROP_PIECE) Object.assign(material, { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
   patchMaterial(material, grade, {
     key: `kit:${variant}`,
     defines,

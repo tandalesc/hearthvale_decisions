@@ -44,10 +44,12 @@ struct Crop {
   vec3 soil;        // the bed between them
   float flower;     // share of the rows in flower (fragment specks)
   vec3 flowerCol;
+  float id;         // the crop (cropOf), for the plants' look in the fragment
 };
 Crop gCrop;
 varying vec4 vCropFlower; // rgb flower colour, a: share in flower
 varying float vCropH;
+varying float vCropId;
 
 float cropHash(float a, float b) { return fract(sin(a * 127.1 + b * 311.7) * 43758.5453); }
 float rampC(float a, float b, float t) { return smoothstep(a, b, t); }
@@ -185,6 +187,7 @@ Crop cropNow(vec3 position, float kind, float era, float seed) {
   float bump = mod(k, 2.0);
   float crop = cropOf(kind, era, seed, row, year);
   Crop c = cropAt(crop, t, stook, bump, rowSeed, seed, era);
+  c.id = crop;
   // A sward sown this spring (after another crop) comes up rather than appearing.
   if (sward(crop) && crop < 6.5 && cropOf(kind, era, seed, row, year - 1.0) != crop) c.h *= rampC(0.0, 0.1, t);
   float winter = rampC(0.76, 0.8, t);

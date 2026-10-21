@@ -6,9 +6,11 @@ import { GROUND_AO, GROUND_AO_GLSL, bakeOcclusionSteps, setGroundField, aoDayFac
 // Ground decals (design-visual §3.3, §6): what sells "sitting on the table".
 //   1. Contact shadows under every building (multiply blend, terrain-following
 //      grid so slopes never show a floating edge).
-//   2. Contact blobs under every tree (multiply blend, one flat quad each).
-//      On High the denser-woods trees, which skip the shadow map, draw a
-//      soft cast shadow here instead: an ellipse thrown away from the sun.
+//   2. Tree shadows (multiply blend, one flat quad each), one kind for every
+//      tree by the tree-shadow mode (setTreeShadows): 'blob' (Low) a round
+//      contact blob; 'soft' (Medium and High) a soft cast shadow, an ellipse
+//      thrown away from the sun with a darker core under the trunk; 'detailed'
+//      a faint contact blob only, since the trees draw into the shadow map.
 //   3. Coloured ground: park lawns with gravel paths, flower gardens for
 //      wealthy homes, dirt-and-plank yards around construction (lit Lambert).
 // Three draw calls. Instances are rebuilt only when lots change, and so is
@@ -41,6 +43,9 @@ varying vec2 vLocal;
 varying vec2 vHalf;
 varying float vStrength;
 varying float vFogDepth;
+varying vec3 vCore; // a cast shadow's contact core: offset from the trunk over its radius, strength
+varying float vCast;   // 1: a tree's cast shadow (capsule), 0: a round contact blob
+varying vec2 vCapsule; // the cast capsule: half its spine, radius
 ${HEIGHT_GLSL}
 void main() {
   #ifdef FOLLOW_TERRAIN
@@ -54,19 +59,29 @@ void main() {
     vec3 world = vec3(iCenter.x + local.x, iCenter.y + 0.06, iCenter.z + local.y);
     float castK = step(iShape.z, 0.0);
     vec2 halfV = iShape.xy;
+    vCore = vec3(0.0);
+    vCast = 0.0;
     if (castK > 0.5) {
-      // A tree that does not draw into the shadow map (the denser woods on
-      // High): its crown's shadow as a soft ellipse thrown away from the sun,
-      // from the trunk outward, longer as the sun sinks.
+      // 'soft' tree shadows: the crown's shadow on the ground, as the sun
+      // throws it. The crown (radius R, its middle Hc up) lands Hc / tan(sun)
+      // away from the trunk, stretched along the sun's way by 1 / sin(sun);
+      // drawn as a capsule from near the trunk (the trunk's own shadow) out to
+      // there, radius R, so it matches the shadow-map shape it stands in for.
       vec2 away = -normalize(uSunDir.xz + vec2(1e-4));
-      float crownH = 3.4 * iShape.x / 2.3;
-      float reach = crownH * clamp(sqrt(1.0 - uSunDir.y * uSunDir.y) / max(uSunDir.y, 0.2), 0.0, 4.0);
-      float halfL = iShape.x * 0.85 + reach * 0.5;
       vec2 side = vec2(-away.y, away.x);
-      halfV = vec2(halfL, iShape.y * 0.9);
+      float sinE = clamp(uSunDir.y, 0.22, 1.0);
+      float cosE = sqrt(1.0 - sinE * sinE);
+      float R = iShape.x * 0.78;
+      float o = iShape.x * 1.7 * cosE / sinE;
+      float a = o * 0.3, b = o + R * (1.0 / sinE - 1.0) * 0.7;
+      float segHalf = 0.5 * (b - a);
+      halfV = vec2(segHalf + R * 1.05, R * 1.05);
       local = position.xz * halfV;
-      vec2 xz = iCenter.xz + away * (reach * 0.55) + away * local.x + side * local.y;
+      vec2 xz = iCenter.xz + away * (0.5 * (a + b)) + away * local.x + side * local.y;
       world = vec3(xz.x, iCenter.y + 0.06, xz.y);
+      vCore = vec3((xz - iCenter.xz) / max(iShape.x * 0.55, 0.1), 0.0);
+      vCast = 1.0;
+      vCapsule = vec2(segHalf, R);
     }
     // Drape on the shared ground where it exists (slopes, building pads).
     vec2 gHi = uGroundOrigin + (uGroundN - 2.0) * uGroundStep;
@@ -83,8 +98,13 @@ void main() {
   float chop = iShape.w != 0.0 ? clamp((uTime - iShape.w) / 0.6, 0.0, 1.0) : 0.0;
   vStrength = abs(iShape.z) * (1.0 - chop);
   #ifndef FOLLOW_TERRAIN
-    // Cast shadows follow the sun: gone at night and with the sun at the horizon.
-    if (castK > 0.5) vStrength *= (1.0 - 0.85 * uNight) * smoothstep(0.03, 0.15, uSunDir.y);
+    // Cast shadows follow the sun: gone at night and with the sun at the
+    // horizon. The core under the trunk stays, so a tree still sits on the
+    // ground by moonlight.
+    if (castK > 0.5) {
+      vCore.z = abs(iShape.z) * 0.6 * (1.0 - chop);
+      vStrength *= (1.0 - 0.85 * uNight) * smoothstep(0.03, 0.15, uSunDir.y);
+    }
   #endif
   vec4 mv = viewMatrix * vec4(world, 1.0);
   vFogDepth = -mv.z;
@@ -99,6 +119,9 @@ varying vec2 vLocal;
 varying vec2 vHalf;
 varying float vStrength;
 varying float vFogDepth;
+varying vec3 vCore;
+varying float vCast;
+varying vec2 vCapsule;
 void main() {
   float shade;
   #ifdef FOLLOW_TERRAIN
@@ -109,12 +132,19 @@ void main() {
     shade = 1.0 - smoothstep(-0.3, fall, d);
     shade *= shade;
   #else
-    // Round blob, darkest under the trunk.
+    // Round blob, darkest under the trunk; a cast shadow is a capsule,
+    // soft at its rim like the penumbra of a crown.
     float r = length(vLocal / vHalf);
-    shade = 1.0 - smoothstep(0.15, 1.0, r);
+    if (vCast > 0.5) r = length(vec2(max(abs(vLocal.x) - vCapsule.x, 0.0), vLocal.y)) / vCapsule.y;
+    shade = 1.0 - smoothstep(0.35, 1.0, r);
   #endif
   float fogK = smoothstep(fogNear, fogFar, vFogDepth);
-  float k = 1.0 - vStrength * shade * (1.0 - fogK);
+  float dark = vStrength * shade;
+  #ifndef FOLLOW_TERRAIN
+    // A cast shadow's core under the trunk: the darker of the two, never both.
+    if (vCore.z > 0.0) dark = max(dark, vCore.z * (1.0 - smoothstep(0.15, 1.0, length(vCore.xy))));
+  #endif
+  float k = 1.0 - dark * (1.0 - fogK);
   if (k > 0.995) discard;
   // Multiply blending: the framebuffer is scaled by this colour.
   gl_FragColor = vec4(vec3(k), 1.0);
@@ -430,14 +460,32 @@ export function createDecals(ctx) {
       const bush = forest.kind[i] === 3;
       const r = (bush ? 1.1 : forest.kind[i] === 2 ? 1.9 : 2.3) * forest.scale[i];
       c[i * 3] = forest.x[i]; c[i * 3 + 1] = forest.y[i] + 0.12; c[i * 3 + 2] = forest.z[i];
-      s[i * 4] = r; s[i * 4 + 1] = r; s[i * 4 + 2] = bush ? 0.28 : 0.36; s[i * 4 + 3] = chopT[i];
-      // Denser-woods trees (flag 2) cast no shadow-map shadow: their blob is
-      // the cast shadow instead (negative strength).
-      if (forest.flags[i] & 2) s[i * 4 + 2] = -(bush ? 0.34 : 0.52);
+      s[i * 4] = r; s[i * 4 + 1] = r; s[i * 4 + 2] = treeStrength(bush, forest.flags[i]); s[i * 4 + 3] = chopT[i];
     }
     blobsBuilt = true;
     lastChop = shared.chopVersion;
     blobSet.commit(Math.round(forest.count * keep));
+  }
+
+  // One kind of tree shadow for every tree, by mode (negative: a cast shadow).
+  // In 'detailed' the denser-woods trees stay out of the shadow map unless it
+  // takes them all (trees.js uDepthAll, on): a faint contact blob like the rest.
+  let treeShadows = ctx.treeShadows ?? 'soft';
+  function treeStrength(bush) {
+    if (treeShadows === 'soft') return -(bush ? 0.3 : 0.42);
+    if (treeShadows === 'detailed') return bush ? 0.16 : 0.2;
+    return bush ? 0.28 : 0.36;
+  }
+  function setTreeShadows(mode) {
+    if (mode === treeShadows) return;
+    treeShadows = mode;
+    if (!blobsBuilt) return;
+    const { forest } = ctx.forest;
+    const s = blobSet.attrs.iShape.array;
+    for (let i = 0; i < forest.count; i++) s[i * 4 + 2] = treeStrength(forest.kind[i] === 3, forest.flags[i]);
+    const a = blobSet.attrs.iShape;
+    a.clearUpdateRanges();
+    a.needsUpdate = true;
   }
 
   function syncChops() {
@@ -531,6 +579,7 @@ export function createDecals(ctx) {
     group,
     update,
     applyQuality,
+    setTreeShadows,
     dispose() {
       for (const m of [lotMesh, blobMesh, colorMesh]) {
         m.geometry.dispose();

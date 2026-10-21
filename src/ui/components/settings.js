@@ -69,6 +69,7 @@ export function createSettings(ctx) {
         <fieldset><legend>Display</legend>
           ${field('Detail', 'Auto picks what this device can draw smoothly.', seg('quality', p.quality, [['auto', 'Auto'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']]))}
           ${field('Shadows of people', 'Soft shadows follow the sun smoothly. Full draws true shapes but costs more in a busy town.', seg('peopleShadows', p.peopleShadows, [['blob', 'Soft'], ['full', 'Full']]))}
+          ${field('Shadows of trees', 'Soft shadows lie on the ground and follow the sun. Detailed draws true shapes on roofs and people too, and costs more. Low detail always uses simple ones.', seg('treeShadows', p.treeShadows, [['soft', 'Soft'], ['detailed', 'Detailed']]))}
           ${field('Battery saver', saverHint(ctx.power?.()), seg('batterySaver', p.batterySaver, [['off', 'Off'], ['battery', 'On battery'], ['always', 'Always']]))}
           ${field('Day and night', 'Seasonal follows the year. Slow gives a full day each minute.', seg('dayCycle', p.dayCycle, [['seasonal', 'Seasonal'], ['slow', 'Slow'], ['off', 'Off']]))}
           ${field('Theme', null, seg('theme', p.theme, [['auto', 'Auto'], ['light', 'Light'], ['night', 'Night']]))}

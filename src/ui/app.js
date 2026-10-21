@@ -764,6 +764,7 @@ export function createApp(host) {
     if (!key || key === 'batterySaver') world?.setBatterySaver?.(prefs.get('batterySaver'));
     if (!key || key === 'dayCycle') world?.setDayCycle?.(prefs.get('dayCycle'));
     if (!key || key === 'peopleShadows') world?.setPeopleShadows?.(prefs.get('peopleShadows'));
+    if (!key || key === 'treeShadows') world?.setTreeShadows?.(prefs.get('treeShadows'));
     if (key === 'muted') refresh(true);
   }
   prefs.onChange(applyPrefs);

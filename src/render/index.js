@@ -129,6 +129,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
     systems[2] = decals;
     trees.applyQuality?.(tier);
     decals.applyQuality?.(tier);
+    applyTreeShadows();
     lights.markDirty();
   }
 
@@ -187,6 +188,16 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
     return { x, z, radius: ds[Math.floor(ds.length * 0.8)] + 12 };
   }
 
+  // Tree shadows: simple blobs on Low; on Medium and High soft sun-aware
+  // ground shadows, or the player's choice of detailed shadow-map shadows.
+  let treeShadowPref = 'soft';
+  function applyTreeShadows() {
+    const mode = tierName === 'low' ? 'blob' : treeShadowPref === 'detailed' ? 'detailed' : 'soft';
+    ctx.treeShadows = mode;
+    trees.setShadowMode?.(mode);
+    decals.setTreeShadows?.(mode);
+  }
+
   function applyQuality() {
     tierName = effectiveTier(qualityMode, autoTier, power);
     tier = { ...TIERS[tierName], ...tierPatch };
@@ -199,6 +210,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
     water.applyQuality(tier);
     buildings.applyQuality(tier);
     for (const s of systems) s.applyQuality?.(tier);
+    applyTreeShadows();
     resize();
     forceFrame = true;
   }
@@ -447,6 +459,13 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
       forceFrame = true;
     },
     peopleShadows: () => people.shadowMode(),
+    /** 'soft' (ground shadows that follow the sun) or 'detailed' (trees in the shadow map); Low always draws blobs. */
+    setTreeShadows(mode) {
+      treeShadowPref = mode === 'detailed' ? 'detailed' : 'soft';
+      applyTreeShadows();
+      forceFrame = true;
+    },
+    treeShadows: () => ctx.treeShadows,
     setOverlay(mode) {
       grade.uniforms.uOverlay.value = OVERLAYS[mode] ?? 0;
       forceFrame = true;

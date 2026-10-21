@@ -634,6 +634,7 @@ attribute vec4 iTree;   // seed, priority, chop start time (0 = standing), flags
 uniform float uYearT;
 uniform vec3 uLodEye;
 uniform float uLodDist;
+uniform float uDepthAll; // 1: every tree draws into the shadow map ('detailed' tree shadows)
 `;
 
 // Object space: the LOD split (each tree is drawn by exactly one level: the
@@ -676,10 +677,11 @@ const VERTEX_BEGIN = /* glsl */ `
   float tilt = 0.21 * smoothstep(0.0, 0.55, chopK);
   transformed.yz = mat2(cos(tilt), sin(tilt), -sin(tilt), cos(tilt)) * transformed.yz;
   transformed.y *= 1.0 - smoothstep(0.35, 1.0, chopK);
-  // Denser-woods trees (flag 2) stay out of the shadow map: decals.js draws
-  // their shadows as cast blobs on the ground, far cheaper with thousands.
+  // Trees draw into the shadow map only with 'detailed' tree shadows
+  // (setShadowMode). Even then the denser-woods trees (flag 2) stay out of it
+  // unless uDepthAll: with thousands of them, the cast blobs are far cheaper.
   #ifdef TREE_DEPTH
-    lodKeep *= 1.0 - step(0.5, mod(floor(iTree.w * 0.5 + 0.01), 2.0));
+    lodKeep *= 1.0 - step(0.5, mod(floor(iTree.w * 0.5 + 0.01), 2.0)) * (1.0 - uDepthAll);
   #endif
   transformed *= step(chopK, 0.999) * lodKeep;
 `;
@@ -898,7 +900,7 @@ export function createTrees(ctx) {
   const up = new THREE.Vector3(0, 1, 0);
   // LOD split shared by both levels: the eye (main camera, also during the
   // shadow and reflection passes) and the near distance.
-  const lodUniforms = { uLodEye: { value: new THREE.Vector3(0, 1e5, 0) }, uLodDist: { value: NEAR_DIST.high } };
+  const lodUniforms = { uLodEye: { value: new THREE.Vector3(0, 1e5, 0) }, uLodDist: { value: NEAR_DIST.high }, uDepthAll: { value: 0 } };
   const instanced = (k, lod, capacity) => {
     const { material, depth } = makeMaterials(grade, k, lod, lodUniforms);
     const mesh = new THREE.InstancedMesh(buildGeometry(k, lod), material, Math.max(1, capacity));
@@ -1185,15 +1187,33 @@ export function createTrees(ctx) {
     }
     lodUniforms.uLodDist.value = NEAR_DIST[q.name] ?? NEAR_DIST.medium;
     nearDirty = true;
-    // Low tier: the shadow pass skips bushes.
-    meshes[KIND.BUSH].mesh.castShadow = q.name !== 'low';
   }
   applyQuality(ctx.quality);
+
+  /**
+   * Tree shadows (index.js setTreeShadows): 'blob' and 'soft' are ground
+   * decals only (decals.js), so no tree draws into the sun's shadow map;
+   * 'detailed' puts every tree in it, true shapes on roofs and walkers too.
+   */
+  let shadowMode = null;
+  function setShadowMode(mode) {
+    if (mode === shadowMode) return;
+    shadowMode = mode;
+    const cast = mode === 'detailed';
+    for (const m of meshes) {
+      m.mesh.castShadow = cast;
+      if (m.near) m.near.mesh.castShadow = cast;
+    }
+    lodUniforms.uDepthAll.value = cast ? 1 : 0;
+    lights.markDirty();
+  }
+  setShadowMode(ctx.treeShadows ?? 'soft');
 
   return {
     group,
     update,
     applyQuality,
+    setShadowMode,
     count: () => forest.count,
     /** Submitted triangles (both levels; the far level collapses near trees). */
     triangles: () => meshes.reduce((n, m) => n + (m.mesh.geometry.attributes.position.count / 3) * m.mesh.count
