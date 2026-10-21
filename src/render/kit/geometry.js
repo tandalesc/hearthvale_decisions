@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FIELD_ROWS, FIELD_SEG } from './crops.js';
 
 // Kit geometry builder. Every kit piece is authored in a unit space
 // (x, z in -0.5..0.5, y in 0..1) that the instance matrix scales to the lot,
@@ -336,9 +337,11 @@ export function sailsPiece() {
  */
 export function fieldPiece() {
   const k = new KitBuilder();
-  const rows = 9;
-  const seg = 8;
-  // Soil bed: an 8x8 grid.
+  const rows = FIELD_ROWS;
+  // Along each row: the crop shader shapes stooks and heads per vertex, and
+  // the finer bed follows the ground's curvature (and its pad edges) closely.
+  const seg = FIELD_SEG;
+  // Soil bed: a seg x seg grid.
   for (let i = 0; i < seg; i++) {
     for (let j = 0; j < seg; j++) {
       const x0 = -0.5 + i / seg, x1 = -0.5 + (i + 1) / seg;

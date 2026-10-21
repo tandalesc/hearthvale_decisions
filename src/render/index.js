@@ -323,7 +323,10 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
     renderer.setClearColor(scene.fog.color);
     sky.update(time, renderer.getPixelRatio(), rig.controls.target);
     lap('grade');
-    if (view?.roads) roads.update(view.roads, time);
+    if (view?.roads) {
+      roads.setEra(view.styleEra ?? view.era ?? 0);
+      roads.update(view.roads, time);
+    }
     lap('roads');
     if (view) buildings.update(view, time);
     // Roads stop at doorsteps: refresh the footprint mask when lots change.
@@ -551,7 +554,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
     camera: rig,
     /** Dev and test access (not part of the contract). */
     get internals() {
-      return { scene, renderer, grade, lights, buildings, water, terrain, ground };
+      return { scene, renderer, grade, lights, buildings, water, terrain, ground, roads };
     },
     dispose() {
       disposed = true;

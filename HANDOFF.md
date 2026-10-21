@@ -135,6 +135,25 @@ Measured headless with a mock 100 ms service (real sim and client). The scratch 
 **Tests hardened.** Several tests assumed facts about the grown fixture towns (a timber bridge exists, a debate formed, cards have unique titles). They now set up what they need.
 - **One threshold was loosened:** "opposite early rulings end in different towns" now needs an industry gap of 0.35, not 0.5. The old code already measured 0.47 on one of its three seeds.
 
+## World grounding (October 2026)
+
+All render-side; the sim, saves and replay are untouched.
+
+- **Villager IK** (`src/render/people.js`, vertex shader only, no CPU cost):
+  - Legs are thigh and shin, solved analytically toward a foot target; the knee ring is shared, so they bend without a gap. Triangles 114 → 112 (the mallet reuses the placard pole and the crate box).
+  - The walk plants each foot: the stride comes from the row's own velocity over half a cycle, so a stance foot moves back exactly as fast as the body moves forward. Hips ride over the lower planted foot, so the body dips at full stride.
+  - Within `uIkNear` (70 m) each foot reads the ground under its own sole: on a slope one knee bends. Ledges (> 0.4 figure units) hold the walking plane.
+  - Poses: bench sitters sit on the bench's own height (the highest ground under its legs, as `decor.js` places it) with feet on the ground and hands on the knees; kneelers put knees, shins and hands on the ground; ground sitters lean back on their hands.
+  - Walkers now drape onto building pads near doors (they used to keep the sim's natural height where a pad blend differs by more than 0.3 m). Waders at fords keep their row height.
+- **Ground sampling** (`src/render/ground.js`): the shader and the CPU mirror interpolate on the terrain mesh's own two triangles per cell instead of bilinearly, so anything placed or draped lies on the drawn ground.
+- **Terrain LOD** (`src/render/terrain.js`): chunks pick their level by distance to the chunk's nearest point, not its centre, so ground near the camera never drops to the 2 or 4 m grid under things placed on the 1 m texture. GPU time unchanged in `fidelity-shots.js`; triangles up 0.1–1.1 M in the views that keep more chunks at full detail.
+- **Crops** (`src/render/kit/crops.js`): fields follow the farm variant, era, year and season in the field shader. Arable land is in three-field strips before the town era and on a four-course round after it (wheat, roots, barley, clover; flax; rapeseed from the city era). There are stooks at harvest before the Industrial era, ploughed furrows, winter wheat sprouting over winter, market-garden rows, orchard sward and dairy pasture. Orchard farms plant fruit trees on their field (`trees.js` `orchardPlanting`): blossom in spring, apples in late summer. Dairies graze cattle (`decor.js` `cow`) except in winter. Haystacks only on dairy meadows, and round bales on arable stubble from the Industrial era.
+- **Street fabric** (`src/render/streets.js`, `tStreet` in `roads.js`):
+  - Lanes between buildings are paved wall to wall, and from the town era so are through gaps between houses (ginnels). They are packed earth until the borough era, or until they open onto a paved road; after that, cobbles or setts with a centre gutter.
+  - From the borough era, made roads get flagstone footways along building fronts, with a kerb on the carriageway's own edge (city: a dark channel, smaller slabs).
+  - Grass and verge planting keep off them, and kept streets get kerbside planters.
+  - Tests: `tests/render-streets.test.js`.
+
 ## Module map (who owns what)
 
 | Area | Files |

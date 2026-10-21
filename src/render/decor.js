@@ -66,6 +66,8 @@ const Y = {
   veg: col('#5d8a3e'), vegLight: col('#86a852'), vegDark: col('#476f34'), pumpkin: col('#d0782e'),
   hay: col('#d6b45c'), hayDark: col('#b8963e'), barrel: col('#7a5634'), hoop: col('#3a3a36'),
   crate: col('#a8865a'), line: col('#d8d2c2'),
+  cowBrown: col('#7a5236'), cowBlack: col('#2e2b28'), cowWhite: col('#e2ddd0'), cowCream: col('#cdb88f'),
+  cowRed: col('#8c4a30'), cowMuzzle: col('#c9a48e'),
 };
 // Lots whose yard gets barrels and crates by the door.
 const STOCKED = new Set(['inn', 'shop', 'workshop', 'warehouse', 'quay', 'mill', 'brewery', 'factory']);
@@ -519,6 +521,29 @@ export function createDecor(ctx) {
     }
   }
 
+  // A cow, grazing: body level with its own legs' ground (pitched on a
+  // slope), every leg reaching the ground under it, head down in the grass.
+  const COWS = [[Y.cowBrown, null], [Y.cowBlack, Y.cowWhite], [Y.cowCream, null], [Y.cowRed, Y.cowWhite]];
+  function cow(x, z, yaw, seed) {
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    const at = (lx, lz) => [x + lx * c + lz * s, z - lx * s + lz * c];
+    const [coat, patch] = COWS[Math.floor(hashId(seed, 84) * COWS.length)];
+    const feet = [[-0.22, 0.55], [0.22, 0.55], [-0.22, -0.55], [0.22, -0.55]].map(([lx, lz]) => [...at(lx, lz), lx, lz]);
+    const g = feet.map(([fx, fz]) => heightAt(fx, fz));
+    const front = (g[0] + g[1]) / 2, back = (g[2] + g[3]) / 2;
+    const pitch = Math.atan2(back - front, 1.1);
+    const y = (front + back) / 2 + 0.98;
+    box(x, y, z, 0.68, 0.6, 1.5, coat, yaw, pitch);
+    if (patch) box(x, y + 0.04, z, 0.7, 0.4, 0.55, patch, yaw, pitch);
+    feet.forEach(([fx, fz, , lz], i) => leg(fx, fz, y - 0.28 + Math.sin(pitch) * lz, 0.14, 0.14, coat, yaw));
+    // Head lowered to the grass at the front, with a pale muzzle.
+    const [hx, hz] = at(0, 0.95);
+    const gh = heightAt(hx, hz);
+    box(hx, gh + 0.42, hz, 0.34, 0.36, 0.5, coat, yaw, 0.9);
+    const [mx, mz] = at(0, 1.12);
+    box(mx, gh + 0.2, mz, 0.3, 0.16, 0.2, Y.cowMuzzle, yaw, 0.9);
+  }
+
   function yard(b, era, dry, season, free) {
     const id = b.id | 0;
     const occupied = b.occupied !== false && !b.flags?.derelict;
@@ -545,10 +570,26 @@ export function createDecor(ctx) {
         const [x, z] = L(-lw / 2 + 0.6 + hw + 0.4, ld / 2 - 0.6 - hd * 0.65);
         woodpile(x, z, angle, id);
       }
-      // After harvest: haystacks (round bales from the Industrial era) on the stubble.
-      if (season === 2) {
-        const fd = Math.max(2, ld - hd - 4.2);
-        const fw = Math.max(2, lw - 4);
+      const fd = Math.max(2, ld - hd - 4.2);
+      const fw = Math.max(2, lw - 4);
+      const fz = -ld / 2 + 2 + fd / 2;
+      const dairy = b.variant === 'dairy';
+      // Cattle graze a dairy's pasture from spring to autumn (in the barn in winter).
+      if (dairy && season !== 3) {
+        const n = 1 + Math.floor(hashId(id, 88) * Math.min(3, (fw * fd) / 14));
+        for (let i = 0; i < n; i++) {
+          const lx = (hashId(id * 17 + i, 86) - 0.5) * Math.max(0, fw - 2);
+          const lz = fz + (hashId(id * 17 + i, 87) - 0.5) * Math.max(0, fd - 1.6);
+          const [x, z] = L(lx, lz);
+          cow(x, z, hashId(id * 17 + i, 85) * Math.PI * 2, id * 17 + i);
+        }
+      }
+      // After harvest: haystacks on a dairy's hay meadow, and round bales on
+      // the stubble of arable fields from the Industrial era (before it the
+      // sheaves stand in stooks in the rows: kit/crops.js). Not in orchards
+      // or market gardens.
+      const arable = b.variant !== 'orchard' && b.variant !== 'market-garden' && !dairy;
+      if (season === 2 && (dairy || (arable && era >= 4))) {
         const n = 3 + Math.floor(hashId(id, 92) * 4);
         for (let i = 0; i < n; i++) {
           const lx = (hashId(id * 13 + i, 93) - 0.5) * (fw - 2);
@@ -823,7 +864,10 @@ export function createDecor(ctx) {
       return (bx - cx) ** 2 + (bz - cz) ** 2 <= reach * reach;
     };
     const signBins = new Set(), binBins = new Map(), benchBins = new Set();
-    const free = (i, j) => !lotCells.has(j * W + i) && T(i, j) === 0 && bankDistance(ox + (i + 0.5) * cell, oz + (j + 0.5) * cell) > 1;
+    // Paved alleys and footways (streets.js) are not verge.
+    const streetAt = ctx.roads?.streetAt;
+    const street = (i, j) => (streetAt ? streetAt(ox + (i + 0.5) * cell, oz + (j + 0.5) * cell) : 0);
+    const free = (i, j) => !lotCells.has(j * W + i) && T(i, j) === 0 && street(i, j) === 0 && bankDistance(ox + (i + 0.5) * cell, oz + (j + 0.5) * cell) > 1;
     for (let j = cj - rad; j <= cj + rad; j++) {
       for (let i = ci - rad; i <= ci + rad; i++) {
         const t = T(i, j);
@@ -855,6 +899,21 @@ export function createDecor(ctx) {
                 } else clippedShrub(vx, vz, 0.42, h * 6);
               }
               break;
+            }
+            // Kept made streets with pavements: now and then a planter of
+            // flowers on the footway, at the kerb.
+            if (era >= 3 && t >= 3 && (stage === 'planted' || stage === 'formal') && h < (stage === 'formal' ? 0.3 : 0.14)) {
+              for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                if (street(i + di, j + dj) !== 2) continue;
+                const vx = x + di * cell * 0.95, vz = z + dj * cell * 0.95;
+                const g = heightAt(vx, vz);
+                box(vx, g + 0.2, vz, 0.9, 0.5, 0.5, era >= 4 ? K.stone : K.wood, di ? Math.PI / 2 : 0);
+                for (let f = 0; f < 3; f++) {
+                  const o = (f - 1) * 0.28;
+                  blob(vx + (dj ? o : 0), g + 0.52, vz + (di ? o : 0), 0.2, 0.15, 0.2, FLOWERS[(k + f) % FLOWERS.length], 0.3);
+                }
+                break;
+              }
             }
           }
         }

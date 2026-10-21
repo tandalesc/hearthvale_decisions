@@ -157,6 +157,7 @@ export function createGrade() {
     uWind: { value: new THREE.Vector2(0.6, 0.3) },
     uWet: { value: 0 },
     uYearT: { value: 0 },
+    uYear: { value: 0 }, // whole years since the founding (crop rotations)
     uOverlay: { value: 0 }, // 0 none, 1 value, 2 roads, 3 health
     uWeatherDetail: { value: 0 }, // set from the tier's `weather` flag (index.js)
   };
@@ -215,6 +216,7 @@ export function createGrade() {
     const u = uniforms;
     u.uTime.value = time;
     u.uYearT.value = yearT;
+    u.uYear.value = view?.time?.year ?? 0;
     const el = THREE.MathUtils.degToRad(current.elevation);
     u.uSunDir.value.set(Math.cos(el) * Math.sin(SUN_AZIMUTH), Math.sin(el), Math.cos(el) * Math.cos(SUN_AZIMUTH));
     const moonly = THREE.MathUtils.smoothstep(current.night, 0.3, 0.9);

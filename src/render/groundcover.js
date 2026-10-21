@@ -101,6 +101,7 @@ uniform float uCoverFade;
 uniform float uYearT;
 uniform sampler2D tRoad;
 uniform sampler2D tPath;
+uniform sampler2D tStreet;
 uniform vec2 uRoadOrigin;
 uniform vec2 uRoadSize;
 uniform sampler2D tWood;
@@ -154,6 +155,9 @@ const VERTEX_PLACE = /* glsl */ `
     open *= 1.0 - smoothstep(0.05, 0.25, rd.b);
     open *= 1.0 - smoothstep(0.02, 0.2, rd.a);
     open *= 1.0 - smoothstep(0.3, 0.55, rd.r);
+    // Paved alleys and footways (streets.js).
+    vec2 fab = texture2D(tStreet, ruv).rg;  // alley, footway
+    open *= 1.0 - smoothstep(0.25, 0.45, max(fab.r, fab.g));
   }
   // Lots: worked and paved ground bare, gardens a short lawn.
   vec2 luv = (base - uLotsRect.xy) / uLotsRect.zw;

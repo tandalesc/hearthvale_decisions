@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createPathField, PATH_RANGE, PATH_HALF } from './paths.js';
+import { classifyStreets, STREET } from './streets.js';
 
 // The road splat (design-visual §5): two textures over the road grid, sampled
 // by the terrain shader.
@@ -11,6 +12,13 @@ import { createPathField, PATH_RANGE, PATH_HALF } from './paths.js';
 //   A  building footprint coverage (0..1), so roads stop at doorsteps
 // tPath, RG8, PATH_K texels per cell (paths.js): every tiered cell as a
 // continuous strip, as a signed distance to the strip edge plus its tier.
+// tStreet, RGBA8, one texel per cell (streets.js): R alley and G footway
+// paving under everything (spread one cell under the road they meet), B paved
+// (an alley's cobbles or setts rather than packed earth), A the alley itself
+// (its surface replaces the lane's strip there, with a gutter), so
+// lanes between buildings pave wall to wall and made roads get kerbed
+// pavements by era. The path field is drawn from the tiers with footway
+// cells' worn side paths left out (the pavement replaces them).
 // Uploads are throttled to 2 Hz; the sim's dirty rect is cleared after upload.
 // Each upload refills the whole tRoad grid, so the sim may overwrite `dirty`
 // freely; tPath diffs the grid itself and redraws only changed tiles.
@@ -35,12 +43,23 @@ export function createRoadSplat() {
   let wearN = null; // normalised wear per cell (fill)
   let field = null; // paths.js strip field
   let pathTex = null;
+  let street = null;     // STREET class per cell (streets.js)
+  let streetData = null; // tStreet texels
+  let streetTex = null;
+  let fieldTier = null;  // the tiers the path field draws (footways' side paths left out)
+  let fieldRoads = null;
+  let era = 0;
+  let streetEra = -1;
+  let streetVersion = -1;
+  let streetFoot = true;
 
   const uniforms = {
     tRoad: { value: null },
     tPath: { value: null },
     uRoadOrigin: { value: new THREE.Vector2(-256, -256) },
     uRoadSize: { value: new THREE.Vector2(512, 512) },
+    tStreet: { value: null },
+    uStreetEra: { value: 0 },
   };
 
   // 1x1 placeholders so the terrain shader always has valid samplers.
@@ -50,6 +69,9 @@ export function createRoadSplat() {
   const emptyPath = new THREE.DataTexture(new Uint8Array(2), 1, 1, THREE.RGFormat, THREE.UnsignedByteType);
   emptyPath.needsUpdate = true;
   uniforms.tPath.value = emptyPath;
+  const emptyStreet = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+  emptyStreet.needsUpdate = true;
+  uniforms.tStreet.value = emptyStreet;
 
   function allocate(roads) {
     W = roads.W; H = roads.H;
@@ -76,6 +98,58 @@ export function createRoadSplat() {
     pathTex.colorSpace = THREE.NoColorSpace;
     pathTex.unpackAlignment = 1;
     uniforms.tPath.value = pathTex;
+    street = new Uint8Array(W * H);
+    streetData = new Uint8Array(W * H * 4);
+    streetTex?.dispose();
+    streetTex = new THREE.DataTexture(streetData, W, H, THREE.RGBAFormat, THREE.UnsignedByteType);
+    streetTex.magFilter = THREE.LinearFilter;
+    streetTex.minFilter = THREE.LinearFilter;
+    streetTex.generateMipmaps = false;
+    streetTex.wrapS = streetTex.wrapT = THREE.ClampToEdgeWrapping;
+    streetTex.colorSpace = THREE.NoColorSpace;
+    uniforms.tStreet.value = streetTex;
+    fieldTier = new Uint8Array(W * H);
+    fieldRoads = Object.create(roads);
+    fieldRoads.tier = fieldTier;
+    streetVersion = -1;
+  }
+
+  // Street classes (streets.js) and the tiers the path field draws, when the
+  // tiers, the footprints or the era changed. ~2 ms in a city.
+  function syncStreets(roads) {
+    const v = roads.version ?? 0;
+    if (v === streetVersion && era === streetEra && !streetFoot) return false;
+    streetVersion = v;
+    streetEra = era;
+    streetFoot = false;
+    const { tier } = roads;
+    classifyStreets(W, H, tier, foot, era, street);
+    streetData.fill(0);
+    const alleyish = (k) => k === STREET.ALLEY || k === STREET.PAVED_ALLEY;
+    for (let i = 0; i < W * H; i++) {
+      const k = street[i];
+      const o = i * 4;
+      fieldTier[i] = k === STREET.FOOTWAY && tier[i] < 3 ? 0 : tier[i];
+      if (!k) continue;
+      // The paving fills its own cell and, under the road it meets, the
+      // neighbouring road cell too, so no grass shows between the road
+      // strip's edge and the paving (the strip draws over it).
+      const fills = [i];
+      for (const n of [i - 1, i + 1, i - W, i + W]) {
+        if (n >= 0 && n < W * H && !street[n] && tier[n] >= (k === STREET.FOOTWAY ? 3 : 1)) fills.push(n);
+      }
+      for (const f of fills) {
+        const q = f * 4;
+        if (alleyish(k)) {
+          streetData[q] = 255;
+          if (k === STREET.PAVED_ALLEY) streetData[q + 2] = 255;
+        } else streetData[q + 1] = 255;
+      }
+      if (alleyish(k)) streetData[o + 3] = 255;
+    }
+    streetTex.needsUpdate = true;
+    uniforms.uStreetEra.value = era;
+    return true;
   }
 
   // Redraw changed path tiles (all of them on the first build) and queue
@@ -154,8 +228,9 @@ export function createRoadSplat() {
       allocate(roads);
       fill(roads, 0, 0, W - 1, H - 1);
       texture.needsUpdate = true;
+      syncStreets(roads);
       pathFull = true;
-      updatePaths(roads, Infinity);
+      updatePaths(fieldRoads, Infinity);
       lastVersion = roads.version ?? 0;
       roads.dirty = null;
       lastUpload = time;
@@ -166,15 +241,16 @@ export function createRoadSplat() {
     // scan, a few per frame; the grid is scanned again with the next upload.
     pathFull = false;
     let drew = false;
-    if (field.pending()) drew = updatePaths(roads, PATH_TILES_PER_FRAME, false);
-    if (roads.dirty || (roads.version ?? 0) !== lastVersion || forceFill) pending = true;
+    if (field.pending()) drew = updatePaths(fieldRoads, PATH_TILES_PER_FRAME, false);
+    if (roads.dirty || (roads.version ?? 0) !== lastVersion || forceFill || era !== streetEra) pending = true;
     forceFill = false;
     if (!pending || time - lastUpload < 0.5) return drew;
     // A full refill is ~65k cells (~0.3 ms) and never misses a rect the sim
     // replaced between throttled uploads.
     fill(roads, 0, 0, W - 1, H - 1);
     texture.needsUpdate = true;
-    updatePaths(roads, PATH_TILES_PER_FRAME);
+    syncStreets(roads);
+    updatePaths(fieldRoads, PATH_TILES_PER_FRAME);
     roads.dirty = null;
     lastVersion = roads.version ?? 0;
     lastUpload = time;
@@ -210,7 +286,23 @@ export function createRoadSplat() {
     }
     pending = true;
     forceFill = true;
+    streetFoot = true;
     return true;
+  }
+
+  /** The town's era (sim/eras.js), for the street fabric's paving. */
+  function setEra(e) {
+    era = e | 0;
+  }
+
+  /** STREET class at a world point (decor keeps its verge planting off paving). */
+  function streetAt(x, z) {
+    const r = roadsRef;
+    if (!r || !street) return 0;
+    const cx = Math.floor((x - r.ox) / r.cell);
+    const cz = Math.floor((z - r.oz) / r.cell);
+    if (cx < 0 || cz < 0 || cx >= r.W || cz >= r.H) return 0;
+    return street[cz * r.W + cx];
   }
 
   /** Tier at a world point (used by props and picking). */
@@ -223,7 +315,7 @@ export function createRoadSplat() {
     return r.tier[cz * r.W + cx];
   }
 
-  return { uniforms, update, tierAt, setFootprints };
+  return { uniforms, update, tierAt, setFootprints, setEra, streetAt };
 }
 
 // Piecewise-linear PATH_HALF in GLSL: the nominal half-width at a tier.
@@ -238,6 +330,8 @@ uniform sampler2D tRoad;
 uniform sampler2D tPath;
 uniform vec2 uRoadOrigin;
 uniform vec2 uRoadSize;
+uniform sampler2D tStreet;
+uniform float uStreetEra;
 
 // Cobbles: rounded stones on a 0.55 m staggered grid, dark joints between.
 float cobbles(vec2 p) {
@@ -246,6 +340,14 @@ float cobbles(vec2 p) {
   vec2 f = fract(p) - 0.5;
   float d = max(abs(f.x) * 1.1, abs(f.y));
   return smoothstep(0.5, 0.36, d) * (0.9 + 0.2 * hash12(floor(p)));
+}
+
+// Flagstones: slabs of \`size\` metres on a staggered grid, thin dark joints.
+float flagstones(vec2 p, float size) {
+  p /= size;
+  p.x += step(1.0, mod(floor(p.y), 2.0)) * 0.5;
+  vec2 f = abs(fract(p) - 0.5);
+  return smoothstep(0.5, 0.465, max(f.x, f.y)) * (0.93 + 0.12 * hash12(floor(p)));
 }
 
 float pathHalf(float t) {
@@ -262,8 +364,9 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
   if (ruv.x <= 0.0 || ruv.y <= 0.0 || ruv.x >= 1.0 || ruv.y >= 1.0) return vec4(grass, 0.0);
   vec2 pth = texture2D(tPath, ruv).rg;
   vec4 r = texture2D(tRoad, ruv);
+  vec4 fabric = texture2D(tStreet, ruv);
   float dirt = r.b;
-  if (pth.r < 0.004 && dirt < 0.01) return vec4(grass, 0.0);
+  if (pth.r < 0.004 && dirt < 0.01 && fabric.r + fabric.g < 0.004) return vec4(grass, 0.0);
   // Signed distance inside the nearest strip's edge, in metres (< 0 outside),
   // and that strip's tier (exact on and near the strip).
   float sd = (pth.r - 0.5) * ${(2 * PATH_RANGE).toFixed(3)};
@@ -313,15 +416,59 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
   c = mix(c, mix(cobble, setts, detail), smoothstep(4.4, 5.0, tier));
   // Busier lanes are paler and more compacted.
   c *= 0.94 + 0.1 * wear;
-  // Kerb: a pale stone band along an avenue's edge.
-  float kerb = smoothstep(4.4, 5.0, tier) * (1.0 - smoothstep(0.18, 0.32, e));
+  // Kerb: a pale stone band along an avenue's edge (where no pavement does it).
+  float era = uStreetEra;
+  float footK = smoothstep(0.4, 0.6, fabric.g);
+  float kerb = smoothstep(4.4, 5.0, tier) * (1.0 - smoothstep(0.18, 0.32, e)) * (1.0 - footK);
   c = mix(c, vec3(0.78, 0.76, 0.70), kerb * 0.85);
   // Worn edge: a darker rim of trodden earth where an organic lane meets the grass.
   float rim = (1.0 - smoothstep(0.0, 0.35, e)) * (1.0 - planned);
   c *= 1.0 - 0.1 * rim;
+
+  // Street fabric (streets.js). Alleys: the lane between two buildings is
+  // surfaced wall to wall, whatever its strip's width: trodden earth, then
+  // cobbles, then setts, with a stone gutter down the middle of a one-cell
+  // passage (the texel's peak) and grime at the wall feet.
+  float alleyK = smoothstep(0.4, 0.6, fabric.r);
+  float alleyOwn = smoothstep(0.4, 0.6, fabric.a);
+  if (alleyK > 0.0) {
+    vec3 packed = mix(earth, dirtC, 0.5) * (0.9 + 0.1 * vnoise(world.xz * 4.0));
+    float pavedK = smoothstep(0.4, 0.6, fabric.b);
+    vec3 alleyC = mix(packed, mix(packed, mix(cobble, setts, step(3.5, era)), detail), pavedK);
+    float gutter = smoothstep(0.9, 0.95, fabric.a) * (1.0 - smoothstep(0.985, 0.998, fabric.a)) * pavedK;
+    alleyC = mix(alleyC, vec3(0.24, 0.24, 0.25), gutter * 0.7);
+    alleyC *= 1.0 - 0.18 * smoothstep(0.15, 0.6, r.a);
+    c = mix(c, alleyC, alleyOwn);
+    col = mix(col, alleyC, alleyK);
+  }
+  // Footways: flagstones from the road's edge to the building fronts, a
+  // granite kerb along the carriageway's own (smooth) edge with its face in
+  // shadow, and from the city era a dark channel on the road side.
+  if (footK > 0.0) {
+    float size = era < 3.5 ? 0.9 : era < 4.5 ? 0.6 : 0.75;
+    vec3 slab = era < 3.5 ? vec3(0.58, 0.54, 0.47) : era < 4.5 ? vec3(0.52, 0.51, 0.49) : vec3(0.60, 0.60, 0.58);
+    vec3 joint = slab * 0.62;
+    vec3 fw = mix(joint, slab, mix(1.0, flagstones(world.xz, size), detail));
+    fw *= 0.94 + 0.08 * vnoise(world.xz * 1.7);
+    fw *= 1.0 - 0.12 * smoothstep(0.2, 0.7, r.a);
+    col = mix(col, fw, footK);
+    // Along a made road only (the strip under this point is tier 3+).
+    float made = smoothstep(2.6, 3.0, tier);
+    float kerbBand = smoothstep(-0.3, -0.25, sd) * (1.0 - smoothstep(-0.03, 0.0, sd));
+    vec3 kerbC = vec3(0.70, 0.69, 0.66) * (0.94 + 0.1 * hash12(floor(world.xz * 1.1)));
+    col = mix(col, kerbC, kerbBand * made * footK);
+    // The kerb's face, a hand's height of shadow where it drops to the road.
+    float face = smoothstep(-0.05, -0.01, sd) * (1.0 - smoothstep(0.01, 0.06, sd));
+    c *= 1.0 - 0.45 * face * made * footK;
+    col *= 1.0 - 0.45 * face * made * footK * (1.0 - cover);
+    // The channel: a darker strip of setts just inside the road's edge.
+    float channel = smoothstep(0.0, 0.03, sd) * (1.0 - smoothstep(0.2, 0.26, sd)) * step(3.5, era);
+    c = mix(c, vec3(0.22, 0.22, 0.23), channel * made * footK * 0.6);
+  }
+
   // Worn verge: grass darkens a touch for half a metre beside a strip.
-  col *= 1.0 - 0.08 * smoothstep(-0.7, 0.0, sd) * (1.0 - cover) * step(0.004, pth.r);
+  col *= 1.0 - 0.08 * smoothstep(-0.7, 0.0, sd) * (1.0 - cover) * step(0.004, pth.r) * (1.0 - max(alleyK, footK));
   col = mix(col, c, cover);
-  return vec4(col, max(cover, bareCover * 0.8));
+  return vec4(col, max(max(cover, bareCover * 0.8), max(alleyK, footK)));
 }
 `;

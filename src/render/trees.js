@@ -22,13 +22,15 @@ import { TIERS } from './quality.js';
 export const KIND = { ROUND: 0, TALL: 1, PINE: 2, BUSH: 3, WILLOW: 4 };
 const KIND_NAMES = ['round', 'tall', 'pine', 'bush', 'willow'];
 const KINDS = KIND_NAMES.length;
-// Slots kept at the start of each mesh for park trees (placed per park lot).
-const PARK_RESERVE = [96, 48, 0, 96, 0];
+// Slots kept at the start of each mesh for park and orchard trees (placed per lot).
+const PARK_RESERVE = [160, 48, 0, 96, 0];
 const EXTENT = 470;
 const CELL = 5;
 // Default town centre; createTrees passes the real one (ctx.townCentre).
 const DEFAULT_TOWN = [-40, 0];
 const FLAG_BLOSSOM = 1;
+// Fruit trees: apples or pears ripen through late summer, picked by early autumn.
+const FLAG_FRUIT = 4;
 // Trees of the denser-woods pass (High; a share on Medium). Never on Low.
 const FLAG_EXTRA = 2;
 // Kept share of wild trees per quality tier (lowest priority trees drop first),
@@ -298,6 +300,27 @@ function woodlandTexture(forest) {
   tex.minFilter = THREE.LinearFilter;
   tex.needsUpdate = true;
   return tex;
+}
+
+/**
+ * An orchard farm's fruit trees: a tidy grid on its field (summary.field,
+ * compose.js), small round trees that blossom in spring and fruit in late
+ * summer. Empty for any other lot.
+ */
+export function orchardPlanting(lot) {
+  const f = lot.field;
+  if (lot.type !== 'farm' || !f || f.kind !== 2) return [];
+  const out = [];
+  const cols = Math.max(1, Math.floor(f.w / 2.6)), rows = Math.max(1, Math.floor(f.d / 2.6));
+  const c = Math.cos(f.yaw), s = Math.sin(f.yaw);
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const lx = (i - (cols - 1) / 2) * (f.w / cols), lz = (j - (rows - 1) / 2) * (f.d / rows);
+      const id = lot.id * 64 + j * 8 + i;
+      out.push({ kind: KIND.ROUND, x: f.x + lx * c + lz * s, z: f.z - lx * s + lz * c, scale: 0.42 + hashId(id, 47) * 0.12, seed: hashId(id, 48), flags: FLAG_BLOSSOM | FLAG_FRUIT });
+    }
+  }
+  return out;
 }
 
 /** Deterministic park planting: trees around the lawn, bushes at the edge. */
@@ -689,6 +712,7 @@ varying float vTreeBare;
 varying float vTreeLeaf;
 varying float vTreeBirch;
 varying float vTreeY;
+varying float vTreeFruit;
 `;
 
 // Species palettes (linear). Summer greens by seed, an autumn turn staggered
@@ -747,6 +771,12 @@ const VERTEX_COLOR = /* glsl */ `
     #endif
     leaf = mix(leaf, vec3(0.90, 0.56, 0.64), uBlossom * blossomOn * 0.85);
   #endif
+  vTreeFruit = 0.0;
+  #if TREE_KIND == 0
+    // Fruit hangs from late summer until picked in early autumn.
+    if (aPart > 0.5 && mod(floor(iTree.w / 4.0), 2.0) >= 1.0)
+      vTreeFruit = smoothstep(0.36, 0.42, uYearT) * (1.0 - smoothstep(0.56, 0.6, uYearT)) * (1.0 - bareK);
+  #endif
   vTreeLeaf = aPart > 0.5 ? 1.0 : 0.0;
   vTreeCol = (aPart < 0.5 ? trunkCol : leaf) * aShade;
   vTreeW = treeWorld.xyz;
@@ -766,6 +796,12 @@ const FRAGMENT_COLOR = /* glsl */ `
   // Leafy break-up: soft light and dark dapples across each crown.
   float dapple = vnoise(vTreeW.xz * 1.6 + vTreeW.y * 1.9) * 0.6 + vnoise(vTreeW.xz * 4.1 - vTreeW.y * 3.3) * 0.4;
   col *= mix(1.0, 0.86 + 0.28 * dapple, vTreeLeaf);
+  // Fruit: round red apples dotted through the crown (cells across the
+  // crown's faces, a dot in some of them; skewed by height so the big flat
+  // facets do not stretch them into streaks).
+  vec2 fq = vec2(vTreeW.x + vTreeW.y * 0.7, vTreeW.z - vTreeW.y * 0.7) * 6.0;
+  float fruitDot = step(hash12(floor(fq) + 17.0), 0.32) * (1.0 - smoothstep(0.2, 0.28, length(fract(fq) - 0.5)));
+  col = mix(col, vec3(0.52, 0.06, 0.03), vTreeFruit * fruitDot);
   // Twiggy break-up on bare crowns: fine light and dark flecks.
   float twig = vnoise(vTreeW.xz * 6.5 + vTreeW.y * 7.0);
   col *= mix(1.0, 0.75 + 0.5 * twig, vTreeBare);
@@ -1002,12 +1038,13 @@ export function createTrees(ctx) {
       const s = lot.summary;
       if (!s) continue;
       seen.add(id);
-      const k = `${s.x},${s.z},${s.w},${s.d}`;
+      const k = `${s.x},${s.z},${s.w},${s.d},${s.field?.kind ?? -1}`;
       if (lotKeys.get(id) !== k) {
         lotKeys.set(id, k);
         const hw = s.w * 0.65, hd = s.d * 0.65;
         clearBox(s.x - hw, s.z - hd, s.x + hw, s.z + hd, time);
-        if (s.type === 'park') plantPark(id, s);
+        if (s.type === 'park') plantPark(id, parkPlanting(s));
+        else if (s.field?.kind === 2) plantPark(id, orchardPlanting(s));
         else removePark(id);
       }
     }
@@ -1016,10 +1053,10 @@ export function createTrees(ctx) {
     }
   }
 
-  function plantPark(id, s) {
+  function plantPark(id, planting) {
     removePark(id);
     const slots = [];
-    for (const t of parkPlanting(s)) {
+    for (const t of planting) {
       const m = meshes[t.kind];
       const slot = m.freePark.pop();
       if (slot === undefined) continue;

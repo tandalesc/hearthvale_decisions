@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { heightAt, riverX } from '../../terrain.js';
 import { hashId } from '../shaderlib.js';
 import { PALETTE, TRIM_LIGHT, TRIM_WARM, WINDOW, ROOF, DETAIL, styleFor } from './styles.js';
+import { fieldKind } from './crops.js';
 
 // Lot composer: turns one building record (contract §3) into 3-12 kit piece
 // instances. Silhouette says era, colour says wealth, props say function
@@ -456,7 +457,11 @@ export function composeLot(b, pool, anim = null, selected = false) {
         // Crops stop one cell (2 m) short of the lot edge: the outer ring is
         // the headland track people walk. The field drapes in the shader.
         const fd = Math.max(2, ld - hd - 2.2 - 2);
-        add('field', 0, Math.max(lo, 0), -ld / 2 + 2 + fd / 2, 0, Math.max(2, lw - 4), 1, fd, { wall: new THREE.Color('#9c8460'), seed: h5 });
+        // What it grows follows the farm's kind, era and the season (crops.js);
+        // an orchard's trees come from trees.js, on the field's rectangle.
+        const fw = Math.max(2, lw - 4), fz = -ld / 2 + 2 + fd / 2;
+        add('field', 0, Math.max(lo, 0), fz, 0, fw, 1, fd, { wall: new THREE.Color('#9c8460'), seed: h5, roofKind: fieldKind(b.variant), floorH: era });
+        summary.field = { x: wx(0, fz), z: wz(0, fz), w: fw, d: fd, yaw: angle, kind: fieldKind(b.variant) };
       }
       break;
     }

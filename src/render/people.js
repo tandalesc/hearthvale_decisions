@@ -20,8 +20,14 @@ import { surfaceLevelAt } from '../terrain.js';
 // A walker whose extrapolated row height is within this of the ground follows
 // the ground; anything further off (decks, ford beds) keeps the row height.
 const DRAPE_TOLERANCE = 0.3;
+// The sim's wading depth (sim/people.js walkerY): rows at it are in a ford.
+const FORD_BED = -0.3;
 
 const STRIDE = 16;
+
+// Leg rig (figure units, before scale): hip pivot at LEG_Y, knee halfway.
+const LEG_Y = 0.72;
+const KNEE_Y = 0.36;
 
 // Body parts (aPart) and bones (aBone).
 const PART = { SKIN: 0, CLOTH: 1, LEGS: 2, HAT: 3, HAIR: 4, WOOD: 5, SIGN: 6, CRATE: 7 };
@@ -81,10 +87,15 @@ function buildVillagerGeometry() {
     return o;
   };
 
-  // Legs: tops hide in the torso. Soles in a dark shoe brown: a swinging
-  // leg tilts its bottom toward the camera, and an open sole shows the hollow.
-  box([0.02, 0, -0.09], [0.19, 0.72, 0.09], BONE.LEG_L, { ...all(PART.LEGS, ['py']), ny: PART.WOOD });
-  box([-0.19, 0, -0.09], [-0.02, 0.72, 0.09], BONE.LEG_R, { ...all(PART.LEGS, ['py']), ny: PART.WOOD });
+  // Legs: thigh and shin, open at the knee. The shader places three rings of
+  // vertices by their rest height (hip 0.72, knee 0.36, sole 0), so the two
+  // halves share the knee ring and bend without a gap. Tops hide in the torso.
+  // Soles in a dark shoe brown: a swinging leg tilts its bottom toward the
+  // camera, and an open sole shows the hollow.
+  box([0.02, KNEE_Y, -0.09], [0.19, 0.72, 0.09], BONE.LEG_L, all(PART.LEGS, ['py', 'ny']));
+  box([0.02, 0, -0.09], [0.19, KNEE_Y, 0.09], BONE.LEG_L, { ...all(PART.LEGS, ['py']), ny: PART.WOOD });
+  box([-0.19, KNEE_Y, -0.09], [-0.02, 0.72, 0.09], BONE.LEG_R, all(PART.LEGS, ['py', 'ny']));
+  box([-0.19, 0, -0.09], [-0.02, KNEE_Y, 0.09], BONE.LEG_R, { ...all(PART.LEGS, ['py']), ny: PART.WOOD });
   // Torso.
   box([-0.22, 0.68, -0.14], [0.22, 1.3, 0.14], BONE.TORSO, all(PART.CLOTH, ['ny']));
   // Head: face and sides skin, hair on top and at the back.
@@ -97,11 +108,9 @@ function buildVillagerGeometry() {
   // Hat crown and brim (variants are shaped in the shader).
   box([-0.15, 1.63, -0.14], [0.15, 1.79, 0.14], BONE.HAT, all(PART.HAT, ['ny']));
   box([-0.25, 1.63, -0.24], [0.25, 1.67, 0.24], BONE.BRIM, { py: PART.HAT, ny: PART.HAT });
-  // Crate carried at chest height (action 1).
+  // Crate carried at chest height (action 1). While building (action 2) the
+  // shader shrinks it into the mallet's head, on the placard pole as handle.
   box([-0.18, 0.9, 0.22], [0.18, 1.16, 0.46], BONE.CRATE, all(PART.CRATE, ['ny']));
-  // Mallet in the right hand (action 2): rest pose hangs below the hand.
-  box([-0.33, 0.48, -0.03], [-0.27, 0.76, 0.03], BONE.HAMMER, all(PART.WOOD, ['py', 'ny']));
-  box([-0.35, 0.44, -0.11], [-0.25, 0.54, 0.11], BONE.HAMMER, all(PART.WOOD, ['ny']));
   // Placard on a pole in the right hand (action 5); points up once the arm is raised.
   // Held placard: the only protest cue (no static event props), so it is a
   // little larger than life to read from the default camera.
@@ -146,15 +155,29 @@ float fadedScale(float s) {
 
 // Row position extrapolated to now, then draped on the ground texture so the
 // figure follows the terrain's curvature mid-segment.
-vec3 drapedBase(vec3 pos, vec3 vel, float t0) {
+// onGround: 1 when the base was draped (the feet can follow the ground too).
+vec3 drapedBase(vec3 pos, vec3 vel, float t0, out float onGround) {
   vec3 base = pos + vel * clamp(rowTime(t0) - t0, 0.0, 3.0);
+  onGround = 0.0;
   #ifdef SEGMENT_END
     // On a bridge deck the row's own y follows the deck profile; don't drape.
     if (iD.w > 0.5) return base;
   #endif
   float g = groundHeight(base.xz);
-  if (abs(base.y - g) < ${DRAPE_TOLERANCE.toFixed(2)}) base.y = g;
+  #ifdef SEGMENT_END
+    // Decks are flagged, so any other row is on the ground: the sim's natural
+    // terrain, which a building pad's blend (ground.js) can lift or cut by
+    // more than the tolerance on a slope, right where people reach doors.
+    // Waders keep their row height (the sim's ford bed, above the channel's).
+    if (base.y > ${(FORD_BED + 0.01).toFixed(2)} || abs(base.y - g) < ${DRAPE_TOLERANCE.toFixed(2)}) { base.y = g; onGround = 1.0; }
+  #else
+    if (abs(base.y - g) < ${DRAPE_TOLERANCE.toFixed(2)}) { base.y = g; onGround = 1.0; }
+  #endif
   return base;
+}
+vec3 drapedBase(vec3 pos, vec3 vel, float t0) {
+  float onGround;
+  return drapedBase(pos, vel, t0, onGround);
 }
 `;
 
@@ -168,6 +191,7 @@ attribute vec4 iB;   // actionT0, skin, cloth, hat
 attribute vec2 iC;   // scale, facing
 attribute vec3 iTurn; // heading shown when the row's heading last changed, time of that change; z: an angler's water level (fishLineWater)
 uniform float uLodNear;
+uniform float uIkNear;  // feet and hands read the ground within this distance
 uniform float uTurnEase; // 1: ease turns; 0: snap (reduced motion)
 uniform float uLodFar;
 uniform float uFigureScale;
@@ -228,6 +252,76 @@ float easedYaw(float target) {
   return iTurn.x + d * k;
 }
 
+// --- Grounding IK (everyone, every frame, in this shader; no CPU cost) ------
+// Legs are two bones (thigh and shin, SHANK each) solved analytically toward
+// a foot target in the figure's own y-z plane; the hips settle so the lower
+// planted foot can reach the ground. Feet read the ground texture under their
+// own soles, so on a slope one knee bends and the other leg straightens.
+// Arms aim at a hand target (hands on knees, on the grass) and stretch a little
+// to reach it. All in figure units (before scale), relative to the base.
+const float LEG_Y = ${LEG_Y.toFixed(2)};
+const float SHANK = ${(LEG_Y - KNEE_Y).toFixed(2)};
+const float LEG_REACH = 0.70;  // hip to planted sole: knees stay soft, never locked
+const float ARM_LEN = 0.50;    // shoulder pivot to the end of the hand
+
+// Ground under a point of the figure's own frame (x, z), relative to the base,
+// in figure units. 0 off the ground (decks, ford beds), and over a ledge (a
+// quay edge, a pad's lip), where a foot holds the walking plane instead.
+float groundRel(vec3 base, vec2 local, float cy, float sy, float scale, float onGround) {
+  if (onGround < 0.5) return 0.0;
+  vec2 w = base.xz + vec2(local.x * cy + local.y * sy, -local.x * sy + local.y * cy) * scale;
+  float d = (groundHeight(w) - base.y) / scale;
+  return abs(d) > 0.4 ? 0.0 : d;
+}
+
+// Thigh and shin angles from straight down (> 0 swings forward) for a hip and
+// a foot target, both (y, z); the knee bends forward. Out of reach: straight,
+// pointing at the target.
+vec2 legAngles(vec2 hip, vec2 foot) {
+  vec2 d = foot - hip;
+  float len = clamp(length(d), 0.02, 2.0 * SHANK - 1e-3);
+  float phi = atan(d.y, -d.x);
+  float bend = acos(len / (2.0 * SHANK));
+  return vec2(phi + bend, phi - bend);
+}
+
+// One step of the walk for a leg at cycle position c (0..1): planted from
+// +stride to -stride over the first half (moving back exactly as fast as the
+// body moves forward, so the sole stays put on the ground), then swung forward
+// clear of the ground. Returns (z, lift).
+vec2 stepFoot(float c, float stride) {
+  if (c < 0.5) return vec2(stride * (1.0 - 4.0 * c), 0.0);
+  float u = (c - 0.5) * 2.0;
+  return vec2(stride * (2.0 * smoothstep(0.0, 1.0, u) - 1.0), 0.35 * stride * sin(3.14159265 * u));
+}
+
+// A leg vertex: hip ring, knee ring (mitred between thigh and shin) or sole
+// ring, by its rest height. Soles stay flat on the ground while the shin is
+// near upright (a planted foot), and turn with the shin when it lies out.
+vec3 legVertex(vec3 p, float legX, float hipY, vec2 ang) {
+  vec3 off = vec3(p.x - legX, 0.0, p.z);
+  vec3 hip = vec3(legX, hipY, 0.0);
+  if (p.y > LEG_Y - 0.01) return swingX(hip + off, hip, ang.x);
+  vec3 knee = hip + vec3(0.0, -SHANK * cos(ang.x), SHANK * sin(ang.x));
+  if (p.y > 0.01) return swingX(knee + off, knee, 0.5 * (ang.x + ang.y));
+  vec3 foot = knee + vec3(0.0, -SHANK * cos(ang.y), SHANK * sin(ang.y));
+  return swingX(foot + off, foot, ang.y * smoothstep(0.35, 0.8, abs(ang.y)));
+}
+
+// Arm angle (forward from down) and stretch that bring the hand of an arm
+// hanging from \`shoulder\` (rest pose) to \`target\` (figure frame), given the
+// upper body's lift and its tilt about the hips.
+vec2 armAim(vec3 shoulder, vec3 target, float up, float tiltA, float hipY) {
+  vec3 t = swingX(target, vec3(0.0, hipY, 0.0), -tiltA) - vec3(0.0, up, 0.0);
+  vec2 d = t.yz - shoulder.yz;
+  return vec2(atan(d.y, -d.x), clamp(length(d) / ARM_LEN, 0.8, 1.3));
+}
+// Stretch an arm vertex along the hanging arm before it swings.
+vec3 armStretch(vec3 p, vec3 shoulder, float s) {
+  return vec3(p.x, shoulder.y + (p.y - shoulder.y) * s, p.z);
+}
+
+
 // Posed, scaled, rotated and placed vertex in world space.
 // Hidden people collapse every vertex onto one point (zero-area triangles).
 vec3 personPosition(vec3 position) {
@@ -247,38 +341,62 @@ vec3 personPosition(vec3 position) {
   if (rowTime(t0) < uTime) gait = 0.0;
   float dist = distance(raw, cameraPosition);
   if (scale < 0.01 || dist > uLodFar) return raw;
-  vec3 base = drapedBase(iPos, iVel, t0);
+  float onGround;
+  vec3 base = drapedBase(iPos, iVel, t0, onGround);
   bool lod = dist > uLodNear;
+  // Face the direction of travel, else the stored facing.
+  float yaw = easedYaw(length(iVel.xz) > 0.05 ? atan(iVel.x, iVel.z) : iC.y);
+  float cy = cos(yaw), sy = sin(yaw);
+  float sc = max(scale, 0.05);
 
-  // Walk cycle. Frequency follows gait (capped so 8x stays readable),
-  // amplitude saturates at a brisk walk.
+  // Walk cycle. Cadence follows gait (capped so 8x stays readable); the
+  // stride is whatever keeps a planted foot still: the body's own speed over
+  // half a cycle. Arms swing against the legs.
   float g = min(gait, 1.2);
-  float w = uTime * 7.0 * min(gait, 2.5) + phase;
+  float moving = step(0.05, gait);
+  float omega = 7.0 * clamp(gait, 0.6, 2.5);
+  float w = uTime * omega + phase;
+  float stride = moving * min(length(iVel.xz) / sc * 1.5707963 / omega, 0.36);
   float swing = sin(w) * 0.55 * g;
-  float legL = swing, legR = -swing;
   float armL = -swing * 0.8, armR = swing * 0.8;
   float outL = 0.07, outR = 0.07;
-  float bob = abs(cos(w)) * 0.05 * g;
-  float lift = 0.0;
+  float cycL = fract((w - 1.5707963) / 6.2831853);
+  vec2 stepL = stepFoot(cycL, stride);
+  vec2 stepR = stepFoot(fract(cycL + 0.5), stride);
+  float lift = 0.0;   // hop (cheer, dance): the whole figure, feet and all
   float twist = 0.0;
   float tilt = 0.0;   // upper body forward (< 0) about the hips
   float lie = 0.0;    // the whole figure laid on its back
   // Idle: a slow breath so standing crowds are not frozen.
-  bob += (1.0 - step(0.05, gait)) * sin(uTime * 1.6 + phase) * 0.012;
+  float breath = (1.0 - moving) * sin(uTime * 1.6 + phase) * 0.012;
 
-  // Action pose, eased in over 0.3 s from the walk pose.
+  // Action pose, eased in over 0.3 s from the walk pose. Legs are posed by
+  // their foot targets (z forward, y up) and, for seated poses, the hips.
   float k = smoothstep(0.0, 0.3, actT);
-  float aL = armL, aR = armR, oL = outL, oR = outR, lL = legL, lR = legR, li = 0.0;
+  float aL = armL, aR = armR, oL = outL, oR = outR, li = 0.0;
+  vec2 fL = vec2(stepL.x, 0.0), fR = vec2(stepR.x, 0.0); // action feet (z, y above ground)
+  float seat = -1.0;       // hips' height above the base when seated; < 0 standing
+  float reach = 0.0;       // 1: the hands go to targets (handL, handR) instead
+  vec3 handL = vec3(0.0), handR = vec3(0.0);
+  // Feet follow the ground near the view; further out they stand level (unseen).
+  float ground = dist < uIkNear ? onGround : 0.0;
   if (action == 1.0) {            // carry: both arms forward under the crate
     aL = 1.15; aR = 1.15; oL = 0.0; oR = 0.0;
   } else if (action == 2.0) {     // build: mallet strikes at 2 Hz
     float strike = sin(actT * 12.566);
     aR = 1.9 + 0.8 * strike; aL = 0.7; oR = 0.15;
-    lL = 0.0; lR = 0.0;
-  } else if (action == 3.0) {     // sit on the ground, legs out
-    lL = 1.45; lR = 1.45; aL = 0.35; aR = 0.35; li = -0.62;
-  } else if (action == 7.0) {     // sit on a bench: hips at seat height (0.49), feet on the ground
-    lL = 0.83; lR = 0.83; aL = 0.5; aR = 0.5; li = -0.235;
+    fL = vec2(0.0); fR = vec2(0.0);
+  } else if (action == 3.0) {     // sit on the grass, legs out, leaning back on the hands
+    seat = 0.1; fL = vec2(0.66, 0.05); fR = vec2(0.64, 0.05);
+    aL = 0.35; aR = 0.35; tilt = 0.18; reach = 1.0;
+    handL = vec3(0.3, 0.0, -0.3); handR = vec3(-0.3, 0.0, -0.3);
+  } else if (action == 7.0) {     // sit on a bench: torso on the seat, feet on the ground, hands on the knees
+    // The bench stands on the highest ground under its legs (decor.js bench).
+    float bench = max(groundRel(base, vec2(0.6 / sc, 0.0), cy, sy, sc, ground),
+                      groundRel(base, vec2(-0.6 / sc, 0.0), cy, sy, sc, ground));
+    seat = max(bench, 0.0) + 0.485 / sc + 0.04;
+    fL = vec2(0.4, 0.0); fR = vec2(0.42, 0.0);
+    aL = 0.5; aR = 0.5; reach = 1.0;
   } else if (action == 4.0) {     // cheer: arms up, bouncing
     float b = sin(actT * 9.0 + phase);
     aL = 2.7 + 0.25 * b; aR = 2.7 - 0.25 * b; oL = 0.35; oR = 0.35;
@@ -286,51 +404,105 @@ vec3 personPosition(vec3 position) {
   } else if (action == 5.0) {     // protest: placard held high, fist pumping
     aR = 2.95 + 0.12 * sin(actT * 4.0 + phase);
     aL = 0.4 + 0.6 * max(0.0, sin(actT * 3.0 + phase)); oR = 0.05;
-  } else if (action == 6.0) {     // dance: alternating arms, sway and hop
+  } else if (action == 6.0) {     // dance: alternating arms and feet, sway and hop
     float d = sin(actT * 5.0 + phase);
     aL = 1.4 + d; aR = 1.4 - d; oL = 0.5; oR = 0.5;
-    lL = 0.35 * d; lR = -0.35 * d;
+    fL = vec2(0.24 * d, 0.0); fR = vec2(-0.24 * d, 0.0);
     li = abs(d) * 0.1;
     twist = 0.7 * sin(actT * 2.5 + phase);
   } else if (action == 8.0) {     // fish: both hands on the rod, out in front
-    aR = 0.85; oR = 0.12; aL = 0.8; oL = -0.12; lL = 0.0; lR = 0.0;
+    aR = 0.85; oR = 0.12; aL = 0.8; oL = -0.12; fL = vec2(0.0); fR = vec2(0.0);
   } else if (action == 9.0) {     // lean on a rail: forearms forward, upper body tipped over it
-    aL = 1.35; aR = 1.35; oL = 0.05; oR = 0.05; lL = 0.0; lR = 0.08;
+    aL = 1.35; aR = 1.35; oL = 0.05; oR = 0.05; fL = vec2(0.0); fR = vec2(0.06, 0.0);
     tilt = -0.34;
   } else if (action == 10.0) {    // lie on the grass, face up, arms at the sides
-    aL = 0.12; aR = 0.12; oL = 0.18; oR = 0.18; lL = 0.0; lR = 0.06;
-    lie = 1.0;
-  } else if (action == 11.0) {    // kneel: hips low, shins back, reaching forward and down
-    lL = -0.95; lR = -0.9; aL = 0.75; aR = 0.7; oL = 0.05; oR = 0.05; li = -0.36;
-    tilt = -0.28;
+    aL = 0.12; aR = 0.12; oL = 0.18; oR = 0.18; fL = vec2(0.0); fR = vec2(0.04, 0.0);
+    lie = 1.0; ground = 0.0;
+  } else if (action == 11.0) {    // kneel: knees and shins on the ground, hands down in front
+    seat = 0.37 + groundRel(base, vec2(0.0, 0.04), cy, sy, sc, ground);
+    fL = vec2(-0.37, 0.03); fR = vec2(-0.35, 0.03);
+    aL = 0.75; aR = 0.7; oL = 0.05; oR = 0.05;
+    tilt = -0.52; reach = 1.0;
+    handL = vec3(0.22, 0.04, 0.44); handR = vec3(-0.22, 0.04, 0.4);
+    handL.y += groundRel(base, handL.xz, cy, sy, sc, ground);
+    handR.y += groundRel(base, handR.xz, cy, sy, sc, ground);
   } else if (action == 12.0) {    // point: right arm out toward what is watched
     aR = 1.6 + 0.05 * sin(actT * 1.3 + phase); oR = 0.06; aL = 0.15;
   }
-  if (action > 0.5) {
-    armL = mix(armL, aL, k); armR = mix(armR, aR, k);
-    outL = mix(outL, oL, k); outR = mix(outR, oR, k);
-    legL = mix(legL, lL, k); legR = mix(legR, lR, k);
-    lift = li * k;
+  bool posed = action > 0.5;
+  if (!posed) k = 0.0;
+  armL = mix(armL, aL, k); armR = mix(armR, aR, k);
+  outL = mix(outL, oL, k); outR = mix(outR, oR, k);
+  lift = li * k;
+  tilt *= k;
+
+  // Feet: the walk's or the pose's, each on the ground under its own sole.
+  float hipY = LEG_Y;
+  vec2 angL = vec2(0.0), angR = vec2(0.0);
+  if (!lod) {
+    vec2 zL = vec2(mix(stepL.x, fL.x, k), mix(stepL.y, fL.y, k));
+    vec2 zR = vec2(mix(stepR.x, fR.x, k), mix(stepR.y, fR.y, k));
+    float gL = groundRel(base, vec2(0.1, zL.x), cy, sy, sc, ground);
+    float gR = groundRel(base, vec2(-0.1, zR.x), cy, sy, sc, ground);
+    // Standing hips: as high as the lower planted foot allows (an inverted
+    // pendulum over the stance leg, so the body dips at full stride).
+    float standY = min(gL + sqrt(max(LEG_REACH * LEG_REACH - zL.x * zL.x, 0.04)),
+                       gR + sqrt(max(LEG_REACH * LEG_REACH - zR.x * zR.x, 0.04)));
+    standY = clamp(standY, LEG_Y - 0.3, LEG_Y + 0.2);
+    hipY = seat >= 0.0 ? mix(standY, seat, k) : standY;
+    hipY += lift;
+    angL = legAngles(vec2(hipY, 0.0), vec2(gL + zL.y + lift, zL.x));
+    angR = legAngles(vec2(hipY, 0.0), vec2(gR + zR.y + lift, zR.x));
+    if (reach > 0.5 && action == 7.0) {
+      // Hands rest just above the knees.
+      vec3 kneeL = vec3(0.1, hipY - SHANK * cos(angL.x), SHANK * sin(angL.x));
+      vec3 kneeR = vec3(-0.1, hipY - SHANK * cos(angR.x), SHANK * sin(angR.x));
+      handL = kneeL + vec3(0.06, 0.1, -0.05);
+      handR = kneeR + vec3(-0.06, 0.1, -0.05);
+    } else if (reach > 0.5 && action == 3.0) {
+      handL.y += groundRel(base, handL.xz, cy, sy, sc, ground) + 0.02;
+      handR.y += groundRel(base, handR.xz, cy, sy, sc, ground) + 0.02;
+    }
+  } else {
+    hipY = LEG_Y + lift + (seat >= 0.0 ? (seat - LEG_Y) * k : 0.0);
   }
+  float up = hipY - LEG_Y + breath;
 
   vec3 p = position;
   vec3 hide = vec3(0.0, 1.0, 0.0); // inside the torso
   vec3 shoulderL = vec3(0.29, 1.24, 0.0);
   vec3 shoulderR = vec3(-0.29, 1.24, 0.0);
-  float up = bob + lift;
+  // Hand targets: aim and stretch the arms there.
+  float stretchL = 1.0, stretchR = 1.0;
+  if (reach > 0.5 && !lod) {
+    vec2 aimL = armAim(shoulderL, handL, up, tilt, hipY);
+    vec2 aimR = armAim(shoulderR, handR, up, tilt, hipY);
+    armL = mix(armL, aimL.x, k); stretchL = mix(1.0, aimL.y, k);
+    armR = mix(armR, aimR.x, k); stretchR = mix(1.0, aimR.y, k);
+  }
 
-  if (bone == 4.0) p = swingX(p, vec3(0.1, 0.72, 0.0), legL);
-  else if (bone == 5.0) p = swingX(p, vec3(-0.1, 0.72, 0.0), legR);
-  else if (bone == 2.0) p = swingZ(swingX(p, shoulderL, armL), shoulderL, outL) + vec3(0.0, up, 0.0);
-  else if (bone == 3.0 || bone == 9.0 || bone == 10.0) {
-    if (bone == 9.0 && action != 2.0) p = hide;
+  bool rightHand = bone == 3.0 || bone == 9.0 || bone == 10.0 || (bone == 8.0 && action == 2.0);
+  if (bone == 4.0) p = legVertex(p, 0.105, hipY, angL);
+  else if (bone == 5.0) p = legVertex(p, -0.105, hipY, angR);
+  else if (bone == 2.0) p = swingZ(swingX(armStretch(p, shoulderL, stretchL), shoulderL, armL), shoulderL, outL) + vec3(0.0, up, 0.0);
+  else if (rightHand) {
+    if (bone == 9.0) p = hide;
     else if (bone == 10.0 && action == 8.0) {
       vec3 hand = swingZ(swingX(vec3(-0.30, 0.76, 0.06), shoulderR, armR), shoulderR, -outR) + vec3(0.0, up, 0.0);
       float waterY = iTurn.z > -100.0 ? (iTurn.z - base.y) / max(scale, 1e-3) : -1e4;
       p = k > 0.99 ? rodVertex(position, hand, actT, phase, floor(aPart + 0.5), waterY) : hide;
     }
+    else if (bone == 10.0 && action == 2.0) {
+      // Mallet: the pole is the handle, hanging from the hand; no placard.
+      p = aPart > 5.5 && aPart < 6.5 ? hide : vec3(p.x, 0.76 - (0.95 - p.y) * 0.28, p.z);
+    }
     else if (bone == 10.0 && action != 5.0) p = hide;
-    else p = swingZ(swingX(p, shoulderR, armR), shoulderR, -outR) + vec3(0.0, up, 0.0);
+    else if (bone == 8.0) {
+      // Mallet: the crate shrunk into its head at the bottom of the handle.
+      vec3 u = (p - vec3(-0.18, 0.9, 0.22)) / vec3(0.36, 0.26, 0.24);
+      p = vec3(-0.35, 0.44, -0.11) + u * vec3(0.1, 0.1, 0.22);
+    }
+    if (p != hide) p = swingZ(swingX(armStretch(p, shoulderR, stretchR), shoulderR, armR), shoulderR, -outR) + vec3(0.0, up, 0.0);
   } else if (bone == 8.0) {
     p = action == 1.0 ? p + vec3(0.0, up, 0.0) : hide;
   } else if (bone == 6.0 || bone == 7.0) {
@@ -343,10 +515,8 @@ vec3 personPosition(vec3 position) {
   } else {
     p.y += up;
   }
-  // Legs carry the hip drop when sitting.
-  if (bone == 4.0 || bone == 5.0) p.y += lift;
   // Leaning and kneeling tip everything above the hips forward.
-  if (tilt != 0.0 && bone != 4.0 && bone != 5.0) p = swingX(p, vec3(0.0, 0.72 + lift, 0.0), tilt * k);
+  if (tilt != 0.0 && bone != 4.0 && bone != 5.0) p = swingX(p, vec3(0.0, hipY, 0.0), tilt);
   // Lying down: the whole figure on its back, head away from the faced view.
   if (lie > 0.5) p = swingX(p, vec3(0.0, 0.0, 0.0), 1.5 * k) + vec3(0.0, 0.17 * k, 0.0);
 
@@ -356,10 +526,8 @@ vec3 personPosition(vec3 position) {
     if (bone == 0.0 && p.y < 0.75) p.y = 0.0;
   }
 
-  // Face the direction of travel, else the stored facing.
-  float yaw = easedYaw(length(iVel.xz) > 0.05 ? atan(iVel.x, iVel.z) : iC.y);
   yaw += twist * k;
-  float cy = cos(yaw), sy = sin(yaw);
+  cy = cos(yaw); sy = sin(yaw);
   p *= scale;
   return base + vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
 }
@@ -782,6 +950,7 @@ export function createPeople(ctx) {
 
   const lodUniforms = {
     uLodNear: { value: 120 },
+    uIkNear: { value: 70 },
     uLodFar: { value: 260 },
     // Slightly toy-scaled (~1.9 m) so figures read at the default camera distance.
     uFigureScale: { value: 1.1 },
@@ -1158,7 +1327,7 @@ export function createPeople(ctx) {
     const onDeck = stride >= 20 && a[o + 19] > 0.5;
     if (ground && !onDeck) {
       const g = ground.sample(x, z);
-      if (Math.abs(y - g) < DRAPE_TOLERANCE) y = g;
+      if ((stride >= 20 && y > FORD_BED + 0.01) || Math.abs(y - g) < DRAPE_TOLERANCE) y = g;
     }
     return out.set(x, y, z);
   }

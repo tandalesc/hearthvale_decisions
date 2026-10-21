@@ -21,6 +21,17 @@ test('ground mirror matches heightAt on samples and interpolates between them', 
   assert.equal(waterLevel(0), 0.025);
 });
 
+test('ground mirror interpolates on the terrain mesh\'s own two triangles per cell', () => {
+  // terrain.js buildGridLevel splits each cell along its (1,0)-(0,1) diagonal,
+  // so a point placed with the mirror lies exactly on the drawn ground.
+  const g = createGround();
+  const a = heightAt(10, 20), b = heightAt(11, 20), c = heightAt(10, 21), e = heightAt(11, 21);
+  const near = (x, y) => Math.abs(x - y) < 1e-4;
+  assert.ok(near(g.sample(10.25, 20.25), a + (b - a) * 0.25 + (c - a) * 0.25), 'lower triangle');
+  assert.ok(near(g.sample(10.75, 20.75), e + (c - e) * 0.25 + (b - e) * 0.25), 'upper triangle');
+  assert.ok(near(g.sample(10.5, 20.5), (b + c) / 2), 'on the diagonal: the two triangles agree');
+});
+
 test('pads flatten a footprint, blend to natural ground and can be removed', () => {
   const g = createGround();
   const v0 = g.version();

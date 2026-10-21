@@ -380,7 +380,41 @@ function buildGridLevel(step) {
 }
 
 /** Height range of a chunk (coarse samples) for its culling sphere. */
-function chunkSphere(cx, cz) {
+/**
+ * A chunk's LOD, picked by the camera's distance to the chunk's nearest point
+ * rather than its centre. Chunks are 168 m, so measured to the centre the
+ * ground right under a close camera could drop to the 2 or 4 m grid while
+ * everything standing on it (pads, fields, decals, trees, people) reads the
+ * 1 m texture, and floats or sinks by the difference. Same hysteresis.
+ */
+function nearestPointLod(cx, cz) {
+  const { lo, hi } = chunkRange(cx, cz);
+  const lod = new THREE.LOD();
+  const cam = new THREE.Vector3();
+  lod.update = function update(camera) {
+    const levels = this.levels;
+    if (levels.length < 2) return;
+    cam.setFromMatrixPosition(camera.matrixWorld);
+    const dx = Math.max(Math.abs(cam.x - cx) - CHUNK / 2, 0);
+    const dz = Math.max(Math.abs(cam.z - cz) - CHUNK / 2, 0);
+    const dy = Math.max(cam.y - hi, lo - cam.y, 0);
+    const distance = Math.hypot(dx, dy, dz) / camera.zoom;
+    levels[0].object.visible = true;
+    let i = 1;
+    for (; i < levels.length; i++) {
+      let d = levels[i].distance;
+      if (levels[i].object.visible) d -= d * levels[i].hysteresis;
+      if (distance < d) break;
+      levels[i - 1].object.visible = false;
+      levels[i].object.visible = true;
+    }
+    this._currentLevel = i - 1;
+    for (; i < levels.length; i++) levels[i].object.visible = false;
+  };
+  return lod;
+}
+
+function chunkRange(cx, cz) {
   let lo = Infinity, hi = -Infinity;
   for (let j = 0; j <= 16; j++) {
     for (let i = 0; i <= 16; i++) {
@@ -388,6 +422,11 @@ function chunkSphere(cx, cz) {
       lo = Math.min(lo, h); hi = Math.max(hi, h);
     }
   }
+  return { lo, hi };
+}
+
+function chunkSphere(cx, cz) {
+  let { lo, hi } = chunkRange(cx, cz);
   lo -= 8; hi += 8; // pads and skirts
   const mid = (lo + hi) / 2;
   return new THREE.Sphere(new THREE.Vector3(0, mid, 0), Math.hypot(CHUNK / 2, CHUNK / 2, (hi - lo) / 2));
@@ -520,7 +559,7 @@ export function createTerrain({ scene, grade, roads, quality }) {
     for (let ci = 0; ci < count; ci++) {
       const cx = GROUND_ORIGIN + CHUNK / 2 + ci * CHUNK;
       const cz = GROUND_ORIGIN + CHUNK / 2 + cj * CHUNK;
-      const lod = new THREE.LOD();
+      const lod = nearestPointLod(cx, cz);
       lod.position.set(cx, 0, cz);
       const sphere = chunkSphere(cx, cz);
       levels.forEach((lv, k) => {

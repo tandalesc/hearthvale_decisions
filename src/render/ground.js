@@ -4,7 +4,7 @@ import * as T from '../terrain.js';
 // The single source of truth for ground height in the renderer.
 //
 // A float texture over -420..420 at 1 unit per sample that every shader reads
-// with the same manual bilinear filter, and a CPU mirror of the exact same
+// with the same manual filter (linear on the terrain mesh's triangles), and a CPU mirror of the exact same
 // data for placement, picking and camera clamps. Four channels per sample:
 //   R  ground height (terrain + building pads)
 //   G  signed offset from the river centreline, u = x - riverX(z), so shaders
@@ -29,7 +29,7 @@ export function waterLevel(z) {
   return typeof T.waterLevelAt === 'function' ? T.waterLevelAt(z) : 0.025;
 }
 
-/** GLSL: exact bilinear height, normal and river offset from the ground texture. */
+/** GLSL: exact height (on the mesh's triangles), normal and river offset from the ground texture. */
 export const GROUND_GLSL = /* glsl */ `
 uniform highp sampler2D tGround;
 uniform vec2 uGroundOrigin;
@@ -40,17 +40,25 @@ vec4 groundTexel(ivec2 c) {
   c = clamp(c, ivec2(0), ivec2(int(uGroundN) - 1));
   return texelFetch(tGround, c, 0);
 }
-// Manual bilinear on NEAREST float data: identical to the CPU mirror.
+// Manual interpolation on NEAREST float data, identical to the CPU mirror:
+// linear over the same two triangles per cell that the terrain mesh draws
+// (split along the (1,0)-(0,1) diagonal, terrain.js buildGridLevel), so
+// anything placed or draped with it lies exactly on the visible ground,
+// where a bilinear blend would float or sink by up to a quarter of the
+// cell's twist (pad edges, banks).
 vec4 groundBilinear(vec2 xz) {
   vec2 p = (xz - uGroundOrigin) / uGroundStep;
   vec2 i = floor(p);
   vec2 f = p - i;
   ivec2 c = ivec2(i);
-  vec4 a = groundTexel(c);
   vec4 b = groundTexel(c + ivec2(1, 0));
   vec4 d = groundTexel(c + ivec2(0, 1));
+  if (f.x + f.y <= 1.0) {
+    vec4 a = groundTexel(c);
+    return a + (b - a) * f.x + (d - a) * f.y;
+  }
   vec4 e = groundTexel(c + ivec2(1, 1));
-  return mix(mix(a, b, f.x), mix(d, e, f.x), f.y);
+  return e + (d - e) * (1.0 - f.x) + (b - e) * (1.0 - f.y);
 }
 // Metres to the nearest water (negative over it) and the shore's character.
 float groundShore(vec2 xz) {
@@ -242,16 +250,21 @@ export function createGround() {
     return true;
   }
 
-  /** CPU mirror: exact same bilinear as the shader (clamped to the texture). */
+  /** CPU mirror: exact same interpolation as the shader, on the terrain mesh's
+   * own triangles (clamped to the texture). */
   function sample(x, z) {
     const px = Math.min(GROUND_N - 1.0001, Math.max(0, toI(x)));
     const pz = Math.min(GROUND_N - 1.0001, Math.max(0, toI(z)));
     const i = Math.floor(px), j = Math.floor(pz);
     const fx = px - i, fz = pz - j;
     const k = j * GROUND_N + i;
-    const a = height[k], b = height[k + 1], c = height[k + GROUND_N], e = height[k + GROUND_N + 1];
-    const top = a + (b - a) * fx;
-    return top + (c + (e - c) * fx - top) * fz;
+    const b = height[k + 1], c = height[k + GROUND_N];
+    if (fx + fz <= 1) {
+      const a = height[k];
+      return a + (b - a) * fx + (c - a) * fz;
+    }
+    const e = height[k + GROUND_N + 1];
+    return e + (c - e) * (1 - fx) + (b - e) * (1 - fz);
   }
 
   /** Inside the textured area? (Outside, callers fall back to heightAt.) */

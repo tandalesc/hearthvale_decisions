@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { patchMaterial, NOISE, GRADE_HEAD } from '../shaderlib.js';
 import { GROUND_GLSL } from '../ground.js';
+import { CROP_GLSL } from './crops.js';
 
 // The building material: Lambert, patched so every face picks its colour
 // family from aPart and the instance colours, and walls draw analytic
@@ -28,11 +29,12 @@ const VERTEX_OFFSET = /* glsl */ `
   float aliveI = step(1e-3, iScale.x * iScale.y * iScale.z);
   vec3 metric = aMetric + aShape * vec3(iShape.y, iShape.z, iShape.y);
   #ifdef CROP_PIECE
-    // Crops grow through spring, ripen, then are cut to stubble after harvest.
-    float yt = uYearT;
-    float growth = smoothstep(0.02, 0.32, yt) * (1.0 - 0.8 * smoothstep(0.66, 0.72, yt));
-    growth = max(growth, 0.12);
-    metric.y *= growth;
+    // What grows in this row now (crops.js): its height and width.
+    gCrop = cropNow(position, iStyle.z, iStyle.x, iParams.w);
+    metric.y *= gCrop.h;
+    metric.z *= gCrop.w;
+    vCropFlower = vec4(gCrop.flowerCol, gCrop.flower);
+    vCropH = gCrop.h;
   #endif
   #ifdef ROTOR
     // Windmill sails turn about the hub (local z axis), speed by wind.
@@ -102,6 +104,10 @@ const VERTEX_END = /* glsl */ `
   else if (part > 4.5 && part < 5.5) base = accentColor(iStyle.y);
   else if (part > 5.5 && part < 6.5) base = vec3(0.12, 0.17, 0.19);
   else if (part > 6.5 && part < 7.5) base = cropColor(uYearT, iParams.w);
+  #ifdef CROP_PIECE
+    if (part > 6.5 && part < 7.5) base = gCrop.col;
+    else if (part > 3.5 && part < 4.5) base = gCrop.soil;
+  #endif
   vBase = base;
 `;
 
@@ -248,7 +254,11 @@ const FRAGMENT_COLOR = /* glsl */ `
     vec2 wd = uWind / max(windL, 1e-3);
     float along = dot(vWorldP.xz, wd);
     float wave = sin(along * 0.35 - uDecoTime * (1.6 + windL) + vnoise(vWorldP.xz * 0.08) * 4.0);
-    float standing = smoothstep(0.15, 0.3, uYearT) * (1.0 - smoothstep(0.64, 0.7, uYearT));
+    #ifdef CROP_PIECE
+      float standing = smoothstep(0.5, 0.8, vCropH);
+    #else
+      float standing = smoothstep(0.15, 0.3, uYearT) * (1.0 - smoothstep(0.64, 0.7, uYearT));
+    #endif
     col *= 1.0 + 0.11 * smoothstep(0.2, 1.0, wave) * standing * (0.5 + windL);
   }
 
@@ -370,6 +380,12 @@ const FRAGMENT_COLOR = /* glsl */ `
     emissive = litI * 0.6;
   } else if (part > 6.5 && part < 7.5) {
     col *= 0.85 + 0.25 * vnoise(vLocal.xz * 0.9 + seed * 11.0);
+    #ifdef CROP_PIECE
+      // Flowers: specks over the share of the crop in bloom (all of a
+      // rapeseed field at its peak, a scatter of clover or buttercups).
+      float bloom = vnoise(vLocal.xz * 14.0 + seed * 7.0);
+      col = mix(col, vCropFlower.rgb, smoothstep(1.0 - vCropFlower.a, 1.08 - vCropFlower.a, bloom));
+    #endif
   }
 
   // Snow settles on up-facing surfaces (roofs, ledges, caps).
@@ -396,6 +412,13 @@ const FRAGMENT_COLOR = /* glsl */ `
   gEmissive = emissive;
 `;
 
+const CROP_VARYINGS = /* glsl */ `
+#ifdef CROP_PIECE
+varying vec4 vCropFlower;
+varying float vCropH;
+#endif
+`;
+
 /** Uniforms shared by every kit material variant. */
 export function createKitUniforms() {
   return {
@@ -416,11 +439,11 @@ export function createKitMaterials(grade, { variant = '', shared } = {}) {
     key: `kit:${variant}`,
     defines,
     uniforms: shared,
-    vertexHead: VERTEX_HEAD + PALETTE_GLSL + VERTEX_VARYINGS,
+    vertexHead: VERTEX_HEAD + PALETTE_GLSL + CROP_GLSL + VERTEX_VARYINGS,
     vertexNormal: VERTEX_NORMAL,
     vertexBegin: VERTEX_OFFSET,
     vertexEnd: VERTEX_END,
-    fragmentHead: FRAGMENT_HEAD + PALETTE_GLSL.replace('uniform float uYearT;', '') + 'float gEmissive = 0.0;\n',
+    fragmentHead: FRAGMENT_HEAD + PALETTE_GLSL.replace('uniform float uYearT;', '') + CROP_VARYINGS + 'float gEmissive = 0.0;\n',
     fragmentColor: FRAGMENT_COLOR,
     fragmentEmissive: /* glsl */ `
       // Lit windows glow warm at night; a dim glow at dusk.
@@ -433,7 +456,7 @@ export function createKitMaterials(grade, { variant = '', shared } = {}) {
   depth.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, grade.uniforms, shared);
     shader.defines = { ...(shader.defines ?? {}), ...defines };
-    shader.vertexShader = GRADE_HEAD + VERTEX_HEAD + 'uniform float uYearT;\n' + shader.vertexShader
+    shader.vertexShader = GRADE_HEAD + VERTEX_HEAD + 'uniform float uYearT;\n' + CROP_GLSL + shader.vertexShader
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + VERTEX_OFFSET);
   };
