@@ -3,8 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fixtureState, stepTick} from '../src/sim/index.js';
-import {footprints, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, bumpWorld, PERSON_MARGIN} from '../src/sim/roads.js';
-import {removeBuildingRecord} from '../src/sim/state.js';
+import {footprints, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, wallMemo, wallsStillClear, routeClearFrom, bumpWorld, PERSON_MARGIN} from '../src/sim/roads.js';
+import {addBuildingRecord, removeBuildingRecord} from '../src/sim/state.js';
 import {buildingOutline, inRect} from '../src/sim/outline.js';
 import {createRoutePlanner} from '../src/route-planner.js';
 import {createAutoTuner, guessTier} from '../src/render/quality.js';
@@ -30,7 +30,10 @@ test('outline tests from the per-cell piece lists agree with every piece of ever
   assert.ok(blocked > 1000, 'the samples reach into pieces');
 });
 
-test('a skirt memo that holds means skirtOutlines would leave the walk as it is', () => {
+// Walks under way in a town that has run a while, each with a skirt memo and a walls
+// memo taken now; then buildings beside some walks come down and new ones go up across
+// others (from further along, so only legs ahead change).
+function memoWalks() {
   const s = fixtureState('town');
   const routes = createRoutePlanner({worker: false, clock: () => 0});
   for (let i = 0; i < 300; i++) {
@@ -44,28 +47,59 @@ test('a skirt memo that holds means skirtOutlines would leave the walk as it is'
     const rest = [p.x, p.z, ...t.route.slice(t.seg)];
     const report = {near: false};
     if (skirtOutlines(s, rest, null, report) !== rest || report.near) continue;
-    walks.push({p, route: t.route, seg: t.seg, memo: skirtMemo(s, t.route, t.seg)});
+    if (!routeClearFrom(s, p.x, p.z, t.route, t.seg)) continue;
+    walks.push({p, route: t.route, seg: t.seg, memo: skirtMemo(s, t.route, t.seg), walls: wallMemo(s, t.route, t.seg)});
   }
   assert.ok(walks.length > 30, `walks under way: ${walks.length}`);
-  // Knock down buildings beside some of those walks, then ask again from further on.
   const near = (b) => walks.some(({route}) => Math.hypot(route.at(-2) - b.x, route.at(-1) - b.z) < 30);
   for (const b of s.buildings.filter((b) => b.type !== 'bridge' && near(b)).slice(0, 6)) removeBuildingRecord(s, b.id);
+  // A small house on the middle of a leg well ahead, on every twentieth walk.
+  for (const w of walks.filter((_, i) => i % 20 === 0)) {
+    const k = w.seg + 4;
+    if (k + 3 >= w.route.length) continue;
+    addBuildingRecord(s, {type: 'home', x: (w.route[k] + w.route[k + 2]) / 2, z: (w.route[k + 1] + w.route[k + 3]) / 2, w: 3, d: 3});
+  }
   bumpWorld(s);
-  let held = 0, dropped = 0;
+  return {s, walks};
+}
+
+// Each walk asked again from where it is now and from a point along the next leg.
+function* askAgain(walks) {
   for (const w of walks) {
     for (const ahead of [0, 2]) {
       const seg = w.seg + ahead;
       if (seg + 1 >= w.route.length) continue;
-      // Somewhere along the walker's current leg.
       const x = ahead ? (w.route[seg - 2] + w.route[seg]) / 2 : w.p.x, z = ahead ? (w.route[seg - 1] + w.route[seg + 1]) / 2 : w.p.z;
-      const memo = {...w.memo};
-      if (!skirtStillClear(s, memo, w.route, seg, x, z)) { dropped++; continue; }
-      held++;
-      const rest = [x, z, ...w.route.slice(seg)];
-      assert.equal(skirtOutlines(s, rest), rest, `walker ${w.p.id} from segment ${seg}`);
+      yield {w, seg, x, z};
     }
   }
+}
+
+test('a skirt memo that holds means skirtOutlines would leave the walk as it is', () => {
+  const {s, walks} = memoWalks();
+  let held = 0, dropped = 0;
+  for (const {w, seg, x, z} of askAgain(walks)) {
+    const memo = {...w.memo};
+    if (!skirtStillClear(s, memo, w.route, seg, x, z)) { dropped++; continue; }
+    held++;
+    const rest = [x, z, ...w.route.slice(seg)];
+    assert.equal(skirtOutlines(s, rest), rest, `walker ${w.p.id} from segment ${seg}`);
+  }
   assert.ok(held > 0 && dropped > 0, `held ${held}, dropped ${dropped}`);
+});
+
+test('a walls memo gives routeClearFrom\'s answer whenever it gives one', () => {
+  const {s, walks} = memoWalks();
+  let held = 0, dropped = 0, blocked = 0;
+  for (const {w, seg, x, z} of askAgain(walks)) {
+    const known = wallsStillClear(s, {...w.walls}, x, z, w.route, seg);
+    const full = routeClearFrom(s, x, z, w.route, seg);
+    if (!full) blocked++;
+    if (known === undefined) { dropped++; continue; }
+    held++;
+    assert.equal(known, full, `walker ${w.p.id} from segment ${seg}`);
+  }
+  assert.ok(held > 0 && dropped > 0 && blocked > 0, `held ${held}, dropped ${dropped}, blocked ${blocked}`);
 });
 
 test('auto quality keeps watching: a town that grows slow steps down again, and never back up', () => {

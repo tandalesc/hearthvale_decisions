@@ -307,6 +307,8 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
     frame.time = time;
     frame.dt = frameDt;
     frame.paused = simSpeed === 0;
+    // Day-paced effects (mist) ease in game time: at 20x a whole day takes ~6 s.
+    frame.speed = simSpeed ?? 1;
     // Decorative clock: sails, sway, boats and flags hold still under reduced motion.
     if (!ctx.reducedMotion) grade.uniforms.uDecoTime.value += frameDt;
     frame.distance = rig.distance();

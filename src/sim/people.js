@@ -16,7 +16,7 @@ import {rng, hash32, hashUnit} from './rng.js';
 import {decide, findHook} from './hooks.js';
 import {byId, cellIndex, lookFor, nextId, BRIDGE} from './state.js';
 import {monthIndex} from './clock.js';
-import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG, walkerSegmentBlocked, walkerLegOutlined, structuralWaterAt, ORIGIN_X, ORIGIN_Z, CELL, GRID_W, GRID_H} from './roads.js';
+import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, wallMemo, wallsStillClear, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG, walkerSegmentBlocked, walkerLegOutlined, structuralWaterAt, ORIGIN_X, ORIGIN_Z, CELL, GRID_W, GRID_H} from './roads.js';
 import {halfWidth, wearBucket} from '../render/paths.js';   // the drawn path widths (pure, no renderer state)
 import {findRoute, cellsToWaypoints} from '../navigation.js';
 import {projectSite} from './buildings.js';
@@ -1052,9 +1052,25 @@ function checkFootprints(state, now) {
       continue;
     }
     if (first || !p.task || p.task.waiting || p.task.seg >= p.task.route.length) continue;
-    if (!routeClearFrom(state, p.x, p.z, p.task.route, p.task.seg)) replan(p, now);
+    if (!routeStillClear(state, p)) replan(p, now);
     else reskirt(state, p, now);
   }
+}
+
+// routeClearFrom for the rest of a walker's route. A walk found clear keeps a memo
+// (roads.js wallMemo); while no wall has come or gone near the legs ahead, only the
+// leg from where the walker stands is checked, with exactly the full check's answer.
+// Memos live outside the state (never saved): a restored town checks in full once.
+const wallMemos = new WeakMap();   // task -> {route, memo}
+function routeStillClear(state, p) {
+  const task = p.task, route = task.route;
+  const held = wallMemos.get(task);
+  const known = held && held.route === route ? wallsStillClear(state, held.memo, p.x, p.z, route, task.seg) : undefined;
+  if (known !== undefined) return known;
+  const clear = routeClearFrom(state, p.x, p.z, route, task.seg);
+  if (clear) wallMemos.set(task, {route, memo: wallMemo(state, route, task.seg)});
+  else wallMemos.delete(task);
+  return clear;
 }
 
 // A walk under way when something new is drawn by it (a plinth, steps or a wing on a

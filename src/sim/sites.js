@@ -740,10 +740,13 @@ export function busyRef(state) {
   const r = state.roads;
   const hit = busyCache.get(r);
   if (hit && hit.version === r.version) return hit.ref;
-  const vals = [];
-  for (let i = 0; i < r.wear.length; i++) if (r.wear[i] >= BUSY_TRODDEN) vals.push(r.wear[i]);
-  vals.sort((a, b) => a - b);
-  const ref = Math.max(BUSY_FLOOR, vals.length ? vals[Math.floor(vals.length * 0.9)] : 0);
+  // The value a full sort would put at the 90th percentile, picked without sorting.
+  const { wear } = r;
+  let n = 0;
+  for (let i = 0; i < wear.length; i++) if (wear[i] >= BUSY_TRODDEN) n++;
+  const vals = new Float32Array(n);
+  for (let i = 0, k = 0; i < wear.length; i++) if (wear[i] >= BUSY_TRODDEN) vals[k++] = wear[i];
+  const ref = Math.max(BUSY_FLOOR, n ? kthLargest(vals, n - Math.floor(n * 0.9)) : 0);
   busyCache.set(r, { version: r.version, ref });
   return ref;
 }

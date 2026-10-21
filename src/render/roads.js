@@ -82,8 +82,8 @@ export function createRoadSplat() {
   // their rows for upload. pathFull: a whole-texture upload is queued this
   // frame, so row ranges must not ride on it (Three would upload only them).
   let pathFull = true;
-  function updatePaths(roads, budget) {
-    const rects = field.update(roads, budget);
+  function updatePaths(roads, budget, rescan = true) {
+    const rects = field.update(roads, budget, rescan);
     if (!rects.length) return false;
     if (pathFull) {
       pathTex.needsUpdate = true;
@@ -163,10 +163,10 @@ export function createRoadSplat() {
     }
     // A render follows every update, so last frame's uploads have gone out:
     // row ranges are safe again. Finish path tiles left over from the last
-    // scan, a few per frame.
+    // scan, a few per frame; the grid is scanned again with the next upload.
     pathFull = false;
     let drew = false;
-    if (field.pending()) drew = updatePaths(roads, PATH_TILES_PER_FRAME);
+    if (field.pending()) drew = updatePaths(roads, PATH_TILES_PER_FRAME, false);
     if (roads.dirty || (roads.version ?? 0) !== lastVersion || forceFill) pending = true;
     forceFill = false;
     if (!pending || time - lastUpload < 0.5) return drew;

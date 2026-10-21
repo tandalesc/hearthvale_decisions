@@ -11,7 +11,7 @@
 // frame does: nobody walks through a workshop.
 //
 // Pure for a given building record and terrain: cached on the record by the fields the
-// shape depends on (keyOf), so a restored town stamps the same cells.
+// shape depends on (SHAPE_FIELDS), so a restored town stamps the same cells.
 
 import {composeLot, createSpecPool} from '../render/kit/compose.js';
 import {heightAt} from '../terrain.js';
@@ -24,8 +24,16 @@ const cache = new WeakMap();
 // The outline is the finished building's: a site under construction keeps clear of
 // what it will be. Each of these changes with a world bump (roads.js bumpWorld), so a
 // footprint built at any moment between bumps agrees with one built at the last.
-const keyOf = (b) => `${b.id},${b.x},${b.z},${b.w},${b.d},${b.rot},${b.type},${b.tier},${b.variant},${b.archetype},${b.styleEra},${b.storeys},` +
-  `${b.foundation},${b.foundationY},${b.foundationDrop},${b.flags?.square ? 1 : 0},${b.extensions?.length ? JSON.stringify(b.extensions) : ''}`;
+// Compared field by field (every footprint build asks for every building's outline):
+// equal fields always mean an equal shape; NaN never compares equal and is simply
+// worked out again.
+const SHAPE_FIELDS = ['id', 'x', 'z', 'w', 'd', 'rot', 'type', 'tier', 'variant', 'archetype', 'styleEra', 'storeys', 'foundation', 'foundationY', 'foundationDrop'];
+const extKey = (b) => (b.extensions?.length ? JSON.stringify(b.extensions) : '');
+function sameShape(hit, b) {
+  const vals = hit.vals;
+  for (let i = 0; i < SHAPE_FIELDS.length; i++) if (vals[i] !== b[SHAPE_FIELDS[i]]) return false;
+  return hit.square === (b.flags?.square ? 1 : 0) && hit.ext === extKey(b);
+}
 
 /**
  * The building's solid pieces at walking height: [{x, z, c, s, hx, hz}], each an
@@ -33,9 +41,8 @@ const keyOf = (b) => `${b.id},${b.x},${b.z},${b.w},${b.d},${b.rot},${b.type},${b
  * margins included (bands 0.18 m, piles 0.13 m).
  */
 export function buildingOutline(b) {
-  const key = keyOf(b);
   const hit = cache.get(b);
-  if (hit && hit.key === key) return hit.rects;
+  if (hit && sameShape(hit, b)) return hit.rects;
   const rects = [];
   if (b.type !== 'bridge' && b.type !== 'park') {
     composeLot({...b, built: 1}, pool);
@@ -48,9 +55,15 @@ export function buildingOutline(b) {
       rects.push({x: sp.x, z: sp.z, c: Math.cos(sp.yaw), s: Math.sin(sp.yaw), hx: Math.abs(sp.sx) / 2 + pad, hz: Math.abs(sp.sz) / 2 + pad});
     }
   }
-  cache.set(b, {key, rects});
-  return rects;
+  // A change that leaves the shape as it was (a restyle that keeps the walls) hands
+  // back the same pieces: walkers' memos compare near lists by identity (roads.js
+  // noteChangedTiles), and stay valid.
+  const same = hit && hit.rects.length === rects.length && hit.rects.every((r, i) => sameRect(r, rects[i]));
+  cache.set(b, {vals: SHAPE_FIELDS.map((k) => b[k]), square: b.flags?.square ? 1 : 0, ext: extKey(b), rects: same ? hit.rects : rects});
+  return same ? hit.rects : rects;
 }
+
+const sameRect = (a, b) => a.x === b.x && a.z === b.z && a.c === b.c && a.s === b.s && a.hx === b.hx && a.hz === b.hz;
 
 /** Is (x, z) within `m` of the rectangle r? */
 export function inRect(r, x, z, m = 0) {

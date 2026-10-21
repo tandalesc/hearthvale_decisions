@@ -135,11 +135,17 @@ export function createMist(ctx) {
     update(view, frame) {
       if (!enabled) return;
       const want = target();
-      amount += (want - amount) * Math.min(1, (frame.dt ?? 0.016) / 2);
+      // Eased over ~2 s at 1x, faster at speed: eased in real time, at 20x it
+      // never cleared between dawns and hung over the town all day.
+      const ease = 2 / Math.max(1, frame.speed ?? 1);
+      amount += (want - amount) * Math.min(1, (frame.dt ?? 0.016) / ease);
       // Mist is a close-up effect: thinned as the camera rises.
       const far = THREE.MathUtils.smoothstep(frame.distance ?? 100, 180, 320);
-      uniforms.uMist.value = amount * (1 - far);
-      mesh.visible = uniforms.uMist.value > 0.01;
+      const u = amount * (1 - far);
+      // Below ~0.05 the banks are under 1.5 % opacity, lost in the grain: fade those
+      // out (no pop) and skip the full-screen pass, as on a damp but clear noon.
+      uniforms.uMist.value = u * THREE.MathUtils.smoothstep(u, 0.03, 0.08);
+      mesh.visible = uniforms.uMist.value > 0.004;
       if (!mesh.visible) return;
       const t = frame.target;
       uniforms.uMistCentre.value.set(Math.round(t.x / STEP) * STEP, Math.round(t.z / STEP) * STEP);

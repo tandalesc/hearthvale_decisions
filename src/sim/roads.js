@@ -414,29 +414,62 @@ export function footprints(state) {
   return fp;
 }
 
-// Which parts of the map a footprint build changed, for walkers' skirt memos
-// (skirtMemo): tiles of NEAR_TILE cells, each stamped with the generation of the last
+// Which parts of the map a footprint build changed, for walkers' memos (skirtMemo,
+// wallMemo): tiles of NEAR_TILE cells, each stamped with the generation of the last
 // build in which some cell of it got a different near list (other pieces, or the same
-// ones in another order). Kept per lineage of builds for one state, in memory only.
+// ones in another order; tileGen) or became a wall or stopped being one (wallGen).
+// The last TILE_LOG builds also list the tiles they stamped (log), so a memo a build or
+// two behind can be brought up by looking at those few tiles rather than all of its own.
+// Kept per lineage of builds for one state, in memory only.
 const NEAR_TILE = 8;
 const TILES_W = Math.ceil(GRID_W / NEAR_TILE), TILES_H = Math.ceil(GRID_H / NEAR_TILE);
+const TILE_LOG = 8;
 function noteChangedTiles(fp, prev) {
   if (!prev?.tileGen) {
     fp.gen = 1;
     fp.tileGen = new Int32Array(TILES_W * TILES_H).fill(1);
+    fp.wallGen = new Int32Array(TILES_W * TILES_H).fill(1);
+    fp.log = new Array(TILE_LOG).fill(null);
     return;
   }
-  const gen = (fp.gen = prev.gen + 1), tileGen = (fp.tileGen = prev.tileGen);
+  const gen = (fp.gen = prev.gen + 1), tileGen = (fp.tileGen = prev.tileGen), wallGen = (fp.wallGen = prev.wallGen);
+  const entry = { gen, near: [], wall: [] };
+  (fp.log = prev.log)[gen % TILE_LOG] = entry;
+  const wa = prev.walls, wb = fp.walls, na = prev.nearAt, nb = fp.nearAt;
   for (let c = 0; c < CELLS; c++) {
-    const a = prev.nearAt[c], b = fp.nearAt[c];
-    if (!a && !b) continue;
-    if (a && b) {
-      const la = prev.near[a - 1], lb = fp.near[b - 1];
-      if (la.length === lb.length && la.every((r, i) => r === lb[i])) continue;
-    }
+    const a = na[c], b = nb[c];
+    const wall = !wa[c] !== !wb[c];
+    if (!wall && !a && !b) continue;
     const x = c % GRID_W, z = (c - x) / GRID_W;
-    tileGen[Math.floor(z / NEAR_TILE) * TILES_W + Math.floor(x / NEAR_TILE)] = gen;
+    const t = Math.floor(z / NEAR_TILE) * TILES_W + Math.floor(x / NEAR_TILE);
+    if (wall && wallGen[t] !== gen) { wallGen[t] = gen; entry.wall.push(t); }
+    // A tile already marked in this build needs no more comparing.
+    if (tileGen[t] === gen || (!a && !b)) continue;
+    if (a && b && sameList(prev.near[a - 1], fp.near[b - 1])) continue;
+    tileGen[t] = gen;
+    entry.near.push(t);
   }
+}
+
+// Could a tile the memo covers have been stamped (in the 'near' or 'wall' log) since
+// memo.gen? False only when the log reaches back that far and none of the tiles it
+// lists lies in the memo's box (which holds all of memo.tiles).
+function maybeChanged(fp, memo, which) {
+  if (fp.gen - memo.gen > TILE_LOG) return true;
+  for (let g = memo.gen + 1; g <= fp.gen; g++) {
+    const e = fp.log[g % TILE_LOG];
+    if (!e || e.gen !== g) return true;
+    for (const t of e[which]) {
+      const tx = t % TILES_W, tz = (t - tx) / TILES_W;
+      if (tx >= memo.tx0 && tx <= memo.tx1 && tz >= memo.tz0 && tz <= memo.tz1) return true;
+    }
+  }
+  return false;
+}
+function sameList(la, lb) {
+  if (la.length !== lb.length) return false;
+  for (let i = 0; i < la.length; i++) if (la[i] !== lb[i]) return false;
+  return true;
 }
 
 // A way in that drawn pieces have closed into a small pocket (an old wing built across
@@ -929,32 +962,82 @@ export function skirtOutlines(state, route0, keep = null, report = null) {
 // margin on it covers rounding at cell edges.)
 export function skirtMemo(state, route, from) {
   const fp = footprints(state);
+  return { gen: fp.gen, tileGen: fp.tileGen, length: route.length, from, ...walkTiles(route, from) };
+}
+
+// The tiles (NEAR_TILE cells a side) a walk's legs from flat index `from` on can
+// sample: each leg's bounding box, one cell of margin for rounding at cell edges.
+// tiles: all of them, once each; boxes: [tx0, tz0, tx1, tz1] per leg, in order from
+// boxFrom (a memo's `from` may move on; its boxes stay where they were).
+function walkTiles(route, from) {
   const tiles = [];
   const seen = new Set();
+  const boxes = new Int16Array(Math.max(0, (route.length - from - 2) >> 1) * 4);
+  let bx0 = TILES_W, bz0 = TILES_H, bx1 = -1, bz1 = -1;
   const tile = (v, origin, max) => Math.max(0, Math.min(max - 1, Math.floor((v - origin) / (CELL * NEAR_TILE))));
-  for (let k = from; k + 3 < route.length; k += 2) {
+  for (let k = from, j = 0; k + 3 < route.length; k += 2, j += 4) {
     const x0 = Math.min(route[k], route[k + 2]) - CELL, x1 = Math.max(route[k], route[k + 2]) + CELL;
     const z0 = Math.min(route[k + 1], route[k + 3]) - CELL, z1 = Math.max(route[k + 1], route[k + 3]) + CELL;
-    for (let tz = tile(z0, ORIGIN_Z, TILES_H), tz1 = tile(z1, ORIGIN_Z, TILES_H); tz <= tz1; tz++)
-      for (let tx = tile(x0, ORIGIN_X, TILES_W), tx1 = tile(x1, ORIGIN_X, TILES_W); tx <= tx1; tx++) {
+    const tx0 = tile(x0, ORIGIN_X, TILES_W), tz0 = tile(z0, ORIGIN_Z, TILES_H);
+    const tx1 = tile(x1, ORIGIN_X, TILES_W), tz1 = tile(z1, ORIGIN_Z, TILES_H);
+    boxes[j] = tx0; boxes[j + 1] = tz0; boxes[j + 2] = tx1; boxes[j + 3] = tz1;
+    if (tx0 < bx0) bx0 = tx0;
+    if (tz0 < bz0) bz0 = tz0;
+    if (tx1 > bx1) bx1 = tx1;
+    if (tz1 > bz1) bz1 = tz1;
+    for (let tz = tz0; tz <= tz1; tz++)
+      for (let tx = tx0; tx <= tx1; tx++) {
         const t = tz * TILES_W + tx;
         if (!seen.has(t)) { seen.add(t); tiles.push(t); }
       }
   }
-  return { gen: fp.gen, tileGen: fp.tileGen, length: route.length, from, tiles };
+  return { tiles, boxes, boxFrom: from, tx0: bx0, tz0: bz0, tx1: bx1, tz1: bz1 };
+}
+
+// Brings a walk memo up to the current build. Nothing it covers changed: true. Some
+// tiles did: each leg from flat index seg on whose box meets one must pass
+// holds(k) (k: the leg's start), and then the memo narrows to seg and holds too.
+// False: the memo cannot tell (do the full check).
+function memoCatchUp(fp, memo, gens, which, seg, holds) {
+  if (memo.gen === fp.gen) return true;
+  let changed = false;
+  if (maybeChanged(fp, memo, which)) for (const t of memo.tiles) if (gens[t] > memo.gen) { changed = true; break; }
+  if (changed) {
+    const b = memo.boxes;
+    for (let k = seg; k + 3 < memo.length; k += 2) {
+      const j = ((k - memo.boxFrom) >> 1) * 4;
+      let hit = false;
+      for (let tz = b[j + 1]; tz <= b[j + 3] && !hit; tz++)
+        for (let tx = b[j]; tx <= b[j + 2]; tx++) if (gens[tz * TILES_W + tx] > memo.gen) { hit = true; break; }
+      if (hit && !holds(k)) return false;
+    }
+    memo.from = seg;
+  }
+  memo.gen = fp.gen;
+  return true;
+}
+
+// Is waypoint k of a route within a walker's margin of a drawn piece (skirtOutlines'
+// report.near test)?
+function nearPiece(fp, route, k) {
+  const x = route[k], z = route[k + 1];
+  const c = cellIndex(Math.floor((x - ORIGIN_X) / CELL), Math.floor((z - ORIGIN_Z) / CELL));
+  const list = c >= 0 ? nearIn(fp, c) : null;
+  return !!list && list.some((r) => inRect(r, x, z, PERSON_MARGIN));
 }
 
 // skirtOutlines would leave [x, z, ...route from flat index seg] as it is, known from
-// the memo without walking the route: the memo still holds (no tile it covers changed
-// since) and the first leg, from (x, z), is clear or wet. False means "not known" (do
-// the full skirtOutlines). A memo that holds is moved up to the current build.
+// the memo without walking the route: every leg it covers whose tiles changed since
+// is still clear or wet, with no waypoint at either end (but the walk's last) now in
+// reach of a piece, and the first leg, from (x, z), is clear or wet. False means "not
+// known" (do the full skirtOutlines). A memo that holds is moved up to the current build.
 export function skirtStillClear(state, memo, route, seg, x, z) {
   const fp = footprints(state);
   if (!memo || memo.tileGen !== fp.tileGen || memo.length !== route.length || seg < memo.from || seg + 1 >= route.length) return false;
-  if (memo.gen !== fp.gen) {
-    for (const t of memo.tiles) if (fp.tileGen[t] > memo.gen) return false;
-    memo.gen = fp.gen;
-  }
+  const last = route.length - 2;
+  const holds = (k) => !nearPiece(fp, route, k) && (k + 2 === last || !nearPiece(fp, route, k + 2)) &&
+    (legClearOfOutlines(fp, route[k], route[k + 1], route[k + 2], route[k + 3]) || !legDry(route[k], route[k + 1], route[k + 2], route[k + 3]));
+  if (!memoCatchUp(fp, memo, fp.tileGen, 'near', seg, holds)) return false;
   if (!fp.near.length) return true;
   return legClearOfOutlines(fp, x, z, route[seg], route[seg + 1]) || !legDry(x, z, route[seg], route[seg + 1]);
 }
@@ -1038,6 +1121,28 @@ export function routeStillValid(state, route, fromIndex = 0) {
     if (!segmentClear(blocked, route[k], route[k + 1], route[k + 2], route[k + 3], k === fromIndex)) return false;
   }
   return true;
+}
+
+// A memo for a walk routeClearFrom has just found clear: from flat index `from` on,
+// every leg's cells are open. That stays true while no cell in the tiles those legs
+// cover becomes a wall (wallGen), so wallsStillClear then only needs the leg from
+// where the walker now stands. Same rules as skirtMemo: the same route object,
+// unchanged in length, and a `from` no later than the walker's segment.
+export function wallMemo(state, route, from) {
+  const fp = footprints(state);
+  return { gen: fp.gen, wallGen: fp.wallGen, length: route.length, from, ...walkTiles(route, from) };
+}
+
+// routeClearFrom(state, x, z, route, seg), known from the memo without walking the
+// whole route: only legs whose tiles changed since are walked again, and the leg from
+// where the walker stands. Undefined when the memo cannot tell (do the full check).
+// A memo that holds is moved up to the current build.
+export function wallsStillClear(state, memo, x, z, route, seg) {
+  const fp = footprints(state);
+  if (!memo || memo.wallGen !== fp.wallGen || memo.length !== route.length || seg < memo.from || seg + 1 >= route.length) return undefined;
+  const walls = fp.walls;
+  if (!memoCatchUp(fp, memo, fp.wallGen, 'wall', seg, (k) => segmentClear(walls, route[k], route[k + 1], route[k + 2], route[k + 3], false))) return undefined;
+  return segmentClear(walls, x, z, route[seg], route[seg + 1], true);
 }
 
 // routeStillValid of [x, z, ...route from flat index seg] without building
