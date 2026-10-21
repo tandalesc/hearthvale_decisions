@@ -5,6 +5,7 @@ import { gradeLambert } from './props.js';
 import { styleFor } from './kit/styles.js';
 import { stageOf } from '../sim/landscape.js';
 import { benchesOf, GATHER } from '../sim/seats.js';
+import { createCattle } from './cattle.js';
 
 // Lived-in decor (design-visual §7): the small things a town gathers as it
 // matures, all instanced and placed from sim state, never from game rules.
@@ -85,6 +86,9 @@ export function createDecor(ctx) {
   scene.add(group);
 
   // --- Meshes --------------------------------------------------------------
+  // Grazing cattle: animated on the GPU (cattle.js); layout() hands them their herd.
+  const cattle = createCattle(ctx);
+  let herd = [];
   const boxGeo = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
   boxGeo.computeVertexNormals();
   const boxMat = gradeLambert(grade, 'decor-box');
@@ -521,27 +525,12 @@ export function createDecor(ctx) {
     }
   }
 
-  // A cow, grazing: body level with its own legs' ground (pitched on a
-  // slope), every leg reaching the ground under it, head down in the grass.
+  // A cow on a pasture: drawn and animated by cattle.js (wandering, grazing,
+  // hooves on the ground); here only its field and its coat.
   const COWS = [[Y.cowBrown, null], [Y.cowBlack, Y.cowWhite], [Y.cowCream, null], [Y.cowRed, Y.cowWhite]];
-  function cow(x, z, yaw, seed) {
-    const c = Math.cos(yaw), s = Math.sin(yaw);
-    const at = (lx, lz) => [x + lx * c + lz * s, z - lx * s + lz * c];
+  function cow(field, seed) {
     const [coat, patch] = COWS[Math.floor(hashId(seed, 84) * COWS.length)];
-    const feet = [[-0.22, 0.55], [0.22, 0.55], [-0.22, -0.55], [0.22, -0.55]].map(([lx, lz]) => [...at(lx, lz), lx, lz]);
-    const g = feet.map(([fx, fz]) => heightAt(fx, fz));
-    const front = (g[0] + g[1]) / 2, back = (g[2] + g[3]) / 2;
-    const pitch = Math.atan2(back - front, 1.1);
-    const y = (front + back) / 2 + 0.98;
-    box(x, y, z, 0.68, 0.6, 1.5, coat, yaw, pitch);
-    if (patch) box(x, y + 0.04, z, 0.7, 0.4, 0.55, patch, yaw, pitch);
-    feet.forEach(([fx, fz, , lz], i) => leg(fx, fz, y - 0.28 + Math.sin(pitch) * lz, 0.14, 0.14, coat, yaw));
-    // Head lowered to the grass at the front, with a pale muzzle.
-    const [hx, hz] = at(0, 0.95);
-    const gh = heightAt(hx, hz);
-    box(hx, gh + 0.42, hz, 0.34, 0.36, 0.5, coat, yaw, 0.9);
-    const [mx, mz] = at(0, 1.12);
-    box(mx, gh + 0.2, mz, 0.3, 0.16, 0.2, Y.cowMuzzle, yaw, 0.9);
+    herd.push({ ...field, seed: hashId(seed, 83), coat, patch });
   }
 
   function yard(b, era, dry, season, free) {
@@ -577,11 +566,10 @@ export function createDecor(ctx) {
       // Cattle graze a dairy's pasture from spring to autumn (in the barn in winter).
       if (dairy && season !== 3) {
         const n = 1 + Math.floor(hashId(id, 88) * Math.min(3, (fw * fd) / 14));
+        // Each cow keeps to its own strip of the pasture, so they never crowd.
         for (let i = 0; i < n; i++) {
-          const lx = (hashId(id * 17 + i, 86) - 0.5) * Math.max(0, fw - 2);
-          const lz = fz + (hashId(id * 17 + i, 87) - 0.5) * Math.max(0, fd - 1.6);
-          const [x, z] = L(lx, lz);
-          cow(x, z, hashId(id * 17 + i, 85) * Math.PI * 2, id * 17 + i);
+          const [x, z] = L(-fw / 2 + (i + 0.5) * (fw / n), fz);
+          cow({ x, z, hw: fw / (2 * n), hd: fd / 2, yaw: angle }, id * 17 + i);
         }
       }
       // After harvest: haystacks on a dairy's hay meadow, and round bales on
@@ -1064,6 +1052,7 @@ export function createDecor(ctx) {
   function layout(view, centre) {
     nBox = 0;
     nBlob = 0;
+    herd = [];
     const reach = REACH[tierName()] ?? REACH.medium;
     const era = view.era ?? 0;
     const season = view.time?.season ?? 0;
@@ -1126,6 +1115,7 @@ export function createDecor(ctx) {
     streets(view, cx, cz, reach, lotCells, litterSpots);
     boxes.count = nBox;
     blobs.count = nBlob;
+    cattle.setHerd(herd);
     // Upload only the rows in use (the buffers are sized for the busiest view).
     for (const m of [boxes, blobs]) {
       const n = Math.max(1, m.count);
@@ -1155,6 +1145,7 @@ export function createDecor(ctx) {
       const shown = (frame.distance ?? 0) < HIDE_BEYOND;
       if (shown !== group.visible) {
         group.visible = shown;
+        cattle.setVisible(shown);
         lights?.markDirty?.();
       }
       if (!shown) return;
@@ -1176,6 +1167,7 @@ export function createDecor(ctx) {
     },
     dispose() {
       scene.remove(group);
+      cattle.dispose();
       boxGeo.dispose();
       blobGeo.dispose();
       sand.geometry.dispose();
