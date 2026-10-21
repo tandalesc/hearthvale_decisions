@@ -166,6 +166,16 @@ export function composeLot(b, pool, anim = null, selected = false) {
     return g;
   }
 
+  /** The highest natural ground under a lot-local footprint. */
+  function groundOver(x, z, w, d) {
+    let g = -Infinity;
+    for (const [u, v] of GRID9) {
+      const px = x + u * w, pz = z + v * d;
+      g = Math.max(g, heightAt(wx(px, pz), wz(px, pz)));
+    }
+    return g;
+  }
+
   /** A plinth under an attachment, from below its ground up to `top`. */
   function skirt(x, z, w, d, top, color) {
     const g = groundUnder(x, z, w + 0.36, d + 0.36) - 0.3;
@@ -182,11 +192,19 @@ export function composeLot(b, pool, anim = null, selected = false) {
     const T = 0.42; // visible tread depth (the band adds 0.18 m a side)
     const g = groundUnder(x + dx * T * 1.5, z + dz * T * 1.5, dx ? T * 3 : w, dz ? T * 3 : w);
     const n = Math.min(3, Math.floor((top - g) / 0.2) - 1);
+    let prev = top;
     for (let i = 1; i <= n; i++) {
       const sx = x + dx * (i - 0.5) * T, sz = z + dz * (i - 0.5) * T;
-      const h = top - (i * (top - g)) / (n + 1);
+      const tw = dx ? T - 0.36 : w, td = dz ? T - 0.36 : w;
+      // The flight runs down to the lowest ground across its width; each
+      // tread still clears the highest ground under it (6 cm, over a pad
+      // blend's last lean), so on a cross slope the stair levels off instead
+      // of running into the hill. A tread the ground has come up to is left out.
+      const h = Math.max(top - (i * (top - g)) / (n + 1), groundOver(sx, sz, tw + 0.36, td + 0.36) + 0.06);
+      if (h > prev - 0.1) continue;
       const base = g - 0.3;
-      add('band', sx, base, sz, 0, dx ? T - 0.36 : w, h - base, dz ? T - 0.36 : w, { wall: color });
+      add('band', sx, base, sz, 0, tw, h - base, td, { wall: color });
+      prev = h;
     }
   }
 

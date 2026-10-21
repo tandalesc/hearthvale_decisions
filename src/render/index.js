@@ -328,6 +328,8 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off' } =
       roads.update(view.roads, time);
     }
     lap('roads');
+    // Quay walls take the gravel bars off the river bed (texture and strip alike).
+    ground.setEmbankments(view?.embankments);
     if (view) buildings.update(view, time);
     // Roads stop at doorsteps: refresh the footprint mask when lots change.
     if (buildings.version() !== footVersion && roads.setFootprints(buildings.lots)) footVersion = buildings.version();

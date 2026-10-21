@@ -81,7 +81,8 @@ function loop(now) {
     const cam = rig.camera.position;
     const d = cam.distanceTo(t);
     const el = (Number(params.get('elev')) * Math.PI) / 180;
-    const az = Math.atan2(cam.x - t.x, cam.z - t.z);
+    // &az=deg turns the camera round the target (0: looking toward -z).
+    const az = params.has('az') ? (Number(params.get('az')) * Math.PI) / 180 : Math.atan2(cam.x - t.x, cam.z - t.z);
     cam.set(t.x + Math.sin(az) * Math.cos(el) * d, t.y + Math.sin(el) * d, t.z + Math.cos(az) * Math.cos(el) * d);
     rig.controls.update();
     world.requestFrame();

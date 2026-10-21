@@ -1,12 +1,15 @@
 import * as THREE from 'three';
 import * as T from '../terrain.js';
+import { riverBarLift } from '../river.js';
+import { embankedAt } from './rivermap.js';
 
 // The single source of truth for ground height in the renderer.
 //
 // A float texture over -420..420 at 1 unit per sample that every shader reads
 // with the same manual filter (linear on the terrain mesh's triangles), and a CPU mirror of the exact same
 // data for placement, picking and camera clamps. Four channels per sample:
-//   R  ground height (terrain + building pads)
+//   R  ground height (terrain + building pads), with the river bed as the
+//      channel strip draws it (gravel bars, none against a quay wall)
 //   G  signed offset from the river centreline, u = x - riverX(z), so shaders
 //      know the banks for any terrain seed without a copy of riverX
 //   B  distance to the nearest water of any kind (negative over it): the
@@ -15,8 +18,10 @@ import * as T from '../terrain.js';
 //      lakes), - marsh strength (the delta's mud flats and reeds)
 // Building pads flatten a footprint to its foundation height and blend back
 // to natural ground over PAD_BLEND units, so houses, fields, fences, decals
-// and villagers all agree with the terrain mesh. Changes upload row ranges
-// only (texSubImage2D), never the whole texture.
+// and villagers all agree with the terrain mesh. Where the blends of two pads
+// meet they are weighted like sim/spatial.js padHeight, never applied one
+// over the other. Changes upload row ranges only (texSubImage2D), never the
+// whole texture.
 
 export const GROUND_ORIGIN = -420;
 export const GROUND_STEP = 1;
@@ -108,6 +113,9 @@ export function createGround() {
   texture.generateMipmaps = false;
   texture.colorSpace = THREE.NoColorSpace;
   const pads = new Map(); // id -> {x0, z0, x1, z1, y}
+  let embank = [];       // embanked runs [{side, z0, z1}]: no gravel bars there
+  let embankKey = '';
+  let embankRef = null, embankLen = -1;
   let version = 0;
   let dirty = null; // {i0, j0, i1, j1} sample rect awaiting upload
   // A whole-texture upload is pending (first upload, or after a rebuild).
@@ -131,16 +139,14 @@ export function createGround() {
       for (let i = 0; i < GROUND_N; i++) {
         const x = GROUND_ORIGIN + i * GROUND_STEP;
         const k = j * GROUND_N + i;
-        natural[k] = T.heightAt(x, z);
+        natural[k] = channelHeight(x, z, x - rx);
         data[k * 4 + 1] = x - rx;
         const shore = T.bankDistance(x, z);
         data[k * 4 + 2] = Math.max(-200, Math.min(200, shore));
         data[k * 4 + 3] = shoreCharacter(x, z, shore);
       }
     }
-    height.set(natural);
-    for (const pad of pads.values()) applyPad(pad, 0, 0, GROUND_N - 1, GROUND_N - 1);
-    for (let k = 0; k < count; k++) data[k * 4] = height[k];
+    composite({ i0: 0, j0: 0, i1: GROUND_N - 1, j1: GROUND_N - 1 });
     uniforms.uWaterHalf.value = T.WATER_HALF;
     texture.clearUpdateRanges();
     texture.needsUpdate = true;
@@ -149,23 +155,58 @@ export function createGround() {
     version++;
   }
 
-  /** Blend one pad into `height` within the sample rect (inclusive). */
-  function applyPad(pad, i0, j0, i1, j1) {
-    const a0 = Math.max(i0, Math.floor(toI(pad.x0 - PAD_BLEND)));
-    const a1 = Math.min(i1, Math.ceil(toI(pad.x1 + PAD_BLEND)));
-    const b0 = Math.max(j0, Math.floor(toI(pad.z0 - PAD_BLEND)));
-    const b1 = Math.min(j1, Math.ceil(toI(pad.z1 + PAD_BLEND)));
-    for (let j = b0; j <= b1; j++) {
-      const z = GROUND_ORIGIN + j * GROUND_STEP;
-      const dz = Math.max(pad.z0 - z, 0, z - pad.z1);
-      for (let i = a0; i <= a1; i++) {
-        const x = GROUND_ORIGIN + i * GROUND_STEP;
-        const dx = Math.max(pad.x0 - x, 0, x - pad.x1);
-        // Rounded-rect distance outside the footprint, eased to natural ground.
-        const w = 1 - smooth(Math.hypot(dx, dz) / PAD_BLEND);
-        if (w <= 0) continue;
-        const k = j * GROUND_N + i;
-        height[k] += (pad.y - height[k]) * w;
+  /**
+   * Natural ground, and in the river channel the bed as the channel strip
+   * draws it (terrain.js buildStrip): the gravel bars of src/river.js rise out
+   * of it, except against a quay wall. Bars reach at most 1.6 m up the bank.
+   */
+  function channelHeight(x, z, u) {
+    const h = T.heightAt(x, z);
+    if (Math.abs(u) > T.WATER_HALF + 1.7) return h;
+    const bar = riverBarLift(x, z);
+    return bar > 0 ? h + bar * (1 - embankedAt(u, z, embank)) : h;
+  }
+
+  /**
+   * Rebuild `height` (and channel R) in a sample rect (inclusive) from natural
+   * ground and every overlapping pad. Inside a footprint the ground is the
+   * pad's height (the highest, where footprints overlap); in the blend ring
+   * pads are averaged by their weights and eased into natural ground by the
+   * total, as sim/spatial.js padHeight does, so neighbouring pads at
+   * different heights meet halfway instead of the later one overwriting the
+   * other's edge.
+   */
+  function composite(r) {
+    const rw = r.i1 - r.i0 + 1, rh = r.j1 - r.j0 + 1;
+    const wSum = new Float32Array(rw * rh), wy = new Float32Array(rw * rh), core = new Float32Array(rw * rh).fill(-Infinity);
+    for (const pad of pads.values()) {
+      const a0 = Math.max(r.i0, Math.floor(toI(pad.x0 - PAD_BLEND)));
+      const a1 = Math.min(r.i1, Math.ceil(toI(pad.x1 + PAD_BLEND)));
+      const b0 = Math.max(r.j0, Math.floor(toI(pad.z0 - PAD_BLEND)));
+      const b1 = Math.min(r.j1, Math.ceil(toI(pad.z1 + PAD_BLEND)));
+      for (let j = b0; j <= b1; j++) {
+        const z = GROUND_ORIGIN + j * GROUND_STEP;
+        const dz = Math.max(pad.z0 - z, 0, z - pad.z1);
+        for (let i = a0; i <= a1; i++) {
+          const x = GROUND_ORIGIN + i * GROUND_STEP;
+          const dx = Math.max(pad.x0 - x, 0, x - pad.x1);
+          const q = (j - r.j0) * rw + (i - r.i0);
+          if (dx === 0 && dz === 0) { core[q] = Math.max(core[q], pad.y); continue; }
+          // Rounded-rect distance outside the footprint, eased to natural ground.
+          const w = 1 - smooth(Math.hypot(dx, dz) / PAD_BLEND);
+          if (w <= 0) continue;
+          wSum[q] += w;
+          wy[q] += w * pad.y;
+        }
+      }
+    }
+    for (let j = r.j0; j <= r.j1; j++) {
+      for (let i = r.i0; i <= r.i1; i++) {
+        const k = j * GROUND_N + i, q = (j - r.j0) * rw + (i - r.i0);
+        const n = natural[k];
+        const h = core[q] > -Infinity ? core[q] : wSum[q] > 0 ? n + (wy[q] / wSum[q] - n) * Math.min(1, wSum[q]) : n;
+        height[k] = h;
+        data[k * 4] = h;
       }
     }
   }
@@ -181,21 +222,7 @@ export function createGround() {
 
   /** Recompute a sample rect from natural ground plus every overlapping pad. */
   function refresh(r) {
-    for (let j = r.j0; j <= r.j1; j++) {
-      const row = j * GROUND_N;
-      height.set(natural.subarray(row + r.i0, row + r.i1 + 1), row + r.i0);
-    }
-    for (const pad of pads.values()) {
-      const pr = rectOf(pad);
-      if (pr.i1 < r.i0 || pr.i0 > r.i1 || pr.j1 < r.j0 || pr.j0 > r.j1) continue;
-      applyPad(pad, r.i0, r.j0, r.i1, r.j1);
-    }
-    for (let j = r.j0; j <= r.j1; j++) {
-      for (let i = r.i0; i <= r.i1; i++) {
-        const k = j * GROUND_N + i;
-        data[k * 4] = height[k];
-      }
-    }
+    composite(r);
     dirty = dirty
       ? { i0: Math.min(dirty.i0, r.i0), j0: Math.min(dirty.j0, r.j0), i1: Math.max(dirty.i1, r.i1), j1: Math.max(dirty.j1, r.j1) }
       : { ...r };
@@ -225,6 +252,38 @@ export function createGround() {
     if (!old) return;
     pads.delete(id);
     refresh(rectOf(old));
+  }
+
+  /**
+   * Embanked runs from the view ([{side: 'west'|'east', z0, z1}], as
+   * rivermap.js setEmbankRuns): a quay wall takes the gravel bar away, in the
+   * channel strip and here alike. Rows near changed runs are rebuilt.
+   */
+  function setEmbankments(list) {
+    if (list === embankRef && (list?.length ?? 0) === embankLen) return;
+    embankRef = list;
+    embankLen = list?.length ?? 0;
+    const next = (list ?? []).slice(0, 16).map((e) => ({ side: e.side, z0: e.z0, z1: e.z1 }));
+    const key = next.map((e) => `${e.side}:${e.z0}:${e.z1}`).join('|');
+    if (key === embankKey) return;
+    const touched = [...embank, ...next];
+    embank = next;
+    embankKey = key;
+    for (const e of touched) {
+      const j0 = Math.max(0, Math.floor(toI(Math.min(e.z0, e.z1) - 4)));
+      const j1 = Math.min(GROUND_N - 1, Math.ceil(toI(Math.max(e.z0, e.z1) + 4)));
+      if (j1 < j0) continue;
+      // Only the channel and its banks change.
+      let i0 = GROUND_N - 1, i1 = 0;
+      for (let j = j0; j <= j1; j++) {
+        const z = GROUND_ORIGIN + j * GROUND_STEP;
+        const rx = T.riverX(z);
+        const a = Math.max(0, Math.floor(toI(rx - T.WATER_HALF - 2))), b = Math.min(GROUND_N - 1, Math.ceil(toI(rx + T.WATER_HALF + 2)));
+        for (let i = a; i <= b; i++) natural[j * GROUND_N + i] = channelHeight(GROUND_ORIGIN + i * GROUND_STEP, z, GROUND_ORIGIN + i * GROUND_STEP - rx);
+        i0 = Math.min(i0, a); i1 = Math.max(i1, b);
+      }
+      if (i1 >= i0) refresh({ i0, j0, i1, j1 });
+    }
   }
 
   /**
@@ -293,6 +352,7 @@ export function createGround() {
     covers,
     setPad,
     removePad,
+    setEmbankments,
     flush,
     rebuild: fillNatural,
     version: () => version,
