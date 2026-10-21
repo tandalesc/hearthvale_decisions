@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { patchMaterial } from './shaderlib.js';
 import { GROUND_GLSL } from './ground.js';
 import { deckProfile } from '../sim/bridges.js';
+import { railStyle, railInner, RAIL_TOP } from '../sim/gatherings.js';
 import { surfaceLevelAt } from '../terrain.js';
 
 // Villagers (design-visual §4.5): one instanced mesh for everyone, animated
@@ -155,13 +156,15 @@ float fadedScale(float s) {
 
 // Row position extrapolated to now, then draped on the ground texture so the
 // figure follows the terrain's curvature mid-segment.
-// onGround: 1 when the base was draped (the feet can follow the ground too).
+// onGround: 1 when the base was draped (the feet can follow the ground too),
+// 2 on a bridge deck (the feet follow the deck: surfaceY), 0 otherwise.
 vec3 drapedBase(vec3 pos, vec3 vel, float t0, out float onGround) {
   vec3 base = pos + vel * clamp(rowTime(t0) - t0, 0.0, 3.0);
   onGround = 0.0;
   #ifdef SEGMENT_END
-    // On a bridge deck the row's own y follows the deck profile; don't drape.
-    if (iD.w > 0.5) return base;
+    // On a bridge deck the row's own y follows the deck profile; don't drape
+    // (but the feet still find the deck under them: onGround 2).
+    if (iD.w > 0.5) { onGround = 2.0; return base; }
   #endif
   float g = groundHeight(base.xz);
   #ifdef SEGMENT_END
@@ -178,6 +181,59 @@ vec3 drapedBase(vec3 pos, vec3 vel, float t0, out float onGround) {
 vec3 drapedBase(vec3 pos, vec3 vel, float t0) {
   float onGround;
   return drapedBase(pos, vel, t0, onGround);
+}
+// Bridge decks near the view (people.js setDecks): ends, half-widths and a
+// table of DECK_SAMPLES heights along each deck (the sim's deckProfile:
+// ramps up from the banks, arched on stone and iron), so a shadow lies on
+// the deck and its ramps instead of sinking to the ground beneath, and feet
+// on a deck land on its slope (groundRel).
+#define MAX_DECKS 8
+#define DECK_SAMPLES 20
+const float DECK_VERGE = 0.6;
+uniform int uDeckN;
+uniform vec4 uDeckAB[MAX_DECKS];
+uniform float uDeckHalf[MAX_DECKS];
+uniform vec4 uDeckH[MAX_DECKS * 5];
+uniform vec2 uDeckRail[MAX_DECKS]; // rail top above the deck, the rail's middle from the centre line (metres)
+float deckSample(int i, int k) {
+  vec4 v = uDeckH[i * 5 + k / 4];
+  int c = k - (k / 4) * 4;
+  return c == 0 ? v.x : c == 1 ? v.y : c == 2 ? v.z : v.w;
+}
+// The walking surface under xz: a deck (with its sloping verge) or the ground.
+// Which deck (index into uDeck*) a point stands on, or -1.
+int deckIndexAt(vec2 xz) {
+  for (int i = 0; i < MAX_DECKS; i++) {
+    if (i >= uDeckN) break;
+    vec4 ab = uDeckAB[i];
+    vec2 d = ab.zw - ab.xy;
+    float t = dot(xz - ab.xy, d) / max(dot(d, d), 1e-6);
+    if (t < 0.0 || t > 1.0) continue;
+    if (length(xz - (ab.xy + d * t)) <= uDeckHalf[i]) return i;
+  }
+  return -1;
+}
+float surfaceY(vec2 xz) {
+  float g = groundHeight(xz);
+  for (int i = 0; i < MAX_DECKS; i++) {
+    if (i >= uDeckN) break;
+    vec4 ab = uDeckAB[i];
+    vec2 d = ab.zw - ab.xy;
+    float t = dot(xz - ab.xy, d) / max(dot(d, d), 1e-6);
+    if (t < 0.0 || t > 1.0) continue;
+    float off = length(xz - (ab.xy + d * t));
+    float hw = uDeckHalf[i];
+    if (off > hw + DECK_VERGE) continue;
+    float f = t * float(DECK_SAMPLES - 1);
+    int k = int(min(floor(f), float(DECK_SAMPLES - 2)));
+    float y = mix(deckSample(i, k), deckSample(i, k + 1), f - float(k));
+    // Beside the deck over lower ground (water, a bank below): a hard edge,
+    // which the ledge rule in main() holds up. The verge only blends where
+    // the ground rises to meet a ramp.
+    if (off > hw && g < y) return g;
+    return mix(y, g, clamp((off - hw) / DECK_VERGE, 0.0, 1.0));
+  }
+  return g;
 }
 `;
 
@@ -264,13 +320,14 @@ const float SHANK = ${(LEG_Y - KNEE_Y).toFixed(2)};
 const float LEG_REACH = 0.70;  // hip to planted sole: knees stay soft, never locked
 const float ARM_LEN = 0.50;    // shoulder pivot to the end of the hand
 
-// Ground under a point of the figure's own frame (x, z), relative to the base,
-// in figure units. 0 off the ground (decks, ford beds), and over a ledge (a
-// quay edge, a pad's lip), where a foot holds the walking plane instead.
+// The walking surface under a point of the figure's own frame (x, z): the
+// ground, or on a bridge the deck and its ramps; relative to the base, in
+// figure units. 0 in a ford, and over a ledge (a quay edge, a pad's lip, a
+// parapet), where a foot holds the walking plane instead.
 float groundRel(vec3 base, vec2 local, float cy, float sy, float scale, float onGround) {
   if (onGround < 0.5) return 0.0;
   vec2 w = base.xz + vec2(local.x * cy + local.y * sy, -local.x * sy + local.y * cy) * scale;
-  float d = (groundHeight(w) - base.y) / scale;
+  float d = ((onGround > 1.5 ? surfaceY(w) : groundHeight(w)) - base.y) / scale;
   return abs(d) > 0.4 ? 0.0 : d;
 }
 
@@ -412,9 +469,24 @@ vec3 personPosition(vec3 position) {
     twist = 0.7 * sin(actT * 2.5 + phase);
   } else if (action == 8.0) {     // fish: both hands on the rod, out in front
     aR = 0.85; oR = 0.12; aL = 0.8; oL = -0.12; fL = vec2(0.0); fR = vec2(0.0);
-  } else if (action == 9.0) {     // lean on a rail: forearms forward, upper body tipped over it
+  } else if (action == 9.0) {     // lean on a rail: upper body tipped over it, hands on its top
     aL = 1.35; aR = 1.35; oL = 0.05; oR = 0.05; fL = vec2(0.0); fR = vec2(0.06, 0.0);
     tilt = -0.34;
+    // On a bridge (gatherings.js 'rail': standing in from the parapet, facing
+    // out over it): both hands on the rail's top straight ahead. A truss's
+    // chord is above the shoulders, so hands go on its middle rail instead.
+    int di = deckIndexAt(base.xz);
+    if (di >= 0 && ground > 1.5) {
+      vec4 ab = uDeckAB[di];
+      vec2 dd = ab.zw - ab.xy;
+      float tt = clamp(dot(base.xz - ab.xy, dd) / max(dot(dd, dd), 1e-6), 0.0, 1.0);
+      float off = length(base.xz - (ab.xy + dd * tt));
+      float ahead = clamp(uDeckRail[di].y - off, 0.2, 0.7) / sc;
+      float top = (surfaceY(base.xz) - base.y + min(uDeckRail[di].x, 1.05)) / sc;
+      handL = vec3(0.2, top + 0.03, ahead);
+      handR = vec3(-0.2, top + 0.03, ahead);
+      reach = 1.0;
+    }
   } else if (action == 10.0) {    // lie on the grass, face up, arms at the sides
     aL = 0.12; aR = 0.12; oL = 0.18; oR = 0.18; fL = vec2(0.0); fR = vec2(0.04, 0.0);
     lie = 1.0; ground = 0.0;
@@ -481,6 +553,7 @@ vec3 personPosition(vec3 position) {
     armR = mix(armR, aimR.x, k); stretchR = mix(1.0, aimR.y, k);
   }
 
+  bool rod = false;
   bool rightHand = bone == 3.0 || bone == 9.0 || bone == 10.0 || (bone == 8.0 && action == 2.0);
   if (bone == 4.0) p = legVertex(p, 0.105, hipY, angL);
   else if (bone == 5.0) p = legVertex(p, -0.105, hipY, angR);
@@ -491,6 +564,7 @@ vec3 personPosition(vec3 position) {
       vec3 hand = swingZ(swingX(vec3(-0.30, 0.76, 0.06), shoulderR, armR), shoulderR, -outR) + vec3(0.0, up, 0.0);
       float waterY = iTurn.z > -100.0 ? (iTurn.z - base.y) / max(scale, 1e-3) : -1e4;
       p = k > 0.99 ? rodVertex(position, hand, actT, phase, floor(aPart + 0.5), waterY) : hide;
+      rod = true;
     }
     else if (bone == 10.0 && action == 2.0) {
       // Mallet: the pole is the handle, hanging from the hand; no placard.
@@ -502,7 +576,8 @@ vec3 personPosition(vec3 position) {
       vec3 u = (p - vec3(-0.18, 0.9, 0.22)) / vec3(0.36, 0.26, 0.24);
       p = vec3(-0.35, 0.44, -0.11) + u * vec3(0.1, 0.1, 0.22);
     }
-    if (p != hide) p = swingZ(swingX(armStretch(p, shoulderR, stretchR), shoulderR, armR), shoulderR, -outR) + vec3(0.0, up, 0.0);
+    // (The rod is built in the figure's frame from the hand already.)
+    if (p != hide && !rod) p = swingZ(swingX(armStretch(p, shoulderR, stretchR), shoulderR, armR), shoulderR, -outR) + vec3(0.0, up, 0.0);
   } else if (bone == 8.0) {
     p = action == 1.0 ? p + vec3(0.0, up, 0.0) : hide;
   } else if (bone == 6.0 || bone == 7.0) {
@@ -615,57 +690,6 @@ varying vec4 vShape;    // cast length, near radius, far radius, sun strength
 varying float vContact; // contact radius
 varying vec2 vSlope;    // ground rise per metre along (away, across)
 ${DRAPE_GLSL}
-// Bridge decks near the view (people.js setDecks): ends, half-widths and a
-// table of DECK_SAMPLES heights along each deck (the sim's deckProfile:
-// ramps up from the banks, arched on stone and iron), so a shadow lies on
-// the deck and its ramps instead of sinking to the ground beneath.
-#define MAX_DECKS 8
-#define DECK_SAMPLES 20
-const float DECK_VERGE = 0.6;
-uniform int uDeckN;
-uniform vec4 uDeckAB[MAX_DECKS];
-uniform float uDeckHalf[MAX_DECKS];
-uniform vec4 uDeckH[MAX_DECKS * 5];
-float deckSample(int i, int k) {
-  vec4 v = uDeckH[i * 5 + k / 4];
-  int c = k - (k / 4) * 4;
-  return c == 0 ? v.x : c == 1 ? v.y : c == 2 ? v.z : v.w;
-}
-// The walking surface under xz: a deck (with its sloping verge) or the ground.
-// Which deck (index into uDeck*) a point stands on, or -1.
-int deckIndexAt(vec2 xz) {
-  for (int i = 0; i < MAX_DECKS; i++) {
-    if (i >= uDeckN) break;
-    vec4 ab = uDeckAB[i];
-    vec2 d = ab.zw - ab.xy;
-    float t = dot(xz - ab.xy, d) / max(dot(d, d), 1e-6);
-    if (t < 0.0 || t > 1.0) continue;
-    if (length(xz - (ab.xy + d * t)) <= uDeckHalf[i]) return i;
-  }
-  return -1;
-}
-float surfaceY(vec2 xz) {
-  float g = groundHeight(xz);
-  for (int i = 0; i < MAX_DECKS; i++) {
-    if (i >= uDeckN) break;
-    vec4 ab = uDeckAB[i];
-    vec2 d = ab.zw - ab.xy;
-    float t = dot(xz - ab.xy, d) / max(dot(d, d), 1e-6);
-    if (t < 0.0 || t > 1.0) continue;
-    float off = length(xz - (ab.xy + d * t));
-    float hw = uDeckHalf[i];
-    if (off > hw + DECK_VERGE) continue;
-    float f = t * float(DECK_SAMPLES - 1);
-    int k = int(min(floor(f), float(DECK_SAMPLES - 2)));
-    float y = mix(deckSample(i, k), deckSample(i, k + 1), f - float(k));
-    // Beside the deck over lower ground (water, a bank below): a hard edge,
-    // which the ledge rule in main() holds up. The verge only blends where
-    // the ground rises to meet a ramp.
-    if (off > hw && g < y) return g;
-    return mix(y, g, clamp((off - hw) / DECK_VERGE, 0.0, 1.0));
-  }
-  return g;
-}
 // A drop below the plane under the feet larger than this is a ledge.
 const float LEDGE = 0.35;
 // The surface at xz for the slope estimate: a ledge counts as level, so a
@@ -948,6 +972,14 @@ export function createPeople(ctx) {
   // Subdivided along its length so a long low-sun blob lies on the slope.
   const blobBase = new THREE.PlaneGeometry(2, 2, 2, 8).rotateX(-Math.PI / 2);
 
+  // Bridge decks near the view (setDecks): the blob's surface and the feet's.
+  const deckUniforms = {
+    uDeckN: { value: 0 },
+    uDeckAB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
+    uDeckHalf: { value: new Array(8).fill(0) },
+    uDeckH: { value: Array.from({ length: 40 }, () => new THREE.Vector4()) },
+    uDeckRail: { value: Array.from({ length: 8 }, () => new THREE.Vector2()) },
+  };
   const lodUniforms = {
     uLodNear: { value: 120 },
     uIkNear: { value: 70 },
@@ -968,7 +1000,7 @@ export function createPeople(ctx) {
   const material = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
   patchMaterial(material, grade, {
     key: 'people',
-    uniforms: { ...lodUniforms, ...paletteUniforms },
+    uniforms: { ...lodUniforms, ...paletteUniforms, ...deckUniforms },
     vertexHead: DRAPE_GLSL + POSE_HEAD + COLOR_HEAD,
     vertexBegin: /* glsl */ `
       transformed = personPosition(position);
@@ -982,7 +1014,7 @@ export function createPeople(ctx) {
   // the view target cast, since the shadow map refreshes at a few Hz at most.
   const depthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   depthMaterial.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, grade.uniforms, lodUniforms);
+    Object.assign(shader.uniforms, grade.uniforms, lodUniforms, deckUniforms);
     shader.vertexShader = 'uniform float uTime;\nuniform vec3 uShadowFocus;\n' + DRAPE_GLSL + POSE_HEAD + shader.vertexShader.replace(
       '#include <begin_vertex>',
       /* glsl */ `#include <begin_vertex>
@@ -1006,10 +1038,7 @@ export function createPeople(ctx) {
     uSunDir: grade.uniforms.uSunDir,
     uSunShadow: { value: 1 },
     uStrength: { value: 0.26 },
-    uDeckN: { value: 0 },
-    uDeckAB: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
-    uDeckHalf: { value: new Array(8).fill(0) },
-    uDeckH: { value: Array.from({ length: 40 }, () => new THREE.Vector4()) },
+    ...deckUniforms,
     uSunMap: { value: null },
     uSunMatrix: { value: lights.sun.shadow.matrix },
     uSunMapInfo: { value: new THREE.Vector3(1, 0, 0) },
@@ -1192,8 +1221,8 @@ export function createPeople(ctx) {
     }
   }
 
-  // The finished bridges nearest the view target, for the blob's surface
-  // (surfaceY above). Redone every couple of seconds (a bridge may have been
+  // The finished bridges nearest the view target, for the blob's surface and
+  // the feet on a deck (surfaceY). Redone every couple of seconds (a bridge may have been
   // finished) or when the view moves on; heights come from the sim's deckProfile.
   let decksTime = -Infinity, decksAt = null;
   function setDecks(view, frame) {
@@ -1207,7 +1236,7 @@ export function createPeople(ctx) {
     const decks = list.filter((b) => b.type === 'bridge' && b.a && b.b && (b.built ?? 1) >= 1)
       .map((b) => ({ b, d: ((b.a.x + b.b.x) / 2 - t.x) ** 2 + ((b.a.z + b.b.z) / 2 - t.z) ** 2 }))
       .sort((p, q) => p.d - q.d).slice(0, 8);
-    const u = blobUniforms;
+    const u = deckUniforms;
     u.uDeckN.value = decks.length;
     decks.forEach(({ b }, i) => {
       u.uDeckAB.value[i].set(b.a.x, b.a.z, b.b.x, b.b.z);
@@ -1216,6 +1245,10 @@ export function createPeople(ctx) {
       const h = [];
       for (let k = 0; k < 20; k++) h.push(deckProfile(b, k / 19));
       for (let j = 0; j < 5; j++) u.uDeckH.value[i * 5 + j].set(h[j * 4], h[j * 4 + 1], h[j * 4 + 2], h[j * 4 + 3]);
+      // Where a leaner's hands go (gatherings.js railInner, RAIL_TOP): the rail's
+      // top, at the middle of its width (timber 0.13, a stone coping 0.36, iron 0.16).
+      const style = railStyle(b);
+      u.uDeckRail.value[i].set(RAIL_TOP[style] ?? 0.95, railInner(b) + (style === 'stone' ? 0.18 : style === 'iron' ? 0.08 : 0.065));
     });
   }
 
