@@ -720,16 +720,27 @@ void main() {
   } else {
   #ifdef BLOB_APPLY
     // The apply pass only multiplies in what the MIN pass left in the alpha,
-    // and multiplying by 1 changes nothing: so a flat quad over the longest
-    // shadow the walker can cast is enough, drawn without a depth test (the
-    // MIN pass was depth-tested). None of the surface and slope work below.
+    // and multiplying by 1 changes nothing: so it skips the surface and slope
+    // work below and draws the same shadow outline (contact disc and sun
+    // capsule) as if on level ground, flat and without a depth test (the MIN
+    // pass was depth-tested); the fragment discards outside the outline.
     float S = fs * uFigureScale;
+    float sunY = clamp(uSunDir.y, 0.0, 1.0);
     vec2 away = -uSunDir.xz / max(length(uSunDir.xz), 1e-4);
     vec2 side = vec2(away.y, -away.x);
-    float far = 1.75 * S * MAX_STRETCH + 1.1 * S;
-    float along = mix(-0.6 * S, far, position.z * 0.5 + 0.5);
-    vec2 off = away * along + side * (position.x * 1.1 * S);
+    float sun = uSunShadow * smoothstep(0.02, 0.2, sunY);
+    float height = (1.65 + (iB.w > 0.5 ? 0.1 : 0.0)) * S;
+    // The MIN pass's length on level ground, a little longer for slopes.
+    float len = sun > 0.001 ? min(length(uSunDir.xz) * height / max(sunY, 0.05) * 1.25, height * MAX_STRETCH) : 0.0;
+    // A third wider than the MIN pass's shape, so it always covers it.
+    float r0 = 0.42 * S * 1.3, r1 = r0 + 0.14 * len * 1.3, rc = 0.5 * S * 1.3;
+    float along = mix(-max(r0, rc), len + r1, position.z * 0.5 + 0.5);
+    float across = position.x * max(r1, rc);
+    vec2 off = away * along + side * across;
     transformed = base + vec3(off.x, 0.0, off.y) * on;
+    vLocal = vec2(along, across);
+    vShape = vec4(len, r0, r1, max(sun, 1e-3));
+    vContact = rc;
   #else
     float S = fs * uFigureScale;
     // Sun on the ground: direction away from it, and how strongly it casts.
@@ -896,6 +907,9 @@ void main() {
     // times that factor (src 0), alpha back to 1. It multiplies the ground, so
     // it keeps the ground's own colour at noon, at dusk and on snow.
     #ifdef BLOB_APPLY
+      // Only over the shadow's own outline (a capsule and a disc, not the
+      // loose quad): nothing else is touched.
+      if (a < 0.003 && contact < 0.003 && sunA < 0.003) discard;
       gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
     #else
       // Where the sun's shadow map has already shaded this ground, ask only
