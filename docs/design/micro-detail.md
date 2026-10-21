@@ -4,6 +4,11 @@
 > High tier only (`microDetail` in `src/render/quality.js`). Code: `stoneSlope` in
 > `src/render/roads.js`, `MICRO_HEAD` / `MICRO_NORMAL` in `src/render/shaderlib.js`, the
 > `MICRO_DETAIL` define in `src/render/terrain.js`. Results in §4.
+>
+> **Phase 2 built** (2026-10-21): lapped courses on tile, slate and shingle roofs, High
+> only. Code: the roof branch of `src/render/kit/material.js`, `MICRO_ARB` in
+> `shaderlib.js`, `setKitMicroDetail` called from `buildings.js` `applyQuality`. Results
+> in §4b.
 
 **Recommendation.** Use **procedural normals from the analytic height of the patterns
 we already draw**. Each pattern function (cobbles, setts, roof courses, brick and quoin
@@ -196,6 +201,74 @@ past about 100 m, and nothing at all on Low and Medium. Close up it turns flat p
 into laid stone, most of all at low sun.
 
 
+## 4b. Phase 2: roof courses
+
+**What it does.** In the roof branch (`rk < 3.5`), the height above the roof plane is
+`H = lap · (1 − t) · smoothstep(0, e, t)` with `t = fract(cy)`: it falls from the butt of
+each course to its head, and steps back up at the next course line. The step `e` is
+6 % of a course, and never narrower than 1.5 px. The staggered joints (`jx`) are grooves
+half a lap deep, with walls at least 1.5 px wide. Laps: 1.5 cm for tile, 0.8 cm for
+slate and shingle. The slope fades with `roofSharp · facadeOn`, so it is skipped past
+3–8 px per course.
+
+**How the normal tilts.** The gradient is analytic in `vLocal`. At the top of
+`FRAGMENT_COLOR`, where control flow is uniform, the shader takes `dFdx`/`dFdy` of
+`vLocal` and of the view position. After `normal_fragment_maps` it chain-rules the
+gradient into screen space (`dH/dx = ∇H · dFdx(vLocal)`) and applies Mikkelsen's 2010
+formula (`microPerturb`, three's `perturbNormalArb` with unnormalised derivatives, so the
+slope is in metres). No new attributes or varyings are needed.
+
+**Gating.** `setKitMicroDetail` adds `MICRO_DETAIL` to every kit material on High (and
+under `&micro=1`). Without it, the preprocessed shader is exactly what it was before,
+and the program cache key is unchanged. `micro-detail-ab.js --target=kit` flips it in
+place, over a set of roof views.
+
+**Shader errors: none** on Low, Medium, High, and Medium with `&micro=1`. `npm test`:
+415 of 415 pass.
+
+**Look.** Left is off, right is on (High, `&micro=0|1`; this flag also turns the paving
+relief off). A clear morning on slate (`yearT=0.1&weather=clear`, 28 m): each course
+gets a lit butt edge, and the joints read as cut slates.
+
+![slate roof in morning sun, off (left) and on (right)](../media/micro-detail-roofs-morning.jpg)
+
+At dawn (`yearT=0.02`, 30 m) the course steps show, more softly:
+
+![roofs at dawn, off (left) and on (right)](../media/micro-detail-roofs-dawn.jpg)
+
+At the default overview (`city-autumn`), the difference (×8) is only the windmill sails
+and JPEG noise. A course there is under 3 px, so `roofSharp` has faded the relief out.
+That is correct: the profile is periodic, so below a course per few pixels its slope
+averages to zero. **The roof relief therefore helps when zoomed in, not at the default
+overview**, which corrects the expectation in §5.
+
+![difference at the default overview, ×8](../media/micro-detail-roofs-city-autumn-diff.jpg)
+
+One artefact: very close to a roof (a tall house at `dist=20`, a few metres from the
+camera), a single joint groove spans many pixels and reads as a pale stripe. That is
+closer than normal play reaches.
+
+**Cost.** `micro-detail-ab.js --target=kit` (8 blocks), M5 Pro, DPR 1.25. The machine
+was even busier than in §4 (load average 19–31). "Buildings alone" hides all but the
+buildings and the lights, with no post pass: an upper bound. One run only; it was not
+repeated.
+
+| view (High) | buildings alone, off → on | Δ median (min … max) | whole frame Δ median |
+|---|---:|---:|---:|
+| roofs, 20 m | 0.960 → 1.008 ms | +0.055 (+0.01 … +0.32) | +0.65 |
+| roofs, 40 m | 1.015 → 1.055 ms | +0.042 (−0.04 … +0.33) | +0.18 |
+| roofs, dawn (30 m) | 0.996 → 1.025 ms | +0.030 (−0.40 … +0.46) | +0.71 |
+| roofs fill the screen (18 m, from above) | 0.997 → 0.992 ms | −0.009 (−0.44 … +0.67) | +1.11 |
+| city-close (60 m) | 1.077 → 1.110 ms | +0.034 (−0.16 … +0.46) | −0.28 |
+| city-autumn (overview) | 1.096 → 1.133 ms | +0.038 (−0.66 … +0.70) | +0.58 |
+| town-close (55 m) | 0.797 → 0.926 ms | +0.105 (−0.78 … +0.49) | −0.10 |
+
+**About +0.03 to +0.06 ms** per buildings pass in most views; town-close's +0.1 sits
+inside its own spread. Whole-frame deltas scatter by ±1 ms both ways under this load
+and cannot resolve it. Even the overview, where the relief is faded out, pays about
+the same: the derivatives and the normal hook run on every kit fragment. Under 0.1 ms
+is the honest bound. **Keep it.**
+
 ## 5. Rollout plan
 
 Every phase lands on its own, High first, and each one is measured with
@@ -204,7 +277,7 @@ Every phase lands on its own, High first, and each one is measured with
 1. **Paving (done).** Cobbles and setts. Tuning knobs: amplitudes (3.5 / 2 cm),
    per-stone tilt (±0.06), footprint fade (6–12 cm). Flagstone squares later reuse
    `stoneSlope` with a larger grid and `round = 0`.
-2. **Roof courses** (`material.js`, the `rk < 3.5` branch). Each course laps the one
+2. **Roof courses (done, §4b)** (`material.js`, the `rk < 3.5` branch). Each course laps the one
    below, so a tile's height above the roof plane falls from its butt to its head:
    `H = lap · (1 − fract(cy))`, with a step at each course line, plus shallow grooves at
    the staggered joints (`jx`). Laps: 1.5 cm for tile, 0.8 cm for slate and shingle.

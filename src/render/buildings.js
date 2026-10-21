@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { PieceBatch } from './kit/batch.js';
 import { composeLot, createSpecPool, PIECES } from './kit/compose.js';
-import { createKitMaterials, createKitUniforms } from './kit/material.js';
+import { createKitMaterials, createKitUniforms, setKitMicroDetail } from './kit/material.js';
 import * as G from './kit/geometry.js';
 import { LAYER_REFLECT } from './shaderlib.js';
 
@@ -67,8 +67,13 @@ function signature(b) {
 export function createBuildings({ scene, grade, lights, ground }) {
   const kitUniforms = createKitUniforms();
   const materials = new Map();
+  let microDetail = false;
   const materialFor = (variant) => {
-    if (!materials.has(variant)) materials.set(variant, createKitMaterials(grade, { variant, shared: kitUniforms }));
+    if (!materials.has(variant)) {
+      const m = createKitMaterials(grade, { variant, shared: kitUniforms });
+      setKitMicroDetail(m.material, microDetail);
+      materials.set(variant, m);
+    }
     return materials.get(variant);
   };
 
@@ -287,9 +292,11 @@ export function createBuildings({ scene, grade, lights, ground }) {
     return n;
   }
 
-  /** Detail culling distance follows the quality tier. */
+  /** Detail culling distance and roof relief (micro-detail) follow the quality tier. */
   function applyQuality(q) {
     kitUniforms.uDetailDist.value = q.name === 'low' ? 150 : q.name === 'medium' ? 220 : 300;
+    microDetail = Boolean(q.microDetail);
+    for (const { material } of materials.values()) setKitMicroDetail(material, microDetail);
   }
 
   /** Highlight one lot (or none): its instances are rewritten with a flag. */

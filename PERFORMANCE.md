@@ -1,3 +1,11 @@
+# Micro-detail: lapped roof courses (2026-10-21)
+
+**What changed.** On High only, tile, slate and shingle roofs tilt the shading normal by the slope of lapped courses (a step up at each course line) and grooved joints, from the same analytic pattern the roof already draws (`src/render/kit/material.js`). The derivatives of `vLocal` and the view position are taken at the top of the colour hook, and Mikkelsen's 2010 formula (`microPerturb`, `MICRO_ARB` in `shaderlib.js`) turns the gradient into a normal: no new attributes. Gated by `MICRO_DETAIL` on the kit materials (`setKitMicroDetail`, from `buildings.js` `applyQuality`); Low and Medium compile what they did before. It fades with `roofSharp`, so it shows when zoomed in, not at the default overview. Design: `docs/design/micro-detail.md` §4b.
+
+**Cost.** `scripts/micro-detail-ab.js --target=kit` (new option) with the buildings drawn alone, an upper bound: about +0.03 to +0.06 ms per pass on an M5 Pro, from one run under heavy shared load (load average 19–31). Whole-frame differences are within noise.
+
+---
+
 # Micro-detail: stone relief on the paving (2026-10-21)
 
 **What changed.** On High only, cobbles and setts on the road splat tilt the shading normal by the slope of their own analytic shape (`stoneSlope` in `src/render/roads.js`, applied as a surface gradient by `MICRO_NORMAL` in `src/render/shaderlib.js`). There are no textures, tangents or extra geometry. It is gated by the `microDetail` tier flag through the terrain's `MICRO_DETAIL` define, so Low and Medium compile the same shader as before. The relief fades out as the pixel footprint grows from 6 to 12 cm, so it is not computed in far views. Design, survey and rollout plan: `docs/design/micro-detail.md`.
