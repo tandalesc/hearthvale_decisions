@@ -41,7 +41,7 @@ test('the Council opens as a HUD panel from its crest: not a dialog, the time st
   expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
   // Every waiting card on the Town Council page: one open, the rest folded.
   await expect(page.locator('#dk-title')).toHaveText('Town Council');
-  const want = await hv(page, () => window.hearthvale.state().docket.length);
+  const want = await hv(page, async () => (await window.hearthvale.snapshot()).docket.length);
   await expect(page.locator('.dk .card:not([data-leaving])')).toHaveCount(want);
   await expect(page.locator('.dk .card:not(.is-next)')).toHaveCount(1);
   // Rules are the Rule Book's: none in the Council, on any page.
@@ -77,18 +77,21 @@ test('C toggles the Council; the bodies down its side switch pages; area chips f
   await expect(page.locator(`.dk-index [data-page="${id}"]`)).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#dk-title')).toHaveText(await page.locator(`.dk-index [data-page="${id}"]`).getAttribute('title'));
   await expect(page.locator(`.dk-page .body-view[data-body="${id}"]`)).toBeVisible();
-  await expect.poll(() => hv(page, (b) => [...document.querySelectorAll('.dk .card[data-id]:not([data-leaving])')]
-    .every((c) => { const card = window.hearthvale.state().docket.find((x) => x.id === c.dataset.id); return card?.from === b || card?.sides?.includes?.(b); }), id)).toBe(true);
+  await expect.poll(() => hv(page, async (b) => {
+    const docket = (await window.hearthvale.snapshot()).docket;
+    return [...document.querySelectorAll('.dk .card[data-id]:not([data-leaving])')]
+      .every((c) => { const card = docket.find((x) => x.id === c.dataset.id); return card?.from === b || card?.sides?.includes?.(b); });
+  }, id)).toBe(true);
   await page.locator('.dk-index [data-page="moot"]').click();
-  const total = await hv(page, () => window.hearthvale.state().docket.length);
+  const total = await hv(page, async () => (await window.hearthvale.snapshot()).docket.length);
   await expect(page.locator('.dk .card:not([data-leaving])')).toHaveCount(total);
   // By area: only that area's cards, and its rules beside them.
   const chip = page.locator('.dk-areas [data-area]:not([data-area="all"])').first();
   if (await chip.count()) {
     const cat = await chip.getAttribute('data-area');
     await chip.click();
-    await expect.poll(() => hv(page, (k) => {
-      const want = window.hearthvale.state().docket.filter((c) => c.category === k).map((c) => c.id);
+    await expect.poll(() => hv(page, async (k) => {
+      const want = (await window.hearthvale.snapshot()).docket.filter((c) => c.category === k).map((c) => c.id);
       const shown = [...document.querySelectorAll('.dk .card[data-id]:not([data-leaving])')].map((c) => c.dataset.id);
       return shown.length === want.length && shown.every((x) => want.includes(x));
     }, cat)).toBe(true);
@@ -98,7 +101,7 @@ test('C toggles the Council; the bodies down its side switch pages; area chips f
   const card = page.locator('.dk .card:not(.is-next):not([data-leaving])').first();
   const cid = await card.getAttribute('data-id');
   await card.locator('.option:not([disabled]), .minor').first().click();
-  await expect.poll(() => hv(page, (c) => window.hearthvale.state().docket.some((x) => x.id === c), cid)).toBe(false);
+  await expect.poll(() => hv(page, async (c) => (await window.hearthvale.snapshot()).docket.some((x) => x.id === c), cid)).toBe(false);
   await expect(page.locator('.dk .card:not([data-leaving])')).toHaveCount(total - 1);
   // A card's "The rules" link opens the Rule Book drawer beside the Council.
   await page.locator('.dk .card:not(.is-next):not([data-leaving]) .rules-btn').first().click();
@@ -117,7 +120,7 @@ test('new requests linger in the notice stack and open the Council at that card;
   const note = page.locator('.notice-major[data-key="request"]');
   await expect(note).toBeVisible();
   await expect(note.locator('.notice-eyebrow')).toContainText('asks');
-  const newest = await hv(page, () => window.hearthvale.state().docket.at(-1).id);
+  const newest = await hv(page, async () => (await window.hearthvale.snapshot()).docket.at(-1).id);
   await note.locator('.notice-main').click();
   await expect(page.locator('.dk')).toBeVisible();
   await expect(page.locator(`.dk .card:not(.is-next)[data-id="${newest}"]`)).toBeVisible();
@@ -216,7 +219,7 @@ test('the notice stack sits at the top left beside the rail, under the top bar; 
 
 test('inspector: one actions row at the foot with 44 px targets', async ({page}) => {
   const errors = await open(page, {fixture: 'town', stub: true});
-  await hv(page, () => window.hearthvale.app.inspector.show({buildingId: window.hearthvale.state().buildings[0].id}));
+  await hv(page, async () => window.hearthvale.app.inspector.show({buildingId: (await window.hearthvale.snapshot()).buildings[0].id}));
   const row = page.locator('.inspector .inspector-actions');
   await expect(row).toBeVisible();
   await settle(page);
@@ -238,7 +241,7 @@ test('inspector: one actions row at the foot with 44 px targets', async ({page})
   const after = await hv(page, () => window.hearthvale.world.cameraTarget?.() ?? null);
   if (before && after) expect(after).not.toEqual(before);
   // People get Follow instead of Locate when the renderer can follow; either way one row.
-  await hv(page, () => window.hearthvale.app.inspector.show({personId: window.hearthvale.state().people[0].id}));
+  await hv(page, async () => window.hearthvale.app.inspector.show({personId: (await window.hearthvale.snapshot()).people[0].id}));
   await settle(page);
   const canFollow = await hv(page, () => typeof window.hearthvale.world.follow === 'function');
   await expect(row.locator('[data-act="follow"]')).toBeVisible({visible: canFollow});
@@ -313,7 +316,7 @@ test('title cards: close button, Esc and the backdrop dismiss them; skip clears 
   await expect(page.locator('.moment-layer')).toHaveCount(0);
   expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
   // What the card said stays in the chronicle.
-  expect(await hv(page, () => window.hearthvale.state().chronicle.some((e) => /borough|first time/i.test(e.text)))).toBe(true);
+  expect(await hv(page, async () => (await window.hearthvale.snapshot()).chronicle.some((e) => /borough|first time/i.test(e.text)))).toBe(true);
 
   // Esc closes one.
   await hv(page, () => window.hearthvale.dev.foundBody());

@@ -5,5 +5,7 @@ export default defineConfig({
   plugins:[system1Plugin(), narratorPlugin()],
   server:{fs:{deny:['**/.git/**','**/local.env','**/.env*','**/*.{crt,pem}']}},
   preview:{allowedHosts:['hearthvale.ramblerun.net','.ramblerun.net']},
-  build:{rollupOptions:{output:{manualChunks:{three:['three'],controls:['three/addons/controls/OrbitControls.js']}}}}
+  build:{rollupOptions:{output:{manualChunks:{three:['three'],controls:['three/addons/controls/OrbitControls.js']}}}},
+  // The sim worker loads parts of itself later (the route planner): module workers.
+  worker:{format:'es'}
 });

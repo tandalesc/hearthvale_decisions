@@ -1,5 +1,6 @@
-// Inspector for a tapped person or building. The header comes at once from
-// the sim (selectInspect and the narrator's fact sheet); then a short note,
+// Inspector for a tapped person or building. The header comes from the sim's
+// bundle for the pick (ctx.loadInspect: selectInspect, the narrator's fact sheet
+// and the kept note, from wherever the town runs); then a short note,
 // written by the narrator model, types in as it streams. The actions row at
 // the foot holds Follow (people) or Locate (buildings), Why? (the facts the
 // note used) and Refresh (write the note again), on one line. The stream is aborted when the selection
@@ -76,7 +77,7 @@ export function createInspector(ctx) {
     $('.why').hidden = !open || act('why').hidden;
   }
 
-  let target = null, model = null, facts = null, key = null, sig = '';
+  let target = null, model = null, facts = null, peek = null, key = null, sig = '';
   let controller = null, shown = '', goal = '', typing = 0;
 
   function renderHeader() {
@@ -142,8 +143,6 @@ export function createInspector(ctx) {
       return;
     }
     act('refresh').hidden = false;
-    const state = ctx.state();
-    const peek = n.peekNote ? safePeek(n, state, target) : null;
     if (peek?.facts) facts = peek.facts;
     key = peek?.key ?? noteKey(facts);
     const lines = safeLines(n, facts);
@@ -155,7 +154,7 @@ export function createInspector(ctx) {
       setGoal(peek.saved.text, true);
       setWhen(capWord(peek.saved.when ?? ''));
       setStale(peek.status === 'changed');
-      n.noteFor?.(state, target, {peek}).catch?.(() => {});
+      n.noteFor?.(null, target, {peek, notes: ctx.notes}).catch?.(() => {});
       return;
     }
     controller = new AbortController();
@@ -173,7 +172,7 @@ export function createInspector(ctx) {
       setGoal(streamed);
     };
     const ask = n.noteFor && peek
-      ? n.noteFor(state, target, {peek, signal: mine.signal, onToken, regenerate: true}).then((r) => r?.text)
+      ? n.noteFor(null, target, {peek, notes: ctx.notes, signal: mine.signal, onToken, regenerate: true}).then((r) => r?.text)
       : n.narrate(facts, {signal: mine.signal, onToken});
     ask.then((text) => {
       if (mine.signal.aborted || !text) return;
@@ -201,13 +200,16 @@ export function createInspector(ctx) {
     return (ctx.narrator.materialKey ?? ctx.narrator.factsKey)(f);
   }
 
-  function load(pick) {
-    model = ctx.inspect(pick);
-    facts = ctx.narrator ? safeFacts(ctx.narrator, ctx.state(), pick) : null;
-    return model || facts;
+  // Takes a bundle ({model, facts, peek}); false when the thing is gone.
+  function load(bundle) {
+    model = bundle?.model ?? null;
+    facts = ctx.narrator ? bundle?.facts ?? null : null;
+    peek = ctx.narrator?.peekNote ? bundle?.peek ?? null : null;
+    return Boolean(model || facts);
   }
 
   function hide() {
+    showing++;
     controller?.abort();
     cancelAnimationFrame(typing);
     typing = 0;
@@ -218,10 +220,20 @@ export function createInspector(ctx) {
     ctx.onInspectorChange?.(false);
   }
 
+  // The bundle may come later (the sim worker): the pick shows when it lands, unless
+  // another pick or a close came first.
+  let showing = 0;
   function show(pick) {
+    const ticket = ++showing;
+    const bundle = ctx.loadInspect(pick);
+    if (typeof bundle?.then === 'function') bundle.then((b) => { if (ticket === showing) showBundle(pick, b); });
+    else showBundle(pick, bundle);
+  }
+
+  function showBundle(pick, bundle) {
     const same = target && JSON.stringify(target) === JSON.stringify(pick);
     target = pick;
-    if (!load(pick)) return hide();
+    if (!load(bundle)) return hide();
     if (!same) setWhyOpen(false);
     renderHeader();
     const nextKey = noteKey(facts);
@@ -243,23 +255,17 @@ export function createInspector(ctx) {
     // under the reader; a meaningful change offers an "update" link instead.
     refresh() {
       if (!target || el.hidden) return;
-      if (!load(target)) return hide();
+      // Only a refresh that brought this pick's bundle has anything new.
+      const bundle = ctx.inspected(target);
+      if (!bundle) return;
+      if (!load(bundle)) return hide();
       renderHeader();
-      const peek = ctx.narrator?.peekNote ? safePeek(ctx.narrator, ctx.state(), target) : null;
       setStale(Boolean(facts) && (peek ? peek.status === 'changed' || peek.key !== key : noteKey(facts) !== key));
     },
     hide,
     get open() { return Boolean(target) && !el.hidden; },
     get target() { return target; },
   };
-}
-
-function safeFacts(n, state, pick) {
-  try { return n.facts(state, pick); } catch { return null; }
-}
-
-function safePeek(n, state, pick) {
-  try { return n.peekNote(state, pick); } catch { return null; }
 }
 
 function safeLines(n, facts) {

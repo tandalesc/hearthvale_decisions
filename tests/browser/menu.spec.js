@@ -36,8 +36,8 @@ test('a first visit shows the menu without Continue, and founds a named town in 
   await expect(page.locator('[data-act="found"]')).toHaveText('Found Testbrook');
   await page.locator('[data-act="found"]').click();
   await booted(page);
-  const s = await hv(page, () => {
-    const st = window.hearthvale.state();
+  const s = await hv(page, async () => {
+    const st = await window.hearthvale.snapshot();
     return {name: st.townName, year: st.time.year, archetype: st.terrainArchetype ?? null, cap: st.settings?.individualCap};
   });
   expect(s.name).toBe('Testbrook');
@@ -67,7 +67,7 @@ test('Continue reopens the last town, and Your towns can rename and delete', asy
 
   await page.locator('[data-go="continue"]').click();
   await booted(page);
-  expect(await hv(page, () => window.hearthvale.state().townName)).toBe('Keepsake');
+  expect(await hv(page, async () => (await window.hearthvale.snapshot()).townName)).toBe('Keepsake');
 
   await Promise.all([page.waitForNavigation(), hv(page, () => window.hearthvale.toMenu())]);
   await page.locator('[data-go="towns"]').click();

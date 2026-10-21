@@ -4,24 +4,21 @@
 // and on phones the Council tab's chips, the strip and the pager. Real sim on
 // the city fixture, run on to its first season (month 9).
 import {test} from '@playwright/test';
-import {expect, hv, open, regionIssues, settle, smallTargets} from './helpers.js';
+import {expect, hv, inSim, open, regionIssues, settle, smallTargets} from './helpers.js';
 
 // On to budget season (headless steps), with a plan line on the first card so
 // there is something to strike.
 async function toSeason(page) {
-  await hv(page, async () => {
-    const sim = await import('/src/sim/index.js');
-    const s = window.hearthvale.state();
+  await inSim(page, (s, sim) => {
     for (let i = 0; i < 5000 && !(s.time.month === 9 && s.docket.some((c) => c.kind === 'budget')); i++) sim.stepTick(s, 4, {}, {skipPeople: true});
     const card = s.docket.find((c) => c.kind === 'budget');
     if (!card.data.budget.lines.some((l) => l.kind === 'plan')) {
       card.data.budget.lines.splice(1, 0, {id: 'plan:seed-exchange', kind: 'plan', label: 'A seed exchange', cost: 300, templateId: 'seed-exchange', need: 0.6});
     }
-    window.hearthvale.app.refresh();
   });
   await settle(page);
 }
-const budgets = (page) => hv(page, () => window.hearthvale.state().docket.filter((c) => c.kind === 'budget').map((c) => c.id));
+const budgets = (page) => inSim(page, (s) => s.docket.filter((c) => c.kind === 'budget').map((c) => c.id));
 
 test('desktop: one notice opens the Budget season page; cards, strike, answers and the season beside them', async ({page}) => {
   const errors = await open(page, {fixture: 'city'});
@@ -72,10 +69,10 @@ test('desktop: one notice opens the Budget season page; cards, strike, answers a
   await first.locator('[data-option="trim75"]').click();
   await expect.poll(async () => page.locator(`.dk .budget-card[aria-labelledby="${answered}"]:not([data-leaving])`).count()).toBe(0);
   await expect(side.locator('.section-head .aside').first()).toHaveText(`1 of ${ids.length} answered`);
-  const h = await hv(page, () => window.hearthvale.state().cardHistory.filter((x) => x.kind === 'budget').at(-1));
+  const h = await inSim(page, (s) => s.cardHistory.filter((x) => x.kind === 'budget').at(-1));
   expect(h.choice).toBe('trim75');
   // The struck plan waits like a "Not now".
-  expect(await hv(page, () => window.hearthvale.state().cardHistory.some((x) => x.templateId === 'seed-exchange' && x.choice === 'not_now'))).toBe(true);
+  expect(await inSim(page, (s) => s.cardHistory.some((x) => x.templateId === 'seed-exchange' && x.choice === 'not_now'))).toBe(true);
   // The rest at once: trim to fit when over the room, else approve.
   const over = await hv(page, () => window.hearthvale.app.council && document.querySelector('[data-season="trimAllToFit"]') != null);
   await side.locator(over ? '[data-season="trimAllToFit"]' : '[data-season="approveAllBudgets"]').click();
@@ -91,17 +88,14 @@ test('after the year turns, a body\'s page shows its budget, and the Town Counci
   const errors = await open(page, {fixture: 'city'});
   test.skip(await hv(page, () => window.hearthvale.sim) !== 'real', 'real sim not present');
   await toSeason(page);
-  await hv(page, async () => {
-    const sim = await import('/src/sim/index.js');
-    sim.approveAllBudgets(window.hearthvale.state());
-    const s = window.hearthvale.state();
+  await inSim(page, (s, sim) => {
+    sim.approveAllBudgets(s);
     const y = s.time.year;
     for (let i = 0; i < 5000 && !(s.time.year === y + 1 && s.time.month === 2); i++) sim.stepTick(s, 4, {}, {skipPeople: true});
-    window.hearthvale.app.refresh();
   });
   await settle(page);
   await hv(page, () => window.hearthvale.app.notices.dismissAll());
-  const id = await hv(page, () => window.hearthvale.state().institutions.find((b) => b.budget?.mode === 'annual' && b.budget.granted > 0).id);
+  const id = await inSim(page, (s) => s.institutions.find((b) => b.budget?.mode === 'annual' && b.budget.granted > 0).id);
   await hv(page, (b) => window.hearthvale.app.openCouncil({page: b}), id);
   await settle(page);
   const own = page.locator(`.dk-page .body-view[data-body="${id}"] .bud-body`);

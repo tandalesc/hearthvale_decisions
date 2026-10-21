@@ -36,6 +36,11 @@ export async function settle(page) {
 
 export const hv = (page, fn, arg) => page.evaluate(fn, arg);
 
+// Runs fn where the town is (the sim worker, or this page with ?simWorker=0 or the stub
+// sim) with (state, sim, ...args) and returns its result as JSON; the app refreshes
+// after. fn travels as source text: it must not close over anything in the test.
+export const inSim = (page, fn, ...args) => page.evaluate(([src, a]) => window.hearthvale.inSim(src, ...a), [fn.toString(), args]);
+
 // Rects of the visible fixed regions, for overlap and bounds checks.
 export async function regionIssues(page) {
   return page.evaluate(() => {
