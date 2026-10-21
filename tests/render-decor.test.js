@@ -103,3 +103,43 @@ test('city: small changes in wear and care do not make decor flicker', () => {
     assert.ok(gone + came <= Math.ceil(before[m].size * 0.002), `mesh ${m}: ${gone} pieces vanished and ${came} appeared out of ${before[m].size}`);
   }
 });
+
+// Vegetable plots behind cottages are level beds: the top on the highest
+// ground under the bed, the sides down to the lowest, so on a slope the bed
+// neither hovers on its downhill side nor sinks into the hill (13 of the
+// town's 21 plots used to float, by up to 0.29 m).
+test('town: vegetable plots sit on the slope', () => {
+  const state = fixtureState('town');
+  const view = createRenderView(state);
+  view.sync?.(state, { now: 0, speed: 0 });
+  view.time = { ...(view.time ?? {}), season: 1 };
+  const scene = new THREE.Scene();
+  const decor = createDecor({ scene, grade: createGrade(), heightAt, buildings: null, lights: { markDirty() {} }, quality: { name: 'high', yards: true } });
+  const boxes = [];
+  scene.traverse((o) => { if (o.parent?.name === 'decor' && o.isInstancedMesh && !boxes.length) boxes.push(o); });
+  const soil = new THREE.Color('#5a4632');
+  const m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3(), c = new THREE.Color();
+  const seen = new Set();
+  let sloped = 0;
+  for (const [x, z] of [[0, 0], [0, -80], [0, 80], [0, -150], [0, 150]]) {
+    decor.update(view, { target: new THREE.Vector3(x, 0, z), distance: 60, time: 1 });
+    const mesh = boxes[0];
+    for (let i = 0; i < mesh.count; i++) {
+      mesh.getColorAt(i, c);
+      if (Math.abs(c.r - soil.r) + Math.abs(c.g - soil.g) + Math.abs(c.b - soil.b) > 1e-3) continue;
+      mesh.getMatrixAt(i, m);
+      m.decompose(p, q, s);
+      if (Math.abs(s.z - 2) > 1e-4) continue; // the plot (a soil heap is smaller)
+      const key = `${p.x.toFixed(2)},${p.z.toFixed(2)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const yaw = 2 * Math.atan2(q.y, q.w), cy = Math.cos(yaw), sy = Math.sin(yaw);
+      const g = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([u, v]) => heightAt(p.x + (u * s.x / 2) * cy + (v * s.z / 2) * sy, p.z - (u * s.x / 2) * sy + (v * s.z / 2) * cy));
+      const top = p.y + s.y / 2, bottom = p.y - s.y / 2;
+      assert.ok(top >= Math.max(...g) + 0.05, `plot at ${key}: top ${top.toFixed(2)} in the ground ${Math.max(...g).toFixed(2)}`);
+      assert.ok(bottom <= Math.min(...g), `plot at ${key}: hovers ${(bottom - Math.min(...g)).toFixed(2)} m`);
+      if (Math.max(...g) - Math.min(...g) > 0.1) sloped++;
+    }
+  }
+  assert.ok(seen.size >= 10 && sloped >= 5, `plots found (${seen.size}, ${sloped} on a slope)`);
+});

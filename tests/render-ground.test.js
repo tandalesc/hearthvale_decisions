@@ -4,7 +4,10 @@ import * as THREE from 'three';
 import { createGround, GROUND_ORIGIN, GROUND_STEP, GROUND_N, GROUND_GLSL, waterLevel } from '../src/render/ground.js';
 import { raycastTerrain } from '../src/render/terrain.js';
 import { generateForest } from '../src/render/trees.js';
-import { heightAt, riverX, setTerrainSeed, terrainSeed, WATER_HALF, bankDistance } from '../src/terrain.js';
+import { heightAt, riverX, setTerrainSeed, terrainSeed, WATER_HALF, bankDistance, waterLevelAt } from '../src/terrain.js';
+import { riverBarLift, riverBedAt } from '../src/river.js';
+import { composeLot, createSpecPool } from '../src/render/kit/compose.js';
+import { fixtureState } from '../src/sim/index.js';
 
 test('ground mirror matches heightAt on samples and interpolates between them', () => {
   const g = createGround();
@@ -48,6 +51,110 @@ test('pads flatten a footprint, blend to natural ground and can be removed', () 
   const k = (Math.round((5 - GROUND_ORIGIN) / GROUND_STEP) * GROUND_N + Math.round((0 - GROUND_ORIGIN) / GROUND_STEP)) * 4;
   assert.ok(Math.abs(tex.image.data[k + 1] - (0 - riverX(5))) < 1e-4);
   assert.ok(Math.abs(tex.image.data[k + 2] - bankDistance(0, 5)) < 1e-4);
+});
+
+test('neighbouring pads blend by weight: order does not matter and they meet halfway', () => {
+  // Two lots 2 m apart at different heights (their blend rings overlap).
+  const a = { x: -100, z: 50, w: 6, d: 6, y: 3 };
+  const b = { x: -92, z: 50, w: 6, d: 6, y: 5 };
+  const ab = createGround(), ba = createGround();
+  ab.setPad('a', a); ab.setPad('b', b);
+  ba.setPad('b', b); ba.setPad('a', a);
+  for (let x = -98; x <= -94; x += 0.25) assert.ok(Math.abs(ab.sample(x, 50) - ba.sample(x, 50)) < 1e-5, `order-free at ${x}`);
+  // Each footprint keeps its own height right to its edge; the sample halfway
+  // between takes the mean of the two, eased into natural ground by the summed weight.
+  assert.ok(Math.abs(ab.sample(-97, 50) - 3) < 1e-5 && Math.abs(ab.sample(-95, 50) - 5) < 1e-5);
+  const n = heightAt(-96, 50), w = 1 - (1 / 1.5) ** 2 * (3 - 2 / 1.5);
+  assert.ok(Math.abs(ab.sample(-96, 50) - (n + (4 - n) * Math.min(1, 2 * w))) < 1e-4);
+  // Removing one leaves the other exactly as if it were alone.
+  ab.removePad('b');
+  const solo = createGround();
+  solo.setPad('a', a);
+  for (let x = -98; x <= -90; x += 0.5) assert.ok(Math.abs(ab.sample(x, 50) - solo.sample(x, 50)) < 1e-5);
+});
+
+test('the river bed carries the gravel bars the channel strip draws, except at a quay wall', () => {
+  const g = createGround();
+  // A dry bar: well above the natural bed, out of the water.
+  let at = null;
+  for (let z = -300; z <= 300 && !at; z++) {
+    for (let u = -WATER_HALF; u <= WATER_HALF; u += 1) {
+      const x = Math.round(riverX(z) + u);
+      if (riverBarLift(x, z) > 0.5 && riverBedAt(x, z) > waterLevelAt(z)) { at = { x, z, u: x - riverX(z) }; break; }
+    }
+  }
+  assert.ok(at, 'the classic valley has a dry bar');
+  assert.ok(Math.abs(g.sample(at.x, at.z) - riverBedAt(at.x, at.z)) < 1e-4, 'texel on the bar');
+  // Off the channel, nothing changes.
+  assert.ok(Math.abs(g.sample(Math.round(riverX(at.z)) + 20, at.z) - heightAt(Math.round(riverX(at.z)) + 20, at.z)) < 1e-4);
+  // A quay wall on that bank takes the bar away (and only rows near the run upload).
+  g.flush();
+  g.setEmbankments([{ side: at.u < 0 ? 'west' : 'east', z0: at.z - 20, z1: at.z + 20 }]);
+  assert.ok(Math.abs(g.sample(at.x, at.z) - heightAt(at.x, at.z)) < 1e-4, 'no bar against the wall');
+  const tex = g.uniforms.tGround.value;
+  assert.ok(g.flush());
+  assert.ok(tex.updateRanges.length > 0 && tex.updateRanges.length <= 50);
+  // The same list again is a no-op; clearing it brings the bar back.
+  const v = g.version();
+  g.setEmbankments([{ side: at.u < 0 ? 'west' : 'east', z0: at.z - 20, z1: at.z + 20 }]);
+  assert.equal(g.version(), v);
+  g.setEmbankments([]);
+  assert.ok(Math.abs(g.sample(at.x, at.z) - riverBedAt(at.x, at.z)) < 1e-4);
+});
+
+// Portico steps (kit/compose.js stepsDown) run from the floor down to the
+// ground in front: no tread may end up under the drawn ground, whether a pad
+// berm or a slope across the flight (it once ran down to the lowest ground
+// across its 5 m width and into the hill on the other side).
+test('portico steps stay above the drawn ground, on slopes too', () => {
+  const state = fixtureState('city');
+  const pool = createSpecPool();
+  // The fixture's own lots, plus libraries (always civic) facing every way
+  // on the steepest ground a lot stands on (the city's steepest lot has a
+  // gradient of 0.34).
+  const steep = [];
+  for (let z = -200; z <= 200; z += 9) {
+    for (let x = -200; x <= 200; x += 9) {
+      if (Math.abs(x - riverX(z)) < 30) continue;
+      const s = Math.hypot(heightAt(x + 4, z) - heightAt(x - 4, z), heightAt(x, z + 4) - heightAt(x, z - 4)) / 8;
+      if (s <= 0.35) steep.push({ x, z, s });
+    }
+  }
+  steep.sort((a, b) => b.s - a.s);
+  const extra = steep.slice(0, 16).map((p, i) => ({ id: 900000 + i, type: 'library', x: p.x, z: p.z, w: 12, d: 14, rot: i % 4, styleEra: 4, built: 1, wealth: 0.8 }));
+  const check = (records, g = createGround()) => {
+    const flights = [];
+    for (const b of records) {
+      const s = composeLot(b, pool);
+      s.pads.forEach((p, i) => g.setPad(`${b.id}:${i}`, p));
+      const specs = Array.from({ length: pool.count() }, (_, i) => ({ ...pool.at(i) }));
+      for (const p of specs.filter((q) => q.piece === 'portico')) {
+        const sn = Math.sin(p.yaw), c = Math.cos(p.yaw);
+        // Treads: bands centred 1.35..2.6 m in front of the portico's centre.
+        const treads = specs.filter((q) => {
+          if (q.piece !== 'band') return false;
+          const t = (q.x - p.x) * sn + (q.z - p.z) * c, l = (q.x - p.x) * c - (q.z - p.z) * sn;
+          return t > 1.3 && t < 2.7 && Math.abs(l) < 0.1;
+        });
+        flights.push(treads.length);
+        for (const q of treads) {
+          const top = q.y + q.sy, hx = (q.sx + 0.36) / 2 - 0.05, hz = (q.sz + 0.36) / 2 - 0.05;
+          for (const [u, v] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, 0]]) {
+            const x = q.x + u * hx * c + v * hz * sn, z = q.z - u * hx * sn + v * hz * c;
+            assert.ok(g.sample(x, z) < top + 0.01, `lot ${b.id}: a tread at ${q.x.toFixed(1)},${q.z.toFixed(1)} is ${(g.sample(x, z) - top).toFixed(2)} m under the ground`);
+          }
+        }
+      }
+    }
+    return flights;
+  };
+  const clear = (g, records) => { for (const b of records) for (let i = 0; i < 8; i++) g.removePad(`${b.id}:${i}`); };
+  assert.ok(check(state.buildings).some((n) => n > 0), 'the city has portico steps');
+  // One at a time: the steepest sites lie 9 m apart, and the libraries would overlap.
+  const g = createGround();
+  const flights = extra.flatMap((b) => { const n = check([b], g); clear(g, [b]); return n; });
+  assert.equal(flights.length, extra.length, 'every library has a portico');
+  assert.ok(flights.filter((n) => n > 0).length >= extra.length / 2, 'and most have steps');
 });
 
 test('terrain ray can use the ground mirror (pads included)', () => {

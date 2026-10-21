@@ -590,8 +590,13 @@ export function createDecor(ctx) {
       const cx = 0, cz = -hz - 0.6 - pd / 2;
       if (ok([[cx - pw / 2, cz - pd / 2], [cx + pw / 2, cz - pd / 2], [cx - pw / 2, cz + pd / 2], [cx + pw / 2, cz + pd / 2], [cx, cz]])) {
         plot = true;
+        // A level bed on the highest ground under it, its sides down to the
+        // lowest (a raised bed on a slope, never a slab hovering off it).
         const [x, z] = L(cx, cz);
-        box(x, heightAt(x, z) + 0.01, z, pw, 0.1, pd, Y.soil, angle);
+        const corners = [[-pw / 2, -pd / 2], [pw / 2, -pd / 2], [-pw / 2, pd / 2], [pw / 2, pd / 2]];
+        const top = topGround(x, z, angle, corners) + 0.06;
+        const low = Math.min(...corners.map(([lx, lz]) => heightAt(...L(cx + lx, cz + lz)))) - 0.05;
+        box(x, (top + low) / 2, z, pw, top - low, pd, Y.soil, angle);
         const grown = season === 0 ? 0.5 : season === 3 ? 0 : 1;
         if (grown > 0) {
           const rows = Math.max(2, Math.floor(pd / 0.55));
@@ -605,7 +610,7 @@ export function createDecor(ctx) {
               const autumnPumpkin = season === 2 && kind === 0 && (k + r) % 2 === 0;
               const rr = (kind === 1 ? 0.14 : 0.18) * grown;
               const c = autumnPumpkin ? Y.pumpkin : kind === 0 ? Y.veg : kind === 1 ? Y.vegLight : Y.vegDark;
-              blob(px, heightAt(px, pz) + 0.08 + rr * 0.6, pz, rr, rr * (kind === 2 ? 1.5 : 0.85), rr, c, autumnPumpkin ? 0 : 0.6, k);
+              blob(px, top + 0.02 + rr * 0.6, pz, rr, rr * (kind === 2 ? 1.5 : 0.85), rr, c, autumnPumpkin ? 0 : 0.6, k);
             }
           }
         }

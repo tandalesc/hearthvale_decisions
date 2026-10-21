@@ -42,6 +42,19 @@ float embanked(vec2 uz) {
 }
 `;
 
+const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+/** CPU mirror of EMBANK_GLSL embanked() for runs [{side: 'west'|'east', z0, z1}]. */
+export function embankedAt(u, z, runs) {
+  let e = 0;
+  for (const r of runs ?? []) {
+    const onSide = smoothstep(-1.8, 1.8, u * (r.side === 'west' ? -1 : 1));
+    const inRun = smoothstep(r.z0 - 3, r.z0 + 3, z) * (1 - smoothstep(r.z1 - 3, r.z1 + 3, z));
+    e = Math.max(e, onSide * inRun);
+  }
+  return e;
+}
+
 export const RIVERMAP_GLSL = /* glsl */ `
 uniform sampler2D tRiver;
 uniform vec4 uRiverSpan;

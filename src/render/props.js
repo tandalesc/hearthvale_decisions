@@ -454,6 +454,8 @@ function buildStone(g, b, W, heightAt, limit) {
     { c: cx - 0.88 * H, half: 0.27 * H, spring: -0.4, rise: 0.7 },
     { c: cx + 0.88 * H, half: 0.27 * H, spring: -0.4, rise: 0.7 },
   ];
+  // Below the town reaches' bed (-0.8): the river is never raised where
+  // bridges stand (tests/render-props.test.js), so fixed depths hide under it.
   const bed = -0.95;
   const xs = x0, xe = Math.min(x1, limit);
   // Spandrels stop just under the deck slab.
@@ -601,7 +603,7 @@ export function buildEmbankment(g, run, heightAt, era, bridges) {
   const west = run.side !== 'east';
   const side = west ? -1 : 1; // the wall line sits at riverX + side * H
   const H = waterHalf();
-  const bed = -0.85;
+  const bed = -0.85; // the town reaches' bed, as for bridges (buildStone)
   const step = 1;
   const z0 = Math.min(run.z0, run.z1), z1 = Math.max(run.z0, run.z1);
   const crossings = run.crossings ?? [];
@@ -744,7 +746,9 @@ function planterShrub(g, x, y, z, seed) {
 
 function lampGeometry() {
   const g = new Geo();
-  g.boxAt(0, 0.15, 0, 0.34, 0.3, 0.34, C.lampIron);
+  // The plinth reaches half a metre down: the lamp stands on the highest
+  // ground under it (lampBase), and on a slope the low side still meets it.
+  g.boxAt(0, -0.1, 0, 0.34, 0.8, 0.34, C.lampIron);
   g.boxAt(0, 1.6, 0, 0.12, 2.9, 0.12, C.lampIron);
   g.boxAt(0.27, 3.0, 0, 0.62, 0.07, 0.07, C.lampIron);
   g.boxAt(0.52, 2.72, 0, 0.3, 0.38, 0.3, C.lampGlass, 1);
@@ -1403,13 +1407,20 @@ export function createProps(ctx) {
     return h;
   }
 
+  /** A street lamp's ground: the highest under its plinth (0.34 m square). */
+  function lampBase(x, z) {
+    let y = heightAt(x, z);
+    for (const [dx, dz] of [[-0.17, -0.17], [0.17, -0.17], [-0.17, 0.17], [0.17, 0.17]]) y = Math.max(y, heightAt(x + dx, z + dz));
+    return y;
+  }
+
   function rebuildLamps(view) {
     const list = view.lamps ?? [];
     const n = Math.min(MAX_LAMPS, list.length);
     for (let i = 0; i < n; i++) {
       const { x, z } = list[i];
       scratchQ.setFromAxisAngle(Y_AXIS, Math.floor(hashId(Math.round(x * 3 + z * 7), 1) * 4) * Math.PI / 2);
-      scratchM.compose(scratchP.set(x, heightAt(x, z), z), scratchQ, scratchS.set(1, 1, 1));
+      scratchM.compose(scratchP.set(x, lampBase(x, z), z), scratchQ, scratchS.set(1, 1, 1));
       lamps.setMatrixAt(i, scratchM);
     }
     lamps.count = n;
@@ -1431,7 +1442,7 @@ export function createProps(ctx) {
       // Lantern position matches the instance rotation used for the post.
       const r = Math.floor(hashId(Math.round(x * 3 + z * 7), 1) * 4) * Math.PI / 2;
       const lx = x + Math.cos(r) * 0.52, lz = z - Math.sin(r) * 0.52;
-      writeGlow(k, lx, heightAt(x, z) + 2.72, lz, 3.0, 0, hashId(k, 3));
+      writeGlow(k, lx, lampBase(x, z) + 2.72, lz, 3.0, 0, hashId(k, 3));
       // A warm pool of light on the street under the lantern.
       if (k < MAX_POOLS) {
         const o = (MAX_MARKS + k) * 4;

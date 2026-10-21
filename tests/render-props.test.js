@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { Geo, buildFoot, buildEmbankment, buildCrossing, createProps } from '../src/render/props.js';
 import * as THREE from 'three';
 import {createGrade} from '../src/render/grade.js';
-import { riverX, heightAt, WATER_HALF } from '../src/terrain.js';
+import { riverX, heightAt, WATER_HALF, riverLift, setTerrainSeed, terrainSeed } from '../src/terrain.js';
+import { ARCHETYPES } from '../src/waters.js';
+import { GRID_H, ORIGIN_Z, CELL } from '../src/sim/roads.js';
 import { BRIDGE_DECK } from '../src/sim/people.js';
 
 const ys = (g) => g.p.filter((_, i) => i % 3 === 1);
@@ -32,6 +34,27 @@ test('street furniture rebuilds after the one-second boundary and ground changes
     assert.notEqual(mesh.geometry, second, 'new ground pads re-seat the same furniture');
   } finally {
     props.dispose();
+  }
+});
+
+// Bridge beds, pier feet and quay-wall feet (props.js) are set for the town
+// reaches, where the water stands at 0.025 and the bed at -0.8 or the ford's
+// -0.22: they hide under the drawn bed there. They would show (or bury the
+// arches) where the river comes down from the mountains, which only happens
+// well outside the land the sim builds on. This pins that down.
+test('the river is never raised where bridges and quays can stand', () => {
+  const before = terrainSeed();
+  try {
+    const z0 = ORIGIN_Z, z1 = ORIGIN_Z + GRID_H * CELL;
+    let beyond = 0;
+    for (let seed = 1; seed <= 24; seed++) {
+      setTerrainSeed(seed, 2, ARCHETYPES[seed % ARCHETYPES.length]);
+      for (let z = z0; z <= z1; z += 4) assert.ok(riverLift(z) < 0.01, `seed ${seed} (${ARCHETYPES[seed % ARCHETYPES.length]}): river raised ${riverLift(z).toFixed(2)} at z ${z}`);
+      for (const z of [-900, 900]) beyond = Math.max(beyond, riverLift(z));
+    }
+    assert.ok(beyond > 1, 'the river does come down from the mountains further out');
+  } finally {
+    setTerrainSeed(before);
   }
 });
 

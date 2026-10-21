@@ -270,11 +270,36 @@ const GRID_BEGIN = /* glsl */ `
   transformed.y = groundHeight(gXZ) - aSkirt;
 `;
 // Channel strip: aBank = (gravel bar lift, height above the water). A quay
-// wall (embanked run) takes the bar away.
+// wall (embanked run) takes the bar away. On the dry bank the strip also
+// follows the ground texture where that is higher (building pads that reach
+// the river, which otherwise ended in a step at the chunks' edge), and
+// beyond STRIP_TEXTURE_U past the water's edge it is the texture outright,
+// so everything draped on the texture stands on what is drawn. The bank-top
+// kink is concave, so the texture only ever reads low there and the max
+// keeps the bank crisp.
+const STRIP_TEXTURE_U = 1.5;
+const STRIP_HEAD = /* glsl */ `
+float stripHeight(out float onTex) {
+  float y = position.y - aBank.x * embanked(vec2(aRiverU, position.z));
+  onTex = 0.0;
+  float ru = abs(aRiverU) - uWaterHalf;
+  if (ru < 0.0) return y;
+  // The outer edge keeps its tuck under the chunks (buildStrip).
+  float tex = groundHeight(position.xz) - (ru >= 2.9 ? 0.04 : 0.0);
+  if (ru < ${STRIP_TEXTURE_U.toFixed(2)} && tex <= y) return y;
+  onTex = 1.0;
+  return tex;
+}
+`;
+const STRIP_NORMAL = /* glsl */ `
+  float stripOnTex;
+  float stripY = stripHeight(stripOnTex);
+  if (stripOnTex > 0.5) objectNormal = groundNormal(position.xz);
+`;
 const STRIP_BEGIN = /* glsl */ `
   float embK = embanked(vec2(aRiverU, position.z));
-  transformed.y -= aBank.x * embK;
-  vBankS = vec2(aBank.x * (1.0 - embK), aBank.y - aBank.x * embK);
+  vBankS = vec2(aBank.x * (1.0 - embK), aBank.y + stripY - position.y);
+  transformed.y = stripY;
 `;
 
 function makeMaterial(grade, roads, variant) {
@@ -295,8 +320,8 @@ function makeMaterial(grade, roads, variant) {
     defines,
     vertexHead: GROUND_GLSL + VARYINGS + (grid ? 'attribute float aSkirt;\n' : 'attribute float aRiverU;\n')
       + (variant === 'ring' ? 'attribute vec2 aShore;\n' : '')
-      + (strip ? 'attribute vec2 aBank;\nvarying vec2 vBankS;\n' + EMBANK_GLSL : ''),
-    vertexNormal: grid ? GRID_NORMAL : '',
+      + (strip ? 'attribute vec2 aBank;\nvarying vec2 vBankS;\n' + EMBANK_GLSL + STRIP_HEAD : ''),
+    vertexNormal: grid ? GRID_NORMAL : strip ? STRIP_NORMAL : '',
     vertexBegin: grid ? GRID_BEGIN : strip ? STRIP_BEGIN : '',
     vertexEnd: /* glsl */ `
       vWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;
@@ -445,6 +470,7 @@ function buildStrip(z0, z1) {
   g.setAttribute('aBank', new THREE.BufferAttribute(bank, 2));
   g.setIndex(index);
   g.computeBoundingSphere();
+  g.boundingSphere.radius += 4; // its bank follows the texture's pads
   return g;
 }
 
