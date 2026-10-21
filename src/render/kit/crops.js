@@ -23,8 +23,8 @@
 //
 // The field piece (geometry.js fieldPiece) is a soil bed and nine ridged rows;
 // a crop sets each row's height and width and both colours. At harvest the
-// rows are cut to stubble with stooks (or haycocks) standing every third
-// vertex (before the Industrial era), then ploughed to bare furrows before the next sowing.
+// rows are cut to stubble with a few stooks (or haycocks) standing about
+// (before the Industrial era), then ploughed to bare furrows before the next sowing.
 
 export const FIELD_ROWS = 9;
 export const FIELD_SEG = 16;
@@ -87,11 +87,11 @@ const vec3 S_STUBBLE = vec3(0.36, 0.29, 0.15);
 const vec3 S_GRASS = vec3(0.13, 0.24, 0.06);
 const vec3 S_WINTER_GRASS = vec3(0.17, 0.21, 0.09);
 
-// Cut at \`cut\`: stubble, with stooks standing every third vertex until \`clear\`.
+// Cut at \`cut\`: stubble, with the stooks (where \`stook\`) standing until \`clear\`.
 float harvested(float h, float t, float cut, float clear, float stook) {
   float k = rampC(cut, cut + 0.015, t);
   float stand = stook * (1.0 - rampC(clear - 0.02, clear, t));
-  return mix(h, mix(0.1, 0.8, stand), k);
+  return mix(h, mix(0.1, 0.62, stand), k);
 }
 
 // One crop's look at time of year t (before the winter rule).
@@ -183,7 +183,9 @@ Crop cropNow(vec3 position, float kind, float era, float seed) {
   float rowSeed = cropHash(seed * 53.0 + row, kind > 0.5 && kind < 1.5 ? year : 0.0);
   // Sheaves stand in stooks until the Industrial era; after it, round bales
   // on the stubble (decor.js) and none in the rows.
-  float stook = step(mod(k + floor(rowSeed * 3.0), 3.0), 0.5) * (1.0 - step(3.5, era));
+  // A few, scattered: every fifth vertex of every other row, so the cut
+  // field reads as stubble with stooks standing about it, not a field of hay.
+  float stook = step(mod(k + floor(rowSeed * 5.0), 5.0), 0.5) * step(0.5, mod(row, 2.0)) * (1.0 - step(3.5, era));
   float bump = mod(k, 2.0);
   float crop = cropOf(kind, era, seed, row, year);
   Crop c = cropAt(crop, t, stook, bump, rowSeed, seed, era);

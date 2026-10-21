@@ -577,17 +577,22 @@ export function createDecor(ctx) {
       // sheaves stand in stooks in the rows: kit/crops.js). Not in orchards
       // or market gardens.
       const arable = b.variant !== 'orchard' && b.variant !== 'market-garden' && !dairy;
+      // A small stack or two (a short row of bales), set on the headland
+      // behind the field, in its far corner: off the crop and out of the
+      // cattle's way, never across the whole farm.
       if (season === 2 && (dairy || (arable && era >= 4))) {
-        const n = 3 + Math.floor(hashId(id, 92) * 4);
+        const bales = era >= 4;
+        const n = bales ? 2 + Math.floor(hashId(id, 92) * 2) : fw * fd > 30 ? 2 : 1;
+        const corner = hashId(id, 93) < 0.5 ? 1 : -1;
+        const lz = -ld / 2 + 0.95;
         for (let i = 0; i < n; i++) {
-          const lx = (hashId(id * 13 + i, 93) - 0.5) * (fw - 2);
-          const lz = -ld / 2 + 3 + hashId(id * 13 + i, 94) * Math.max(0.5, fd - 2);
+          const lx = corner * (fw / 2 - 0.7 - i * (bales ? 1.0 : 1.5));
           const [x, z] = L(lx, lz);
           const y = heightAt(x, z);
-          if (era >= 4) blob(x, y + 0.5, z, 0.62, 0.55, 0.62, i % 3 ? Y.hay : Y.hayDark, 0, hashId(id + i, 95) * 3);
+          if (bales) blob(x, y + 0.36, z, 0.42, 0.38, 0.42, i % 2 ? Y.hayDark : Y.hay, 0, hashId(id + i, 95) * 3);
           else {
-            blob(x, y + 0.8, z, 1.0, 1.25, 1.0, Y.hay, 0, i);
-            blob(x, y + 1.85, z, 0.55, 0.45, 0.55, Y.hayDark, 0, i);
+            blob(x, y + 0.55, z, 0.6, 0.72, 0.6, Y.hay, 0, i);
+            blob(x, y + 1.2, z, 0.33, 0.28, 0.33, Y.hayDark, 0, i);
           }
         }
       }
