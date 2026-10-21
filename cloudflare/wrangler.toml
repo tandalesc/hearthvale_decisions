@@ -1,0 +1,54 @@
+# Sketch only: nothing has been deployed. See docs/design/cloudflare-backend.md.
+#
+#   npm run build && npx wrangler dev -c cloudflare/wrangler.toml
+#   npx wrangler deploy -c cloudflare/wrangler.toml
+#
+# Secrets (never in this file): npx wrangler secret put API_KEY -c cloudflare/wrangler.toml
+#                               npx wrangler secret put SESSION_SECRET -c cloudflare/wrangler.toml
+# Local values go in cloudflare/.dev.vars (gitignored).
+
+name = "hearthvale"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+# The vite build. Files are served without running the Worker; only /api/* reaches worker.js.
+[assets]
+directory = "../dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+# Workers AI, for the narrator (called through the AI Gateway named below).
+[ai]
+binding = "AI"
+
+# The decision service on the LAN, through a Cloudflare Tunnel. Create it with
+#   npx wrangler vpc service create hearthvale-decisions --type http --tunnel-id <TUNNEL_ID> --hostname <host> --http-port 4000
+# The hostname lives in Cloudflare, not in the repo.
+[[vpc_services]]
+binding = "DECISIONS"
+service_id = "<VPC_SERVICE_ID>"
+remote = true
+
+# Per-player limit on upstream decision requests (approximate, per location).
+[[ratelimits]]
+name = "PLAYER_LIMIT"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 30
+  period = 10
+
+# One object holds the day's question count for the whole service.
+[[durable_objects.bindings]]
+name = "DAILY_CAP"
+class_name = "DailyCap"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DailyCap"]
+
+[vars]
+AI_GATEWAY_ID = "hearthvale"
+NARRATOR_MODEL = "@cf/google/gemma-4-26b-a4b-it"
+DECISIONS_DAILY_CAP = "5000000"
