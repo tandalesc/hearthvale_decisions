@@ -31,7 +31,9 @@
 //
 // Work is incremental: a key per cell (tier and wear bucket) is compared with
 // the last build; the nodes a change can move are patched, and only the tiles
-// near changed cells and moved nodes are redrawn.
+// near changed cells and moved nodes are redrawn. Tiles are drawn from what
+// the last scan saw (its key per cell), so a tile drawn frames after the scan
+// that queued it agrees with the nodes that scan placed.
 
 import { buildNodeField, patchNodeField, isLane as laneAt, LINK_DX, LINK_DZ, TOW_BANK } from '../path-nodes.js';
 
@@ -85,7 +87,8 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
   const TW = W * K, TH = H * K;
   const s = cell / K;                  // texel size in world units
   const data = new Uint8Array(TW * TH * 2);
-  const key = new Uint8Array(W * H);   // last drawn key per cell (0 = no node)
+  const key = new Uint8Array(W * H);   // last scanned key per cell (0 = no node)
+  const tierSeen = new Uint8Array(W * H); // the tier that key was made from
   const tilesX = Math.ceil(W / PATH_TILE), tilesZ = Math.ceil(H / PATH_TILE);
   const dirtyTiles = new Uint8Array(tilesX * tilesZ);
   const queue = [];
@@ -127,6 +130,7 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
       if (k === key[i]) continue;
       if ((k & NODE_BITS) !== (key[i] & NODE_BITS)) nodeDirty.add(i);
       key[i] = k;
+      tierSeen[i] = (k >> 2) & 7;
       changed++;
       markTilesAround(i % W, (i / W) | 0);
     }
@@ -241,7 +245,7 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
   }
 
   function drawTile(roads, t) {
-    const tier = roads.tier;
+    const tier = tierSeen;
     const tx = t % tilesX, tz = (t / tilesX) | 0;
     const cx0 = tx * PATH_TILE, cz0 = tz * PATH_TILE;
     const cx1 = Math.min(W, cx0 + PATH_TILE), cz1 = Math.min(H, cz0 + PATH_TILE);
@@ -321,19 +325,26 @@ export function createPathField({ W, H, cell, ox = 0, oz = 0 }) {
    * Bring the field up to date with roads. Redraws at most `budget` tiles
    * (Infinity for all). Returns the texel row ranges touched as
    * [{x0, x1, z0, z1}], an empty list if nothing changed.
+   * rescan = false only draws tiles still queued from earlier scans: the
+   * scan reads every cell (about 0.4 ms in a city), so roads.js runs it at
+   * its upload rate and drains the queue in between.
    */
-  function update(roads, budget = Infinity) {
+  function update(roads, budget = Infinity, rescan = true) {
     if (roads.tier !== tierRef) {
       // A new road grid (load, migration): rebuild from nothing.
       tierRef = roads.tier;
       nodes = null;
       key.fill(0);
+      tierSeen.fill(0);
       data.fill(0);
       dirtyTiles.fill(0);
       queue.length = 0;
+      rescan = true;
     }
-    scan(roads);
-    syncNodes(roads);
+    if (rescan || !nodes) {
+      scan(roads);
+      syncNodes(roads);
+    }
     const rects = [];
     let done = 0;
     let head = 0;

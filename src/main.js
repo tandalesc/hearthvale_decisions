@@ -424,6 +424,43 @@ async function boot() {
   // catches up on the next drawn frame. Its fixed 0.1 s tick makes the
   // outcome the same, and walkers are extrapolated to each drawn frame.
   let simOwed = 0;
+  // The sim steps in a task of its own, posted as each drawn frame is handed to the
+  // GPU: the GPU draws that frame while the sim works out the next, instead of
+  // waiting for it. (Run first in the frame, a heavy tick - a building going up, the
+  // year's turn - plus the frame's own GPU time missed the display's deadline.)
+  // Each frame draws the state the last step left, with walkers carried on to the
+  // frame's time as before.
+  let stepOwed = 0, stepPosted = false, stepMs = 0;
+  const stepChannel = new MessageChannel();
+  stepChannel.port1.onmessage = () => {
+    stepPosted = false;
+    const owed = stepOwed;
+    stepOwed = 0;
+    if (speed > 0 && owed > 0) step(owed);
+  };
+  function step(owed) {
+    const t0 = performance.now();
+    try {
+      routes?.tick?.(state);
+      const ticks = sim.stepTick(state, owed * speed * PACE, services, {until: t0 + SIM_BUDGET_MS});
+      if (Number.isFinite(ticks)) {
+        reachedSim += ticks * TICK_SECONDS;
+        reachedReal += owed;
+        if (reachedReal >= 1) {
+          // Smoothed over a few seconds, so a heavy month-end does not flicker the label.
+          const w = reachedSim / reachedReal / PACE;
+          reached = reached == null ? w : reached * 0.6 + w * 0.4;
+          reachedSim = 0;
+          reachedReal = 0;
+        }
+      }
+      simErrors = 0;
+    } catch (err) {
+      if (simErrors++ === 0) console.error('[hearthvale] sim step failed', err);
+    }
+    stepMs = performance.now() - t0;
+    simMs = simMs * 0.9 + stepMs * 0.1;
+  }
   function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.1);
@@ -437,26 +474,11 @@ async function boot() {
       if (worldErrors++ === 0) console.error('[hearthvale] render failed', err);
     }
     if (draw && speed > 0) {
-      const t0 = performance.now();
-      try {
-        routes?.tick?.(state);
-        const ticks = sim.stepTick(state, simOwed * speed * PACE, services, {until: t0 + SIM_BUDGET_MS});
-        if (Number.isFinite(ticks)) {
-          reachedSim += ticks * TICK_SECONDS;
-          reachedReal += simOwed;
-          if (reachedReal >= 1) {
-            // Smoothed over a few seconds, so a heavy month-end does not flicker the label.
-            const w = reachedSim / reachedReal / PACE;
-            reached = reached == null ? w : reached * 0.6 + w * 0.4;
-            reachedSim = 0;
-            reachedReal = 0;
-          }
-        }
-        simErrors = 0;
-      } catch (err) {
-        if (simErrors++ === 0) console.error('[hearthvale] sim step failed', err);
+      stepOwed = Math.min(stepOwed + simOwed, 0.25);
+      if (!stepPosted) {
+        stepPosted = true;
+        stepChannel.port2.postMessage(0);
       }
-      simMs = simMs * 0.9 + (performance.now() - t0) * 0.1;
     }
     if (draw) {
       simOwed = 0;
@@ -510,7 +532,8 @@ async function boot() {
     setSpeed,
     app,
     world,
-    view: () => ({...(world.stats?.() ?? {}), simMs, layout: app.layout}),
+    // stepMs: the last sim step alone (it runs in a task of its own, after the frame).
+    view: () => ({...(world.stats?.() ?? {}), simMs, stepMs, layout: app.layout}),
     decisions: () => client.stats(),
     screenPoint: (x, z) => world.projectPoint?.(x, z),
     dev: {

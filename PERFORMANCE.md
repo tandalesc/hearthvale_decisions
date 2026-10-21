@@ -1,3 +1,64 @@
+# 20× dawn hitch pass (2026-10-20)
+
+**What the hitch was.** It was not fog, mist or shadows. In seasonal mode the year carries the day (`daylight.js`), so every year opens at dawn, and at 20× a year lasts about 6 s. The first tenth of each year is when the town builds: the year's founding attempts, new homes, the year-end restyles and household moves. Every building placed or reshaped made each walker's route be checked again on the main thread (`people.js checkFootprints`). Through the whole day at 20× the GPU stayed at about 6 ms a frame, and the renderer's CPU at about 3 ms. The sim went from about 4.5 ms a frame to 10–12 ms in the early morning.
+
+**Result.** `scripts/benchmark-daycycle.js` (new), at 20×, High, DPR 2, on an M5 Pro. Baseline is `fc40aae` (a `git archive` of it). Runs alternated; the values below are two runs each. A missed frame is an animation-frame interval over 25 ms. "Main" is all main-thread time for a frame: the frame callback plus the sim step.
+
+| | dawn frames missed | long frames / 30 s | dawn main mean | dawn sim mean | render CPU (rest of day) |
+|---|---:|---:|---:|---:|---:|
+| city fixture, before | 18 % / 15 % | 50 / 42 | 15.0 / 14.3 ms | 11.1 / 10.4 ms | 2.7 ms |
+| city fixture, after | 2 % / 2 % | 7 / 7 | 11.2 / 11.6 ms | 8.1 / 8.4 ms | 2.0 ms |
+| year-165 metro, before | 28 % / 26 % | 79 / 79 | 16.8 / 16.6 ms | 12.2 / 12.0 ms | 3.0 ms |
+| year-165 metro, after | 8 % / 11 % | 25 / 33 | 13.3 / 13.3 ms | 9.6 / 9.6 ms | 2.2 ms |
+
+Both builds reached 19–20× throughout. GPU time is unchanged (6–7 ms). Outside dawn, under 1 % of frames miss in either build.
+
+Headless, per sim tick on the city fixture over three game years (a per-tick timing harness, not committed):
+
+| | ticks in the year's first tenth | of those, ticks that place or change a building | year-end tick | `checkFootprints` on such a tick |
+|---|---:|---:|---:|---:|
+| before | 6.8 ms | 16.2 ms | 25.8 ms | 7.7 ms |
+| after | 4.9 ms | 10.7 ms | 8.2 ms | 5.0 ms |
+
+**Simulation output is unchanged.** The serialized state hashes identically before and after for the city fixture at 20× (2,280 and 7,000 frames, about 19 game years) and at 5×, for the town fixture at 20×, and for the year-165 metro at 20×. Tests in `tests/perf-equivalence.test.js` check each shortcut against the full computation, after buildings come down beside walks and go up across them.
+
+## Changes
+
+1. **The sim steps in a task of its own** (`main.js`). The step is posted as each drawn frame is handed to the GPU, so the GPU draws while the sim works. Before, the step ran first in the frame. On a frame with a heavy tick, the step, the frame's CPU and then its GPU time came to more than 16.7 ms.
+   - Each frame draws the state the last step left, and walkers are carried on to the frame's time as before.
+   - The speed reached and the budget rules (`SIM_BUDGET_MS`) are as they were.
+   - `hearthvale.view().stepMs` is the last step's time.
+   - `benchmark-desktop.js` frameCpu no longer includes the sim step: it now also reports `stepCpu`.
+2. **Walkers' route checks after a building change** (`sim/roads.js`, `sim/people.js`, `sim/outline.js`). All of these are exact.
+   - *Walls memo.* `routeClearFrom` walked the whole rest of every walker's route. A walk found clear now keeps a memo (`wallMemo`). While no cell near its legs has become or stopped being a wall (`wallGen`, stamped per tile like the near-list `tileGen`), only the leg from where the walker stands is checked.
+   - *Stale memos are re-checked in part.* When tiles under a walk did change, only the legs whose boxes meet those tiles are checked again (`memoCatchUp`), and the waypoints at their ends. This holds for the skirt memo and the walls memo alike. If they all pass, the full check would leave the walk as it is.
+   - *A log of changed tiles.* Each footprint build lists the tiles it stamped (`TILE_LOG` builds kept), so a memo is brought up to date by testing those few tiles against its bounding box.
+   - *Outlines keep their identity when their shape does.* A restyle rebuilt every restyled building's pieces as new objects, even when they were the same shape. Near lists are compared by identity, so every walker's memo went stale at the turn of the year. `buildingOutline` now hands back the old pieces when the new ones are equal. This was most of the year-end tick.
+   - *Outline cache key.* The key is compared field by field instead of building a 17-field string per building on every footprint build.
+   - The tile diff skips tiles already marked in the current build.
+3. **`busyRef`** (`sim/sites.js`) sorted the wear of every trodden cell on each site search to read one percentile. It now selects it (`kthLargest`), which gives the same value.
+4. **Renderer.**
+   - *Path field* (`render/paths.js`, `roads.js`). The scan of every road cell (about 0.4 ms in a city, plus node sync) ran on every frame that still had tiles queued, which is nearly every frame at high speed. It now runs at the texture's upload rate (2 Hz), and frames in between only draw queued tiles. Tiles are drawn from what the last scan saw (`tierSeen`), so they always agree with that scan's nodes. The golden-pixel test is unchanged. This saves about 0.7 ms of render CPU per frame at 20×.
+   - *Mist* (`render/mist.js`). Its 2 s ease ran in real time, so at 20× it never cleared and hung over the town all day. It now eases over 2 s ÷ speed. Below about 0.05 (under 1.5 % opacity) it fades out and the full-screen pass is skipped. That pass costs about 0.26 ms of GPU here (A/B within one run). Screenshots of four looks differ from the baseline by less than two baseline runs differ from each other.
+
+## Also measured, not changed
+
+- **Shadows.** At 20× the sun turns enough to re-render the shadow map on about half of all frames, at every time of day. This costs about 0.2 ms of GPU per frame on average here. Throttling it would make the shadows step visibly.
+- **Weather.** Rain eases in real time (8 s in, 4 s out), so at 20× each month's shower blurs into a constant light wetness (`uWet` about 0.11). This is a design call: easing it in game time would flash showers on and off twice a second.
+
+## Remaining (found, not fixed)
+
+1. **About 2 % (city) to 10 % (metro) of dawn frames still miss at 20× on this machine.** A tick that places a building still costs about 8–10 ms:
+   - the full footprint rebuild (`roads.js footprints`, about 2.5 ms);
+   - each walker's checks of its current leg (about 2 ms for 2,000 walkers);
+   - route deliveries;
+   - monthly jobs that land on the same tick.
+
+   An incremental footprint build would need to reproduce the stamping order exactly: wall ownership, `unsealWay` pockets and the order of the near lists. The lasting fix is to step the sim in a worker, so no tick can hold up a frame.
+2. The per-tick harness used for the headless table is not committed. `benchmark-daycycle.js` gives the in-browser split by time of day, with a CPU profile split the same way.
+
+---
+
 # Fidelity pass (2026-10-20)
 
 Rendering only; the simulation is untouched. Before/after views: `docs/media/fidelity-before-*.jpg` and `fidelity-after-*.jpg` (`scripts/fidelity-shots.js`).
