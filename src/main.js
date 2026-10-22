@@ -6,7 +6,10 @@
 //   ?paused=1                   start paused
 //   ?stub=1 / ?renderer=stub    force the development stubs
 //   ?simWorker=0                run the sim on the main thread (as before the worker)
+//   ?student=1                  answer the kinds a decision student knows locally
+//                               (public/students/; docs/design/decision-distillation.md)
 import {createDecisionClient} from './decision-client.js';
+import {createLocalAnswerer, createStudentVersions} from './decision-local.js';
 import {loadNarrator, loadRenderer, loadSim} from './ui/bridge.js';
 import {createInlineHost, createWorkerHost} from './sim-host.js';
 import {useTerrain} from './terrain.js';
@@ -97,6 +100,8 @@ async function boot() {
   // worker that cannot start leaves the town on this thread, through the same host.
   let host = null;
   let sim, renderer;
+  // A decision student's bundle, when asked for (opt-in until one passes its gates).
+  const student = params.get('student') === '1' ? new URL('students/', document.baseURI).href : null;
   const pace = (s) => (Number(params.get('pace')) > 0 ? Number(params.get('pace')) : s.pace ?? 1);
   async function inlineHost() {
     let routes = null;
@@ -106,8 +111,13 @@ async function boot() {
     } catch (err) {
       console.warn('[hearthvale] route planner unavailable', err);
     }
-    const client = createDecisionClient({now: () => performance.now()});
-    const h = createInlineHost({sim, routes, decisions: client, pace: pace(sim), budgetMs: SIM_BUDGET_MS, rowFloats: ROW_FLOATS});
+    let client = createDecisionClient({now: () => performance.now()}), students = null;
+    if (student) {
+      client = createLocalAnswerer({client, report: {}});
+      students = createStudentVersions({answerer: client, base: student});
+      await students.start();
+    }
+    const h = createInlineHost({sim, routes, decisions: client, students, pace: pace(sim), budgetMs: SIM_BUDGET_MS, rowFloats: ROW_FLOATS});
     h.decisions.configure(decisionSettings);
     h.decisions.setEnabled(modelEnabled);
     return h;
@@ -117,7 +127,7 @@ async function boot() {
     [sim, renderer] = await loading;
     if (sim.kind === 'real' && params.get('simWorker') !== '0' && typeof Worker !== 'undefined') {
       try {
-        const h = createWorkerHost({pace: pace(sim), budgetMs: WORKER_BUDGET_MS, rowFloats: ROW_FLOATS, model: modelEnabled, decisionSettings});
+        const h = createWorkerHost({pace: pace(sim), budgetMs: WORKER_BUDGET_MS, rowFloats: ROW_FLOATS, model: modelEnabled, decisionSettings, student});
         await h.ready;
         return (host = h);
       } catch (err) {

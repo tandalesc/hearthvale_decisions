@@ -28,8 +28,8 @@ import {createRenderMirror} from './sim/render-mirror.js';
 // The inline host: sim-session.js on this thread, stepping in a task of its own posted as
 // each drawn frame is handed to the GPU (the GPU draws that frame while the sim works out
 // the next). The renderer reads the live render view.
-export function createInlineHost({sim, routes = null, decisions = null, pace = 1, budgetMs = 10, rowFloats = 20} = {}) {
-  const session = createSimSession({sim, routes, decisions, pace, budgetMs, rowFloats});
+export function createInlineHost({sim, routes = null, decisions = null, students = null, pace = 1, budgetMs = 10, rowFloats = 20} = {}) {
+  const session = createSimSession({sim, routes, decisions, students, pace, budgetMs, rowFloats});
   let stepOwed = 0, posted = false, lastNow = 0, lastSpeed = 0, lib = null;
   const listeners = {step: [], fail: []};
   const host = {
@@ -96,7 +96,7 @@ const PROBE_MS = 5000;
 const LONG_OPS = new Set(['setup', 'init', 'save', 'check', 'dev', 'inSim', 'snapshot', 'serialize']);
 
 // The worker host. opts go to the worker's setup: {pace, budgetMs, rowFloats, model,
-// decisionSettings, routes: {worker, fixedClock}, decisions, prose}.
+// decisionSettings, routes: {worker, fixedClock}, decisions, prose, student}.
 export function createWorkerHost(opts = {}) {
   const mirror = createRenderMirror({rowFloats: opts.rowFloats ?? 20});
   const pending = new Map();
@@ -153,9 +153,9 @@ export function createWorkerHost(opts = {}) {
     if (started) for (const fn of listeners.fail) fn(dead);
   }
 
-  const {routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats} = opts;
+  const {routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats, student} = opts;
   const ready = Promise.race([
-    call('setup', [{routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats}]),
+    call('setup', [{routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats, student}]),
     new Promise((_, reject) => setTimeout(() => reject(new Error('The sim worker took too long to start.')), START_MS)),
   ]).then(() => { started = true; }, (err) => { fail(err.message); throw err; });
 

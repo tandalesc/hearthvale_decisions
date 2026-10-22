@@ -583,7 +583,8 @@ function send(state, rt, bus, sweep, q) {
   Promise.resolve(bus.ask(sweep.kind, id, q.context, opts)).then((answer) => {
     answered = true;
     const probs = answerProbs(sweep.kind, answer, q.allowed);
-    rt.inbox.push({sweepId: sweep.id, q, probs: probs ?? fallbackFor(sweep.kind, q.context, q.snapshot, state, q.allowed ?? undefined), src: probs ? 'model' : 'local'});
+    rt.inbox.push({sweepId: sweep.id, q, probs: probs ?? fallbackFor(sweep.kind, q.context, q.snapshot, state, q.allowed ?? undefined), src: probs ? 'model' : 'local',
+      ...(probs && answer.model ? {model: answer.model} : {})});
   }, () => {
     if (!answered) rt.inbox.push({sweepId: sweep.id, q, probs: fallbackFor(sweep.kind, q.context, q.snapshot, state, q.allowed ?? undefined), src: 'local'});
   });
@@ -609,7 +610,8 @@ function applyInbox(state, rt) {
   for (const item of batch) {
     const sweep = item.sweepId != null ? sweepById(state, item.sweepId) : null;
     const choice = sampleDist(item.probs, rng(state));
-    log.push({key: item.q.key, kind: sweep?.kind ?? item.kind, month: monthIndex(state.time), choice, probs: roundAll(item.probs), src: item.src});
+    log.push({key: item.q.key, kind: sweep?.kind ?? item.kind, month: monthIndex(state.time), choice, probs: roundAll(item.probs), src: item.src,
+      ...(item.model ? {model: item.model} : {})});
     if (sweep && !sweep.answers[item.q.key]) {
       sweep.answers[item.q.key] = {key: item.q.key, subject: item.q.subject, context: item.q.context, probs: item.probs, choice, src: item.src};
       sweep.answered++;
@@ -982,7 +984,7 @@ function askExtra(state, rt, bus, kindId, subjectKey, context, snap, allowed, pr
   Promise.resolve(bus.ask(kindId, id, context, {priority, ...(allowed ? {allowed} : {}), state: snap, tag: 'individual'})).then((answer) => {
     rt.asked.delete(tag);
     const probs = answerProbs(kindId, answer, allowed);
-    if (probs) rt.inbox.push({sweepId: null, extra: true, kind: kindId, subjectKey, q: {key: id, context}, probs, src: 'model'});
+    if (probs) rt.inbox.push({sweepId: null, extra: true, kind: kindId, subjectKey, q: {key: id, context}, probs, src: 'model', ...(answer.model ? {model: answer.model} : {})});
   }, () => rt.asked.delete(tag));
 }
 
@@ -1153,7 +1155,7 @@ function askRefine(state, rt, bus, kindId, comboKey, context, snap) {
   Promise.resolve(bus.ask(kindId, id, context, {priority: PRIORITY.refine, state: snap, tag: 'refine'})).then((answer) => {
     rt.asked.delete(tag);
     const probs = answerProbs(kindId, answer, null);
-    if (probs) rt.inbox.push({sweepId: null, extra: true, refine: true, kind: kindId, subjectKey: comboKey, q: {key: id, context}, probs, src: 'model'});
+    if (probs) rt.inbox.push({sweepId: null, extra: true, refine: true, kind: kindId, subjectKey: comboKey, q: {key: id, context}, probs, src: 'model', ...(answer.model ? {model: answer.model} : {})});
   }, () => rt.asked.delete(tag));
 }
 

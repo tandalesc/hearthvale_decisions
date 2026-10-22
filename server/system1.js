@@ -1,7 +1,8 @@
 import {MAX_QUESTIONS_PER_REQUEST,MAX_GROUPS_PER_REQUEST,validateQuestion,validateState,renderQuestion,normalizeAnswer,stateKey,canonicalJson} from '../src/decision-kinds.js';
-import { readFile } from 'node:fs/promises';
+import { readFile, appendFile, mkdir, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
 import { parseEnv } from 'node:util';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
 // Node-only. Never import this module into the browser bundle.
 export async function loadLocalConfig(root, overrides = process.env) {
@@ -206,11 +207,13 @@ export function createAnswerCache(size = 50000) {
 
 // Limits on questions sent upstream (cache hits are free):
 //   clientRate  per client (an address), questions a second, bursting to 4 s' worth; 0 = none
+//   globalRate  for every client together, questions a second, bursting to `globalBurst` s' worth; 0 = none
 //   dailyCap    for the whole service per UTC day; 0 = none. Past it, every
 //               player's town uses local rules until the next day.
 // For a public deployment, set both. See local.env.example.
-export function createLimits({clientRate = 0, dailyCap = 0, now = () => Date.now()} = {}) {
+export function createLimits({clientRate = 0, globalRate = 0, globalBurst = 2, dailyCap = 0, now = () => Date.now()} = {}) {
   const buckets = new Map();
+  const shared = {tokens: globalRate * globalBurst, at: now()};
   let day = null, used = 0;
   return {
     // -> null when allowed, else {status, retryAfterMs?, error}
@@ -219,6 +222,13 @@ export function createLimits({clientRate = 0, dailyCap = 0, now = () => Date.now
       const today = new Date(t).toISOString().slice(0, 10);
       if (today !== day) { day = today; used = 0; }
       if (dailyCap > 0 && used + count > dailyCap) return {status: 503, error: 'Daily decision budget used'};
+      if (globalRate > 0) {
+        shared.tokens = Math.min(globalRate * globalBurst, shared.tokens + (t - shared.at) * globalRate / 1000);
+        shared.at = t;
+        if (shared.tokens < count) {
+          return {status: 429, retryAfterMs: Math.max(250, Math.ceil((count - shared.tokens) / globalRate * 1000)), error: 'Shared decision budget used for now'};
+        }
+      }
       if (clientRate > 0) {
         const burst = clientRate * 4;
         let b = buckets.get(client);
@@ -233,23 +243,30 @@ export function createLimits({clientRate = 0, dailyCap = 0, now = () => Date.now
         // Forget idle clients now and then.
         if (buckets.size > 10000) for (const [k, v] of buckets) if (t - v.at > 60000) buckets.delete(k);
       }
+      if (globalRate > 0) shared.tokens -= count;
       used += count;
       return null;
     },
-    stats: () => ({day, used, dailyCap, clientRate}),
+    stats: () => ({day, used, dailyCap, clientRate, globalRate}),
   };
 }
 
 export function limitsFromEnv(env = process.env) {
   const n = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
-  return {clientRate: n(env.DECISIONS_CLIENT_QPS), dailyCap: n(env.DECISIONS_DAILY_CAP), cacheSize: env.DECISIONS_CACHE_SIZE != null ? n(env.DECISIONS_CACHE_SIZE) : 50000};
+  const or = (v, fallback) => (v != null ? n(v) : fallback);
+  return {clientRate: n(env.DECISIONS_CLIENT_QPS), dailyCap: n(env.DECISIONS_DAILY_CAP), cacheSize: or(env.DECISIONS_CACHE_SIZE, 50000),
+    // Live-teacher questions from decision students (X-Hearthvale-Live): across all players, and per player.
+    liveRate: or(env.DECISIONS_LIVE_QPS, 50), liveClientRate: or(env.DECISIONS_LIVE_CLIENT_QPS, 2)};
 }
 
 // Transport-independent request handling: used by the Vite middleware and by
 // scripts/benchmark-decisions.js. Returns {status, body, retryAfterMs?}.
-export function createDecisionService({loadConfig, fetcher = fetch, gate = createConcurrencyGate(), cache = createAnswerCache(), limits = createLimits()} = {}) {
+// `liveLimits` apply instead of `limits` to live-teacher requests (questions a
+// decision student hands to the model): a shared budget across all players.
+export function createDecisionService({loadConfig, fetcher = fetch, gate = createConcurrencyGate(), cache = createAnswerCache(), limits = createLimits(),
+  liveLimits = createLimits({globalRate: 50, clientRate: 2})} = {}) {
   let lastSuccess = 0, model = null, latestFailure = false;
-  async function handle(body, {client = 'local'} = {}) {
+  async function handle(body, {client = 'local', live = false} = {}) {
     let groups;
     try { groups = validateDecisionRequest(body); } catch { return {status: 400, body: {error: 'Invalid decision request'}}; }
     // Answer what the cache knows; only the rest goes upstream.
@@ -266,7 +283,7 @@ export function createDecisionService({loadConfig, fetcher = fetch, gate = creat
     const cached = Object.keys(answers).length;
     if (!misses.length) return {status: 200, body: {answers, model: model ?? 'local-decision-service', cached}};
     const wanted = misses.reduce((n, g) => n + g.questions.length, 0);
-    const refused = limits.take(client, wanted);
+    const refused = (live ? liveLimits : limits).take(client, wanted);
     if (refused) {
       // Partial answers still help: send what the cache had.
       if (cached) return {status: 200, body: {answers, model: model ?? 'local-decision-service', cached}};
@@ -300,22 +317,145 @@ export function createDecisionService({loadConfig, fetcher = fetch, gate = creat
   return {handle, health};
 }
 
+// Questions a decision student flagged as unfamiliar (docs/design/decision-distillation.md §7):
+// logged for the batch loop to label with the decision model, never answered here.
+// {questions: [{kind, context, allowed?, state, reason, expectedKL?}]}, 1..64 per request.
+// Each is validated as a decision question is, then appended as one JSON line
+// {at, key, kind, context, allowed, state, reason, expectedKL, client} where
+// `client` is a salted hash of the address (the salt stays on the server), so
+// the batch loop can count distinct clients without storing who they are.
+// Repeats from the same client are dropped; each client may log `perMinute`.
+export const NOVEL_REASONS = ['confidence', 'unknown', 'kind'];
+export function createNovelLog({append, salt, perMinute = 240, remember = 200000, now = () => Date.now(), onLogged = null}) {
+  const seen = new Map();      // key|client -> 1, oldest first
+  const buckets = new Map();   // client -> {tokens, at}
+  const hash = (client) => createHash('sha256').update(`${salt}|${client}`).digest('hex').slice(0, 16);
+  async function record(body, client = 'unknown') {
+    if (!body || typeof body !== 'object' || !Array.isArray(body.questions) || body.questions.length < 1 || body.questions.length > MAX_QUESTIONS_PER_REQUEST) {
+      return {status: 400, body: {error: 'Invalid novel-question log'}};
+    }
+    const who = hash(client), t = now();
+    let b = buckets.get(who);
+    if (!b) { b = {tokens: perMinute, at: t}; buckets.set(who, b); }
+    b.tokens = Math.min(perMinute, b.tokens + (t - b.at) * perMinute / 60000);
+    b.at = t;
+    const lines = [];
+    let rejected = 0, repeats = 0;
+    for (const q of body.questions) {
+      try {
+        if (!q || typeof q !== 'object' || !NOVEL_REASONS.includes(q.reason)) throw new Error('reason');
+        if (q.expectedKL !== undefined && !(Number.isFinite(q.expectedKL) && q.expectedKL >= 0 && q.expectedKL <= 100)) throw new Error('expectedKL');
+        const question = validateQuestion({kind: q.kind, id: 'n', context: q.context, ...(q.allowed ? {allowed: q.allowed} : {})});
+        const state = validateState(question.kind, q.state);
+        const key = `${question.kind}|${stateKey(state)}|${JSON.stringify([question.context, question.allowed])}`;
+        if (seen.has(`${key}|${who}`)) { repeats++; continue; }
+        if (b.tokens < 1) { rejected++; continue; }
+        b.tokens -= 1;
+        seen.set(`${key}|${who}`, 1);
+        if (seen.size > remember) seen.delete(seen.keys().next().value);
+        lines.push(JSON.stringify({at: new Date(t).toISOString(), key, kind: question.kind, context: question.context, allowed: question.allowed,
+          state, reason: q.reason, ...(q.expectedKL !== undefined ? {expectedKL: q.expectedKL} : {}), client: who}));
+      } catch { rejected++; }
+    }
+    if (lines.length) {
+      await append(lines.join('\n') + '\n');
+      onLogged?.(lines.map((l) => JSON.parse(l)));
+    }
+    if (buckets.size > 10000) for (const [k, v] of buckets) if (t - v.at > 600000) buckets.delete(k);
+    return {status: 200, body: {logged: lines.length, repeats, rejected}};
+  }
+  return {record};
+}
+
+// Labels flagged questions with the decision model as soon as the proxy is idle
+// (design §7: the teacher labels them; nothing a client sends is a label). Each
+// key is labelled once; an answer counts only with full probabilities from the
+// expected teacher model, so a fallback route never becomes training data.
+// Labels append to `appendLabel` as {key, kind, probabilities, choice, confidence, model, at}.
+export function createNovelTeacher({loadConfig, appendLabel, labelled = new Set(), idle = () => true, teacher = 'ramblerun/Decision-AI',
+  fetcher = fetch, request = requestDecisions, retryMs = 2000, now = () => Date.now(), timer = (fn, ms) => setTimeout(fn, ms)}) {
+  const queue = new Map();     // key -> {kind, context, allowed, state}
+  let running = false;
+  const counts = {labelled: 0, dropped: 0, failed: 0};
+  function enqueue(items) {
+    for (const q of items) if (!labelled.has(q.key) && !queue.has(q.key)) queue.set(q.key, q);
+    if (!running) { running = true; timer(work, 0); }
+  }
+  async function work() {
+    if (!queue.size) { running = false; return; }
+    if (!idle()) { timer(work, retryMs); return; }
+    // One request: up to 64 questions, grouped by state.
+    const batch = [...queue.values()].slice(0, MAX_QUESTIONS_PER_REQUEST);
+    const groups = new Map();
+    batch.forEach((q, i) => {
+      const sk = stateKey(q.state);
+      if (!groups.has(sk)) groups.set(sk, {state: q.state, questions: []});
+      groups.get(sk).questions.push({...validateQuestion({kind: q.kind, id: `q${i}`, context: q.context, ...(q.allowed ? {allowed: q.allowed} : {})}), _key: q.key});
+    });
+    const wire = [...groups.values()].slice(0, MAX_GROUPS_PER_REQUEST);
+    const keys = new Map(wire.flatMap((g) => g.questions.map((q) => [q.id, q._key])));
+    try {
+      const {answers, model} = await request(await loadConfig(), wire.map((g) => ({state: g.state, questions: g.questions.map(({_key, ...q}) => q)})), fetcher);
+      const lines = [];
+      for (const [id, key] of keys) {
+        const a = answers[id], q = queue.get(key);
+        queue.delete(key);
+        labelled.add(key);
+        if (!a?.probabilities || model !== teacher) { counts.dropped++; continue; }
+        lines.push(JSON.stringify({key, kind: q.kind, probabilities: a.probabilities, choice: a.choice, confidence: a.confidence, model, at: new Date(now()).toISOString()}));
+      }
+      if (lines.length) { await appendLabel(lines.join('\n') + '\n'); counts.labelled += lines.length; }
+    } catch {
+      counts.failed += keys.size;
+      timer(work, retryMs * 5);
+      return;
+    }
+    timer(work, 0);
+  }
+  return {enqueue, stats: () => ({...counts, queued: queue.size})};
+}
+
+// The novel-question log on disk: JSONL at `file`, with a salt kept beside it.
+// With `teacher` options, flagged questions are also labelled at once
+// (createNovelTeacher) into `${file}.labels.jsonl`.
+export async function fileNovelLog(file, {teacher = null, ...options} = {}) {
+  await mkdir(dirname(file), {recursive: true});
+  const saltFile = `${file}.salt`;
+  let salt;
+  try { salt = (await readFile(saltFile, 'utf8')).trim(); } catch { salt = randomBytes(16).toString('hex'); await writeFile(saltFile, salt, {mode: 0o600}); }
+  const writer = (path) => { let chain = Promise.resolve(); return (text) => (chain = chain.then(() => appendFile(path, text))); };
+  let live = null;
+  if (teacher) {
+    const labelsFile = `${file}.labels.jsonl`, labelled = new Set();
+    try { for (const line of (await readFile(labelsFile, 'utf8')).split('\n')) if (line) labelled.add(JSON.parse(line).key); } catch { /* none yet */ }
+    live = createNovelTeacher({...teacher, labelled, appendLabel: writer(labelsFile)});
+  }
+  const log = createNovelLog({append: writer(file), salt, onLogged: live ? (items) => live.enqueue(items) : null, ...options});
+  return {...log, teacher: live};
+}
+
 async function readJson(req){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>MAX_REQUEST_BYTES)throw new Error('Request too large');chunks.push(chunk);}return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
 export function system1Plugin({concurrency = 4, maxQueue = 8} = {}) {
-  let root, service, ready = null;
+  let root, service, novel, ready = null;
   // Limits come from the environment or local.env (the environment wins).
   const start = async () => {
     let file = {};
     try { file = parseEnv(await readFile(join(root, 'local.env'), 'utf8')); } catch { /* none */ }
-    const {clientRate, dailyCap, cacheSize} = limitsFromEnv({...file, ...process.env});
+    const {clientRate, dailyCap, cacheSize, liveRate, liveClientRate} = limitsFromEnv({...file, ...process.env});
     service = createDecisionService({loadConfig: () => loadLocalConfig(root), gate: createConcurrencyGate({limit: concurrency, maxQueue}),
-      cache: createAnswerCache(cacheSize), limits: createLimits({clientRate, dailyCap})});
+      cache: createAnswerCache(cacheSize), limits: createLimits({clientRate, dailyCap}),
+      liveLimits: createLimits({globalRate: liveRate, clientRate: liveClientRate})});
+    const env = {...file, ...process.env};
+    // Flagged questions are labelled by the teacher as soon as the proxy is idle (DECISIONS_LIVE_LABEL=0 turns it off).
+    const teacher = env.DECISIONS_LIVE_LABEL === '0' ? null : {loadConfig: () => loadLocalConfig(root),
+      idle: () => { const h = service.health(); return h.inFlight === 0 && h.queued === 0; }, teacher: env.DECISIONS_TEACHER_MODEL || 'ramblerun/Decision-AI'};
+    novel = await fileNovelLog(env.DECISIONS_NOVEL_LOG || join(root, 'data', 'novel', 'novel.jsonl'), {teacher});
   };
   const attach = async server => {
     server.middlewares.use(async (req,res,next)=>{
       let pathname;try{pathname=decodeURIComponent(new URL(req.url,'http://localhost').pathname);}catch{res.statusCode=400;res.end('Invalid path');return;}
       if(/(?:^|\/)(?:local\.env|\.env[^/]*)(?:\/|$)/i.test(pathname)){res.statusCode=403;res.setHeader('Cache-Control','no-store');res.end('Private configuration');return;}
-      if(!['/api/system1/status','/api/decisions'].includes(pathname))return next();
+      if(!['/api/system1/status','/api/decisions','/api/decisions/novel'].includes(pathname))return next();
       await (ready??=start());
       res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
       const send=(status,body)=>{res.statusCode=status;res.end(JSON.stringify(body));};
@@ -327,7 +467,8 @@ export function system1Plugin({concurrency = 4, maxQueue = 8} = {}) {
       if(req.headers.origin){try{if(new URL(req.headers.origin).host!==req.headers.host)return send(403,{error:'Origin not allowed'});}catch{return send(403,{error:'Origin not allowed'});}}
       if(!req.headers['content-type']?.startsWith('application/json'))return send(415,{error:'JSON required'});
       let body;try{body=await readJson(req);}catch(error){return error.message==='Request too large'?send(413,{error:'Request too large'}):send(400,{error:'Invalid decision request'});}
-      const result=await service.handle(body,{client:req.socket?.remoteAddress??'unknown'});if(result.retryAfterMs)res.setHeader('Retry-After',String(result.retryAfterMs/1000));send(result.status,result.body);
+      if(pathname.endsWith('/novel')){const result=await novel.record(body,req.socket?.remoteAddress??'unknown');return send(result.status,result.body);}
+      const result=await service.handle(body,{client:req.socket?.remoteAddress??'unknown',live:req.headers['x-hearthvale-live']==='1'});if(result.retryAfterMs)res.setHeader('Retry-After',String(result.retryAfterMs/1000));send(result.status,result.body);
     });
   };
   return {name:'hearthvale-system1',configResolved(config){root=config.root;ready=start();return ready;},configureServer:attach,configurePreviewServer:attach};

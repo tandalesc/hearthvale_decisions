@@ -15,6 +15,7 @@ import * as docket from './sim/docket.js';
 import {narrativeFacts} from './sim/narrative-facts.js';
 import {peekNote, keepNote, touchNote, startProseKeeper} from './narrator-client.js';
 import {createDecisionClient} from './decision-client.js';
+import {createLocalAnswerer, createStudentVersions} from './decision-local.js';
 // Static, never import(): a chunk split off this worker imports its shared code back
 // from the worker's own file, and Safari then runs that file a second time in the same
 // worker, whose second copy (session null) takes over the messages.
@@ -32,7 +33,8 @@ const ops = {
   ping: () => true,
 
   // opts: {pace, budgetMs, rowFloats, model, decisionSettings, decisions (false: none),
-  //        prose (false: none), routes: {worker (false: cooperative), fixedClock}}
+  //        prose (false: none), routes: {worker (false: cooperative), fixedClock},
+  //        student (the decision students directory URL: its kinds answer locally)}
   async setup(opts = {}) {
     let routes = null;
     try {
@@ -44,9 +46,17 @@ const ops = {
     } catch (err) {
       console.warn('[hearthvale] route planner unavailable', err);
     }
-    const decisions = opts.decisions === false ? null : createDecisionClient({now: () => performance.now()});
+    let decisions = opts.decisions === false ? null : createDecisionClient({now: () => performance.now()});
+    // opts.student: the decision students directory (manifest.json and bundles);
+    // their kinds are answered here, one version per town.
+    let students = null;
+    if (decisions && opts.student) {
+      decisions = createLocalAnswerer({client: decisions, report: {}});
+      students = createStudentVersions({answerer: decisions, base: opts.student});
+      await students.start();
+    }
     session = createSimSession({
-      sim, lib, routes, decisions,
+      sim, lib, routes, decisions, students,
       narrator: {facts: narrativeFacts, peekNote, keepNote, touchNote},
       startProse: opts.prose === false ? null : startProseKeeper,
       pace: opts.pace ?? sim.pace ?? 1,

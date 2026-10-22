@@ -1,0 +1,7 @@
+{
+  "latest": 2,
+  "versions": {
+    "1": "decisions.v1.json",
+    "2": "decisions.v2.json"
+  }
+}

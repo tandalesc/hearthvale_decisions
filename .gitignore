@@ -10,3 +10,6 @@ local.env
 *.tmp.mjs
 .dev.vars*
 .wrangler/
+data/distill/
+data/novel/
+data/loop/
