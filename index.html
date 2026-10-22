@@ -47,10 +47,6 @@
       .boot-leaf { width: 44px; height: 44px; margin-bottom: 14px; }
       .boot-leaf .l { fill: var(--leaf); }
       .boot-leaf .s { stroke: var(--green); }
-      .boot-eyebrow {
-        display: none; margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
-      }
-      #boot[data-named="1"] .boot-eyebrow { display: block; }
       .boot-name {
         margin: 0; max-width: 100%; overflow-wrap: anywhere;
         font-family: 'Fraunces', 'Iowan Old Style', Georgia, serif; font-weight: 600;
@@ -87,7 +83,6 @@
     <div id="boot" role="status" aria-live="polite" aria-busy="true" data-mode="load">
       <div class="boot-card">
         <svg class="boot-leaf" viewBox="0 0 64 64" aria-hidden="true"><path class="l" d="M48 13C27 9 12 25 18 42c16 13 34-1 30-29Z"/><path class="s" d="m15 51 23-25" fill="none" stroke-width="4" stroke-linecap="round"/></svg>
-        <p class="boot-eyebrow" aria-hidden="true">Hearthvale</p>
         <p class="boot-name">Hearthvale</p>
         <div class="boot-steps" aria-hidden="true"><i class="now"></i><i></i><i></i><i></i><i></i></div>
         <p class="boot-phase">Unfolding the map…</p>
