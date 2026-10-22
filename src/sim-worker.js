@@ -23,6 +23,7 @@ import {createRoutePlanner} from './route-planner.js';
 import {realSim} from './sim-api.js';
 import {createSimSession} from './sim-session.js';
 import {createMirrorSource} from './sim/render-mirror.js';
+import {activeWearBox} from './sim/roads.js';
 
 const sim = realSim({index: simIndex, view: simView});
 const lib = {...simIndex, docket};
@@ -73,7 +74,7 @@ const ops = {
   async init(choice, now = 0) {
     const r = await session.init(choice);
     if (r.error) return r;
-    source = createMirrorSource();
+    source = createMirrorSource({wearBox: activeWearBox});
     const view = session.sync(now, 0);
     const {delta, transfer} = source.delta(view, session.state);
     return [{info: r.info, delta}, transfer];

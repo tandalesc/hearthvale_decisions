@@ -217,6 +217,8 @@ function growBox(box, cx, cz) {
   if (cz > box.z1) box.z1 = cz;
 }
 export function growActiveBox(r, i) { growBox(activeBoxes.get(r), i % GRID_W, Math.floor(i / GRID_W)); }
+// The box as {x0, z0, x1, z1} (empty when x1 < x0), for the render mirror's wear compare. Read only.
+export function activeWearBox(r) { return activeBox(r); }
 function activeBox(r) {
   let box = activeBoxes.get(r);
   if (box && box.wear === r.wear && box.tier === r.tier) return box;

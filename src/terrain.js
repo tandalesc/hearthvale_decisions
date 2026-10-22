@@ -128,9 +128,11 @@ export function setTerrainSeed(seed, version = 1, archetype = null) {
   P = seed == null ? CLASSIC : deriveParams(seed);
   W = null;
   MEANDER = null;
+  clearRiverCache();
   if (seed != null && version >= 2) {
     const mr = seededRandom((seed ^ 0x3c6ef372) >>> 0);
     MEANDER = { noise: gradientNoise(mr), a: 14 + mr() * 8, l: 95 + mr() * 45 };
+    clearRiverCache();
     W = deriveWaters(seed, { riverX, half: P.half, fords: P.fords }, archetype);
     W.forced = archetype ?? null;
     W.land = deriveLand(seededRandom((seed ^ 0x51ed2705) >>> 0), P.relief);
@@ -173,7 +175,30 @@ function seaTop(S) {
 
 // ---------------------------------------------------------------- the river
 
+// riverX is asked for the same z over and over: every sample row of a footprint check
+// (sites.js sampleRect walks columns of the same rows), and each height and water test.
+// A small cache keyed by the bits of z, cleared whenever the river changes
+// (setTerrainSeed), hands back exactly what the sum below gives.
+const RIVER_SLOTS = 1024;
+const riverLo = new Uint32Array(RIVER_SLOTS), riverHi = new Uint32Array(RIVER_SLOTS), riverVal = new Float64Array(RIVER_SLOTS);
+const riverSet = new Uint8Array(RIVER_SLOTS);
+const zBits = new Float64Array(1), zWords = new Uint32Array(zBits.buffer);
+function clearRiverCache() { riverSet.fill(0); }
+
 export function riverX(z) {
+  zBits[0] = z;
+  const lo = zWords[0], hi = zWords[1];
+  const slot = Math.imul(lo ^ Math.imul(hi, 0x85ebca6b), 0x9e3779b1) >>> 22;
+  if (riverSet[slot] && riverLo[slot] === lo && riverHi[slot] === hi) return riverVal[slot];
+  const x = riverAt(z);
+  riverLo[slot] = lo;
+  riverHi[slot] = hi;
+  riverVal[slot] = x;
+  riverSet[slot] = 1;
+  return x;
+}
+
+function riverAt(z) {
   const r = P.river;
   if (!MEANDER) return r.base + r.tilt * z + Math.sin(z / r.l1 + r.p1) * r.a1 + Math.sin(z / r.l2 + r.p2) * r.a2;
   // Version 2: the two waves damped, irregular bends laid over them.

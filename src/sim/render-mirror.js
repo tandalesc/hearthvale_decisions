@@ -31,13 +31,16 @@
 const GRIDS = ['wear', 'tier', 'planned', 'low'];
 const EVENTS_CAP = 50000;   // as render-view: a consumer that never reads must not grow this forever
 
-export function createMirrorSource({scanShare = 60} = {}) {
+// wearBox(roads), when given, bounds every cell with wear in the sim ({x0, z0, x1, z1},
+// roads.js activeWearBox): wear is then compared only there and where the copy has wear.
+export function createMirrorSource({scanShare = 60, wearBox = null} = {}) {
   let first = true;
   let peopleCap = -1;
   // What was last sent, by identity, and copies to compare against.
   const ref = {buildings: null, roads: null, embanked: null, bridges: null, embankments: null, attention: null, centres: null, aesthetics: null, landscape: null, weather: null, worldEvents: null};
   const grids = {};          // grid name -> the sim's array last sent
   const shadow = {};         // grid name -> a copy of it as the mirror has it
+  let shadowWear = null;     // a box holding every cell with wear in shadow.wear (with wearBox)
   let roadsVersion = -1;
   const recRefs = new Map(); // building id -> the record object last sent
   const recSigs = new Map(); // building id -> its JSON as last sent
@@ -154,6 +157,7 @@ export function createMirrorSource({scanShare = 60} = {}) {
         out.grids[k] = r[k].slice();
         transfer.push(out.grids[k].buffer);
       }
+      shadowWear = null;
       ref.embanked = r.embanked ?? null;
       shadow.embanked = r.embanked ? r.embanked.slice() : null;
       out.embanked = shadow.embanked ? shadow.embanked.slice() : null;
@@ -166,13 +170,22 @@ export function createMirrorSource({scanShare = 60} = {}) {
         if (!a) continue;
         if (a !== grids[k]) {
           grids[k] = a;
+          if (k === 'wear') shadowWear = null;
           shadow[k] = a.slice();
           (out.replace ??= {})[k] = a.slice();
           transfer.push(out.replace[k].buffer);
           continue;
         }
         if (k !== 'wear' && !structural) continue;
-        const rect = changedRect(a, shadow[k], r.W, r.H);
+        let box = null;
+        if (k === 'wear' && wearBox) {
+          // Outside the sim's box and the copy's, both are 0. After this compare the copy
+          // equals the sim, so its wear lies in the sim's box.
+          const sim = wearBox(r);
+          box = shadowWear ? unionBox(sim, shadowWear) : null;
+          shadowWear = {x0: sim.x0, z0: sim.z0, x1: sim.x1, z1: sim.z1};
+        }
+        const rect = changedRect(a, shadow[k], r.W, r.H, box);
         if (!rect) continue;
         const data = copyRect(a, shadow[k], r.W, rect);
         (out.patches ??= []).push({k, ...rect, data});
@@ -401,16 +414,37 @@ function scalarsOf(r) {
   return out;
 }
 
-// The bounding rectangle (cells, inclusive) of every cell where a differs from s.
-function changedRect(a, s, W, H) {
+// The bounding rectangle (cells, inclusive) of every cell where a differs from s, looking
+// only inside box (cells, inclusive) when given: the caller knows they agree outside it.
+// Byte grids are compared four cells to a 32-bit word.
+function changedRect(a, s, W, H, box = null) {
   let x0 = W, x1 = -1, z0 = -1, z1 = -1;
-  for (let z = 0, i = 0; z < H; z++) {
+  const bx0 = box ? Math.max(0, box.x0) : 0, bx1 = box ? Math.min(W - 1, box.x1) : W - 1;
+  const bz0 = box ? Math.max(0, box.z0) : 0, bz1 = box ? Math.min(H - 1, box.z1) : H - 1;
+  if (bx1 < bx0) return null;
+  const words = !box && a instanceof Uint8Array && s instanceof Uint8Array && W % 4 === 0 && a.byteOffset % 4 === 0 && s.byteOffset % 4 === 0;
+  const aw = words ? new Uint32Array(a.buffer, a.byteOffset, (W * H) >> 2) : null;
+  const sw = words ? new Uint32Array(s.buffer, s.byteOffset, (W * H) >> 2) : null;
+  for (let z = bz0; z <= bz1; z++) {
     let hit = false;
-    for (let x = 0; x < W; x++, i++) {
-      if (a[i] !== s[i]) {
-        if (x < x0) x0 = x;
-        if (x > x1) x1 = x;
-        hit = true;
+    if (words) {
+      for (let w = (z * W) >> 2, end = ((z + 1) * W) >> 2; w < end; w++) {
+        if (aw[w] === sw[w]) continue;
+        for (let i = w << 2, x = i - z * W; i < (w << 2) + 4; i++, x++) {
+          if (a[i] !== s[i]) {
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            hit = true;
+          }
+        }
+      }
+    } else {
+      for (let x = bx0, i = z * W + bx0; x <= bx1; x++, i++) {
+        if (a[i] !== s[i]) {
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          hit = true;
+        }
       }
     }
     if (hit) {
@@ -420,6 +454,8 @@ function changedRect(a, s, W, H) {
   }
   return x1 < 0 ? null : {x0, z0, x1, z1};
 }
+
+const unionBox = (a, b) => ({x0: Math.min(a.x0, b.x0), z0: Math.min(a.z0, b.z0), x1: Math.max(a.x1, b.x1), z1: Math.max(a.z1, b.z1)});
 
 // Copies a's cells in rect into a new array (rows of the rect), and into s.
 function copyRect(a, s, W, {x0, z0, x1, z1}) {
