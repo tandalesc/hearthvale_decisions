@@ -392,6 +392,27 @@ vec2 wetStone(vec2 w, float sett, float sharp) {
 }
 #endif
 
+// Cubic B-spline filtering from four bilinear taps (Sigg & Hadwiger, GPU
+// Gems 2 ch. 20). The cell splat is one texel per 2 m cell: plain bilinear
+// showed that grid as diamonds and stairs along the edges of trampled dirt
+// and of the snow that thins over it.
+vec4 textureBSpline(sampler2D t, vec2 uv) {
+  vec2 size = vec2(textureSize(t, 0));
+  vec2 p = uv * size - 0.5;
+  vec2 i = floor(p);
+  vec2 f = p - i;
+  vec2 f2 = f * f, f3 = f2 * f;
+  vec2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0;
+  vec2 w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+  vec2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+  vec2 w3 = f3 / 6.0;
+  vec2 g0 = w0 + w1, g1 = w2 + w3;
+  vec2 h0 = (i - 0.5 + w1 / g0) / size;
+  vec2 h1 = (i + 1.5 + w3 / g1) / size;
+  return g0.y * (g0.x * texture2D(t, h0) + g1.x * texture2D(t, vec2(h1.x, h0.y)))
+       + g1.y * (g0.x * texture2D(t, vec2(h0.x, h1.y)) + g1.x * texture2D(t, h1));
+}
+
 float pathHalf(float t) {
 ${HALF_GLSL}
   return ${PATH_HALF[5].toFixed(3)};
@@ -409,6 +430,9 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
   vec4 fabric = texture2D(tStreet, ruv);
   float dirt = r.b;
   if (pth.r < 0.004 && dirt < 0.01 && fabric.r + fabric.g < 0.004) return vec4(grass, 0.0);
+  // Only where there is trampling (the B-spline's wider reach adds nothing
+  // visible beyond it: the threshold below starts at 0.14).
+  if (dirt > 0.002) dirt = textureBSpline(tRoad, ruv).b;
   // Signed distance inside the nearest strip's edge, in metres (< 0 outside),
   // and that strip's tier (exact on and near the strip).
   float sd = (pth.r - 0.5) * ${(2 * PATH_RANGE).toFixed(3)};
@@ -445,7 +469,9 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
   float rut = exp(-pow((dc - 0.55) / 0.16, 2.0)) * lane;
   vec3 track = dirtC * (1.0 - 0.16 * rut);
   track = mix(track, mix(dirtC, grass, 0.45), (1.0 - smoothstep(0.0, 0.22, dc)) * 0.35 * lane);
-  float grit = hash12(floor(world.xz * 6.0));
+  // Grit: soft two-octave noise (a hash per 16 cm square read as pixels up
+  // close), flattened to its average once it is under a few pixels.
+  float grit = mix(0.5, vnoise(world.xz * 7.0) * 0.6 + vnoise(world.xz * 19.0 + 5.0) * 0.4, smoothstep(0.06, 0.02, px));
   vec3 gravel = vec3(0.55, 0.48, 0.36) * (0.9 + 0.16 * grit);
   gravel *= 1.0 - 0.07 * rut - 0.08 * smoothstep(0.7, 1.0, dc);
   vec3 cobble = mix(vec3(0.38, 0.36, 0.33), vec3(0.62, 0.60, 0.56), cobbles(world.xz));

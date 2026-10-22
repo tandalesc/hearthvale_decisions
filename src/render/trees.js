@@ -662,11 +662,15 @@ const VERTEX_BEGIN = /* glsl */ `
       transformed = aPivot + (transformed - aPivot) * mix(vec3(1.0), vec3(0.55, 0.6, 0.55), bareK);
     }
   #endif
-  // Leaf flutter: a small breathing of the foliage along its normal.
+  // Leaf flutter: a small breathing of the foliage out from its clump's
+  // centre. Not along the normal: that keeps a trace of each facet, so the
+  // copies of a shared corner moved apart and opened cracks in the crown.
   float windK = 0.3 + 0.7 * min(1.0, length(uWind));
   if (aPart > 0.5) {
     float fl = sin(uDecoTime * 3.3 + position.x * 2.1 + position.y * 1.7 + position.z * 1.3 + seedT * 40.0);
-    transformed += normal * fl * 0.035 * windK * (1.0 - bareK * 0.7);
+    vec3 flDir = position - aPivot;
+    flDir *= 1.0 / max(length(flDir), 1e-3);
+    transformed += flDir * fl * 0.035 * windK * (1.0 - bareK * 0.7);
   }
   #if TREE_KIND == 4
     // Willow fronds swing below the crown.

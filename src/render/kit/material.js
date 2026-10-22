@@ -241,7 +241,8 @@ vec4 facade(float s, float h, float len, float F, float kind, float seed, float 
     door = boxMask(dp, vec2(0.52, 1.08));
     float dframe = boxMask(dp, vec2(0.64, 1.18)) - door;
     float inCol = boxMask(vec2(s - doorX, 0.0), vec2(c * 0.5, 1e3));
-    glass *= 1.0 - inCol; shutter *= 1.0 - inCol;
+    // The door takes the column's ground-floor window, its night spill too.
+    glass *= 1.0 - inCol; shutter *= 1.0 - inCol; halo *= 1.0 - inCol;
     frame = max(frame * (1.0 - inCol), dframe);
   }
   // A stable per-window random decides which rooms are lit at night.
