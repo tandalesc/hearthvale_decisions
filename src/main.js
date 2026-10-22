@@ -6,8 +6,8 @@
 //   ?paused=1                   start paused
 //   ?stub=1 / ?renderer=stub    force the development stubs
 //   ?simWorker=0                run the sim on the main thread (as before the worker)
-//   ?student=1                  answer the kinds a decision student knows locally
-//                               (public/students/; docs/design/decision-distillation.md)
+//   ?student=0                  turn off the decision students (public/students/), which
+//                               otherwise answer the kinds they know in the browser
 import {createDecisionClient} from './decision-client.js';
 import {createLocalAnswerer, createStudentVersions} from './decision-local.js';
 import {loadNarrator, loadRenderer, loadSim} from './ui/bridge.js';
@@ -100,8 +100,8 @@ async function boot() {
   // worker that cannot start leaves the town on this thread, through the same host.
   let host = null;
   let sim, renderer;
-  // A decision student's bundle, when asked for (opt-in until one passes its gates).
-  const student = params.get('student') === '1' ? new URL('students/', document.baseURI).href : null;
+  // Decision students answer the kinds they know in the browser unless ?student=0.
+  const student = params.get('student') !== '0' ? new URL('students/', document.baseURI).href : null;
   const pace = (s) => (Number(params.get('pace')) > 0 ? Number(params.get('pace')) : s.pace ?? 1);
   async function inlineHost() {
     let routes = null;
