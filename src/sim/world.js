@@ -18,7 +18,7 @@ import { yearlyLandscape } from './landscape.js';
 import { yearlyParkReserve } from './parks.js';
 import { reclaimDerelicts } from './reclaim.js';
 
-const FOUNDATIONS_V = 7;
+const FOUNDATIONS_V = 8;
 const FOUNDATION_SPAN = 150;
 
 // Year-end work, one step per tick so no single tick carries it all (the
