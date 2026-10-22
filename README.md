@@ -108,7 +108,7 @@ Then open <http://127.0.0.1:5173>. You need a browser with WebGL 2.
 
 The local decision model and narrator are optional. To connect them, copy `local.env.example` to `local.env` and add your key. The key stays on your machine's server and never reaches the browser.
 
-Most of the town's questions are answered right in your browser by a small student model trained to copy the decision model, so the town keeps its character even without one. Open the game with `?student=0` to turn the students off. How they were built and how closely they match is in [the decision students paper](docs/design/decision-students-paper.html).
+Most of the town's questions are answered right in your browser by a small student model trained to copy the decision model, so the town keeps its character even without one. Open the game with `?student=0` to turn the students off. How they were built and how closely they match is in [the decision students paper](docs/design/decision-students-paper.html) ([PDF](docs/design/decision-students-paper.pdf)).
 
 **A few controls:** drag to look around and scroll to zoom. `Space` pauses, `C` opens or closes the docket, `F` toggles full screen, and `H` hides the interface so you can just watch.
 
