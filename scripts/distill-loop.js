@@ -1,6 +1,6 @@
 // The continual-update loop for decision students (docs/design/decision-distillation.md §7).
 //
-//   node scripts/distill-loop.js [--state data/loop/state.json] [--publish] [--dry] [--min-clients 1] [--fresh "TRAINER ARGS"]
+//   node scripts/distill-loop.js [--state data/loop/state.json] [--publish] [--dry] [--min-clients 1] [--fresh "TRAINER ARGS"] [--extra ROWS.jsonl]
 //   node scripts/distill-loop-watch.js --every 60 -- --publish   (a cycle whenever enough is new)
 //
 // One run turns what players' students flagged into the next student version:
@@ -28,11 +28,14 @@
 //      plus the new rows; its confidence head is retrained; it is exported.
 //      --fresh "ARGS" trains it from scratch instead, with those trainer arguments
 //      (a new architecture, say "--arch set --state-layers 0 --epochs 20 ..."); the
-//      gates and the rest of the cycle are the same.
+//      gates and the rest of the cycle are the same. --extra adds training rows
+//      gathered on purpose (scripts/distill-export.js output: teacher-labelled
+//      questions from towns the student ran), treated like the cycle's new rows.
 //   5. Model gates, against the current version on the same sets: real-play KL
 //      (distinct and traffic-weighted), each busy kind's traffic-weighted KL,
-//      the largest signed option bias, rare-option ratios, KL on the held-out new
-//      rows, JS parity, bundle size and speed, and short canary towns (they must
+//      the largest signed option bias overall and in young towns (hamlets and
+//      villages, where a lean on staying or leaving slows growth), rare-option
+//      ratios, KL on the held-out new rows, JS parity, bundle size and speed, and short canary towns (they must
 //      all finish, and the routine work share must stay near the current version's).
 //   6. With --publish and every gate passed: the bundle goes to
 //      public/students/decisions.vN.json, manifest.json names it latest, and
@@ -58,6 +61,7 @@ import {validateQuestion, validateState, stateKey, MAX_QUESTIONS_PER_REQUEST} fr
 import {decisionTriples, decisionOptions, FEATURES_VERSION} from '../src/decision-features.js';
 import {SNAPSHOTS, KIND_BY_ID} from '../src/sim/decisions/kinds.js';
 import {loadLocalConfig, requestDecisions} from '../server/system1.js';
+import {loadStudent} from '../src/decision-student.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -73,7 +77,7 @@ const cfg = {
   ...S.config,
 };
 if (flag('min-clients', null)) cfg.minClients = Number(flag('min-clients'));
-const publish = args.includes('--publish'), dry = args.includes('--dry'), fresh = flag('fresh', null);
+const publish = args.includes('--publish'), dry = args.includes('--dry'), fresh = flag('fresh', null), extra = flag('extra', null);
 const next = S.current.version + 1;
 const out = resolve(ROOT, 'data', 'loop', `v${next}`);
 mkdirSync(out, {recursive: true});
@@ -200,7 +204,11 @@ const labelled = accepted.filter((a) => goodLabel(labels.get(a.key)));
 report.steps.labels = {accepted: accepted.length, labelled: labelled.length, droppedWrongTeacher: accepted.length - labelled.length};
 log(`labels: ${labelled.length} of ${accepted.length} accepted questions have a teacher label`);
 save();
-if (labelled.length < cfg.minRows) {
+const extraRows = [];
+if (extra) for await (const r of readLines(p(extra))) if (r.target && !trained.has(r.key)) extraRows.push(r);
+if (extra) log(`extra rows: ${extraRows.length} from ${extra}`);
+report.steps.extra = extra ? {file: extra, rows: extraRows.length} : undefined;
+if (labelled.length + extraRows.length < cfg.minRows) {
   report.steps.stop = `fewer than ${cfg.minRows} new labelled questions: nothing to learn yet`;
   save();
   log(report.steps.stop);
@@ -213,7 +221,7 @@ const rows = labelled.map((a) => {
   const options = decisionOptions(a.question.kind, a.question.allowed), l = labels.get(a.key);
   return {key: a.key, kind: a.question.kind, triples: decisionTriples(a.question.kind, a.state, a.question.context), options,
     target: options.map((o) => l.probabilities[o] ?? 0), n: 1, seeds: [hash32(a.key) % 2147483647], aug: false, model: l.model, features: FEATURES_VERSION};
-});
+}).concat(extraRows);
 const newRows = join(out, 'novel-rows.jsonl');
 await writeJsonl(newRows, rows);
 const py = S.python ?? join(S.twm, '.venv', 'bin', 'python');
@@ -249,6 +257,38 @@ gate('no busy kind worse', worseKinds.length === 0, {worse: worseKinds});
 const busy = (b) => !cfg.excludeKinds.includes(b.kind) && b.share >= 0.01;
 const maxBias = (r) => Math.max(0, ...r.bias.filter(busy).map((b) => Math.abs(b.bias)));
 gate('largest option bias', maxBias(n) <= Math.max(cfg.maxBias, maxBias(o) + 0.01), {current: maxBias(o), next: maxBias(n)});
+// The same bias, in young towns only: the answers of the current and the next
+// bundle against the teacher on hamlet and village questions of the real-play set.
+const youngBias = (() => {
+  const young = [];
+  return async (file) => {
+    if (!young.length) for await (const r of readLines(p(S.realplay))) {
+      const era = r.triples.find((t) => t[0] === 'town' && t[1] === 'era')?.[2];
+      if (era === 'hamlet' || era === 'village') young.push(r);
+    }
+    const st = loadStudent(JSON.parse(readFileSync(file, 'utf8'))), agg = new Map();
+    let total = 0;
+    for (const r of young) {
+      if (cfg.excludeKinds.includes(r.kind) || !st.kinds.has(r.kind)) continue;
+      const q = st.fromTriples(r.kind, r.triples, r.options), w = r.n ?? 1;
+      total += w;
+      const k = agg.get(r.kind) ?? {w: 0, opt: new Map()};
+      k.w += w;
+      r.options.forEach((o, i) => { const e = k.opt.get(o) ?? [0, 0]; e[0] += w * r.target[i]; e[1] += w * q[i]; k.opt.set(o, e); });
+      agg.set(r.kind, k);
+    }
+    let worst = {bias: 0};
+    for (const [kind, k] of agg) {
+      if (k.w < 0.01 * total) continue;
+      for (const [option, [t, q]] of k.opt) if (Math.abs((q - t) / k.w) > Math.abs(worst.bias)) worst = {kind, option, bias: (q - t) / k.w};
+    }
+    return worst;
+  };
+})();
+const yo = S.current.bundle ? await youngBias(p(S.current.bundle)) : {bias: 0};
+const yn = await youngBias(bundle);
+gate('young-town bias', Math.abs(yn.bias) <= Math.max(cfg.maxBias, Math.abs(yo.bias) + 0.01),
+  {current: Number(yo.bias.toFixed(4)), currentAt: yo.kind && `${yo.kind}:${yo.option}`, next: Number(yn.bias.toFixed(4)), nextAt: yn.kind && `${yn.kind}:${yn.option}`});
 const badTails = n.tails.filter((t) => !cfg.excludeKinds.includes(t.kind) && (t.ratio < cfg.tail[0] || t.ratio > cfg.tail[1]));
 gate('rare options', badTails.length === 0, {outside: badTails.map((t) => [t.kind, t.option, Number(t.ratio.toFixed(2))])});
 // New rows the next version did not train on (the held-out pseudo-seeds).

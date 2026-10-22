@@ -3,7 +3,7 @@
 //
 //   node scripts/distill-collect.js OUT_DIR [--seeds 40] [--years 150] [--start 1] [--workers 6] [--room 8] [--needs 2]
 //        [--answer fallback|student|teacher] [--student BUNDLE.json] [--env ROOT] [--hybrid]
-//        [--salts 1] [--salt-start 0] [--burst] [--player]
+//        [--salts 1] [--salt-start 0] [--burst] [--player] [--teacher-kinds KIND,KIND]
 //
 // Each seed grows a town with a stand-in council (styles and water archetypes
 // rotate with the seed) and a recording decision bus: it validates every
@@ -40,6 +40,10 @@
 // the docket some months, takes up only some cards and lets the rest lapse, and
 // sometimes picks at random, with its engagement drawn per run from the seed and
 // salt. The style still sets its tastes. Its choices use their own random stream.
+//
+// --teacher-kinds (with --answer student --hybrid) sends those kinds to the
+// decision model even though the student knows them: a swap test of which kind
+// moves a town's outcome.
 import {fork} from 'node:child_process';
 import {availableParallelism} from 'node:os';
 import {mkdirSync, createWriteStream, createReadStream, rmSync, readFileSync, writeFileSync} from 'node:fs';
@@ -57,7 +61,7 @@ async function runChild() {
   const {validateQuestion, validateState, stateKey} = await import('../src/decision-kinds.js');
   const {ARCHETYPES} = await import('../src/waters.js');
 
-  process.on('message', async ({seed, index, years, room, needs, dir, answer = 'fallback', student: bundleFile, env, hybrid = false, salt = 0, burst = false, player = false}) => {
+  process.on('message', async ({seed, index, years, room, needs, dir, answer = 'fallback', student: bundleFile, env, hybrid = false, salt = 0, burst = false, player = false, teacherKinds = []}) => {
     let student = null, config = null, requestDecisions = null;
     if (answer === 'student') {
       const {loadStudent} = await import('../src/decision-student.js');
@@ -123,7 +127,7 @@ async function runChild() {
             record({...question, context: variant}, cleanState, sKey, true);
           }
         }
-        if (student?.kinds.has(kind)) {
+        if (student?.kinds.has(kind) && !(config && teacherKinds.includes(kind))) {
           const t0 = burst ? performance.now() : 0;
           const a = student.answer(question.kind, cleanState, question.context, question.allowed);
           if (burst) { tickLoad.n++; tickLoad.ms += performance.now() - t0; }
@@ -259,6 +263,8 @@ async function runParent() {
   };
   const answer = text('answer', 'fallback'), student = text('student', null), env = text('env', join(fileURLToPath(import.meta.url), '..', '..'));
   const hybrid = process.argv.includes('--hybrid'), burst = process.argv.includes('--burst'), player = process.argv.includes('--player');
+  const teacherKinds = (text('teacher-kinds', '') ?? '').split(',').filter(Boolean);
+  if (teacherKinds.length && !(answer === 'student' && hybrid)) throw new Error('--teacher-kinds needs --answer student --hybrid');
   const salts = arg('salts', 1), saltStart = arg('salt-start', 0);
   if (answer === 'student' && !student) throw new Error('--answer student needs --student BUNDLE.json');
   const workers = Math.max(1, arg('workers', Math.max(1, availableParallelism() - 2)));
@@ -267,7 +273,7 @@ async function runParent() {
   const jobs = [];
   for (let k = 0; k < seeds; k++) {
     for (let salt = saltStart; salt < saltStart + salts; salt++) {
-      jobs.push({seed: 1000 + (start + k) * 7919, index: start + k, years, room, needs, dir: parts, answer, student, env, hybrid, salt, burst, player});
+      jobs.push({seed: 1000 + (start + k) * 7919, index: start + k, years, room, needs, dir: parts, answer, student, env, hybrid, salt, burst, player, teacherKinds});
     }
   }
   const results = await pool(jobs, workers);
@@ -292,7 +298,7 @@ async function runParent() {
   await writeLines(join(dir, 'states.jsonl'), [...states].map(([state, snapshot]) => ({state, snapshot})));
   rmSync(parts, {recursive: true, force: true});
 
-  writeFileSync(join(dir, 'towns.json'), JSON.stringify({answer, student, hybrid, years,
+  writeFileSync(join(dir, 'towns.json'), JSON.stringify({answer, student, hybrid, teacherKinds, years,
     player, towns: results.map(({seed, salt, archetype, style, player: engagement, town, shares, burst: b, seconds}) => ({seed, salt, archetype, style, player: engagement, town, shares, burst: b, seconds}))}));
   for (const r of results.filter((x) => x.burst)) {
     console.log(`burst seed ${r.seed}/${r.salt}: ${r.burst.ticks} ticks with student work; per tick mean ${r.burst.msMean.toFixed(2)} ms, ` +
