@@ -568,7 +568,7 @@
      "decisionModel": false,
      "batterySaver": "off",
      "speed": 5,
-     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+     "save": "scratchpad/metro.json"
     },
     "raf": {
      "count": 831,
@@ -631,7 +631,7 @@
      "decisionModel": false,
      "batterySaver": "off",
      "speed": 5,
-     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+     "save": "scratchpad/metro.json"
     },
     "raf": {
      "count": 828,
@@ -694,7 +694,7 @@
      "decisionModel": false,
      "batterySaver": "off",
      "speed": 5,
-     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+     "save": "scratchpad/metro.json"
     },
     "raf": {
      "count": 948,
@@ -757,7 +757,7 @@
      "decisionModel": false,
      "batterySaver": "off",
      "speed": 5,
-     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+     "save": "scratchpad/metro.json"
     },
     "raf": {
      "count": 943,
@@ -822,7 +822,7 @@
      "decisionModel": false,
      "batterySaver": "off",
      "speed": 1,
-     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+     "save": "scratchpad/metro.json"
     },
     "raf": {
      "count": 935,
@@ -885,7 +885,7 @@
      "decisionModel": false,
      "batterySaver": "off",
      "speed": 1,
-     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+     "save": "scratchpad/metro.json"
     },
     "raf": {
      "count": 939,
@@ -948,7 +948,7 @@
      "decisionModel": false,
      "batterySaver": "off",
      "speed": 1,
-     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+     "save": "scratchpad/metro.json"
     },
     "raf": {
      "count": 958,
@@ -1011,7 +1011,7 @@
      "decisionModel": false,
      "batterySaver": "off",
      "speed": 1,
-     "save": "/private/tmp/claude-501/-Users-shishirtandale-Projects-hearthvale-decisions--claude-worktrees-perf-release-tuning-96f966/8886ab3c-9c2c-4312-a6de-3cf4275507e2/scratchpad/metro.json"
+     "save": "scratchpad/metro.json"
     },
     "raf": {
      "count": 959,

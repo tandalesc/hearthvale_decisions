@@ -1,6 +1,6 @@
 # Hearthvale v2 — Integration Contract (authoritative)
 
-Read with: `brief.md` (owner's request), `design-systems.md` (systems spec), `design-visual.md` (visual/UI spec), all in this scratchpad folder. **Where this contract disagrees with a spec, this contract wins.** Project: /Users/shishirtandale/Development/relayer_test_game_20261014, branch `evolving-city`. Do not commit; the lead integrates and commits.
+Read with: `brief.md` (owner's request), `design-systems.md` (systems spec), `design-visual.md` (visual/UI spec), all in this scratchpad folder. **Where this contract disagrees with a spec, this contract wins.** Branch `evolving-city`. Do not commit; the lead integrates and commits.
 
 ## 0. Owner direction that overrides the specs
 

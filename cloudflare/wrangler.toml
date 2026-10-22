@@ -1,4 +1,4 @@
-# Sketch only: nothing has been deployed. See docs/design/cloudflare-backend.md.
+# Sketch only: nothing has been deployed.
 #
 #   npm run build && npx wrangler dev -c cloudflare/wrangler.toml
 #   npx wrangler deploy -c cloudflare/wrangler.toml

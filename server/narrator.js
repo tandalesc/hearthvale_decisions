@@ -20,7 +20,6 @@ import {loadLocalConfig, createConcurrencyGate} from './system1.js';
 import {validateFacts, canonicalFacts, factLines, materialText, FactsError} from '../src/narrative-schema.js';
 import {validateProseFacts, cardLines, yearLines, endLines, CHECKS, FALLBACKS, llmFields, CARD_EXAMPLES} from '../src/narrative-prose.js';
 
-export const NARRATOR_MODELS = ['ramblerun/Reasoning-AI', 'ramblerun/Multimodal-AI'];
 export const NARRATE_TIMEOUT_MS = 6000;
 export const MAX_BODY_BYTES = 8 * 1024;
 export const MAX_NOTE_CHARS = 420;
@@ -165,7 +164,7 @@ export function completionBody(model, messages) {
 // Open a streamed completion, trying each model in turn. -> {response, model}
 async function openStream(config, messages, fetcher, signal) {
   let lastError = new Error('No model available');
-  for (const model of NARRATOR_MODELS) {
+  for (const model of config.models ?? []) {
     try {
       const response = await fetcher(completionsUrl(config), {
         method: 'POST', redirect: 'error', signal,
@@ -402,7 +401,7 @@ export function parseJsonReply(text) {
 // One non-streamed completion; tries each model, and drops response_format if a server refuses it.
 async function completeText(config, messages, fetcher, signal, maxTokens, temperature) {
   let lastError = new Error('No model available');
-  for (const model of NARRATOR_MODELS) {
+  for (const model of config.models ?? []) {
     for (const json of [true, false]) {
       const body = {...completionBody(model, messages), stream: false, max_tokens: maxTokens, temperature};
       if (json) body.response_format = {type: 'json_object'};

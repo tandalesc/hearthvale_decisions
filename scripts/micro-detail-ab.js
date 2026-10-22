@@ -1,18 +1,24 @@
-// In-page A/B of the micro-detail relief (docs/design/micro-detail.md): one
-// loaded page per view, the MICRO_DETAIL define of the terrain (paving) or of
-// the kit materials (roof courses) flipped between interleaved blocks of
-// GPU-timed frames, so load and scene state are shared.
+// In-page A/B of the micro-detail relief and the specular term
+// (docs/design/micro-detail.md): one loaded page per view, the MICRO_DETAIL
+// (or, with --feature=spec, SPECULAR) define of the terrain (paving), of the
+// kit materials (roofs, glass) or of both flipped between interleaved blocks
+// of GPU-timed frames, so load and scene state are shared.
 //
-//   node scripts/micro-detail-ab.js [--target terrain|kit] [--tier high]
-//        [--blocks 8] [--frames 40] [--only bridge,street40] [--dpr 1.25] [--out DIR]
+//   node scripts/micro-detail-ab.js [--feature micro|spec] [--target terrain|kit|both]
+//        [--tier high] [--blocks 8] [--frames 40] [--only bridge,street40]
+//        [--dpr 1.25] [--out DIR] [--shots] [--views spec]
 //
-// Prints, per view, median GPU ms of the whole frame with relief off and on,
-// the median of the per-pair differences (on - off), and the same for the
-// target drawn alone (aloneOff/On/Delta: the terrain, or the buildings). Same server and browser
-// setup as fidelity-shots.js. --target=kit defaults to the roof views.
+// Prints, per view, median GPU ms of the whole frame with the feature off and
+// on, the median of the per-pair differences (on - off), and the same for the
+// target drawn alone (aloneOff/On/Delta: the terrain, the buildings, or
+// both). Same server and browser setup as fidelity-shots.js. --target=kit
+// defaults to the roof views, --feature=spec to the spec views (rain and low
+// sun) and target both. --shots also saves an off | on screenshot per view
+// (DIR/<name>-ab.jpg, needs ffmpeg); --blocks=0 skips the timing.
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => { const [k, ...v] = a.replace(/^--/, '').split('='); return [k, v.join('=')]; }));
@@ -20,7 +26,8 @@ const tier = args.tier ?? 'high';
 const dpr = Number(args.dpr ?? 1.25);
 const blocks = Number(args.blocks ?? 8);
 const frames = Number(args.frames ?? 40);
-const target = args.target ?? 'terrain';
+const feature = args.feature ?? 'micro';
+const target = args.target ?? (feature === 'spec' ? 'both' : 'terrain');
 const only = args.only ? new Set(args.only.split(',')) : null;
 const out = resolve(args.out ?? 'test-results/micro-detail');
 const CHROME = process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -48,6 +55,24 @@ const ROOF_VIEWS = {
   'town-close': VIEWS['town-close'],
 };
 
+// Specular (--feature=spec): wet paving and roofs in rain, glass at low sun,
+// close and at the default range, and dry views where only glass shines.
+const SPEC_VIEWS = {
+  'rain-street': 'fixture=city&yearT=0.66&weather=rain&cx=5&cz=-28&dist=25&elev=25',
+  'rain-bridge': 'fixture=city&yearT=0.45&weather=rain&cx=9&cz=-105&dist=22&elev=28',
+  'rain-roofs': 'fixture=city&yearT=0.45&weather=rain&cx=-20&cz=0&dist=30&elev=35',
+  'rain-dawn': 'fixture=city&yearT=0.02&weather=rain&cx=5&cz=-28&dist=30&elev=22',
+  // Worst case: wet paving fills the screen, seen from above at 16 m.
+  'rain-paving-top': 'fixture=city&yearT=0.66&weather=rain&cx=5&cz=-28&dist=16&elev=70',
+  // The camera at the sun's mirror image in a facade facing -z (az 145) or
+  // -x (az 325): sun azimuth 215 (daylight.js), elevation about the sun's.
+  'dawn-glass': 'fixture=city&yearT=0.02&weather=clear&cx=-20&cz=0&dist=40&elev=18&az=145',
+  'dawn-glass-x': 'fixture=city&yearT=0.02&weather=clear&cx=-20&cz=0&dist=40&elev=18&az=325',
+  'evening-glass': 'fixture=city&yearT=0.8&weather=clear&cx=-20&cz=0&dist=45&elev=24&az=145',
+  'town-rain': 'fixture=town&yearT=0.45&weather=rain&cx=-30&cz=10&dist=75&elev=32',
+  'city-autumn': VIEWS['city-autumn'],
+};
+
 const server = await createServer({
   configFile: resolve('vite.config.js'), logLevel: 'error',
   server: { host: '127.0.0.1', port: Number(args.port ?? 5241), strictPort: false, hmr: false, watch: null },
@@ -58,7 +83,8 @@ mkdirSync(out, { recursive: true });
 const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--enable-webgl'] });
 const rows = [];
 try {
-  for (const [name, q] of Object.entries(target === 'kit' ? ROOF_VIEWS : VIEWS)) {
+  const viewSet = (args.views ?? (feature === 'spec' ? 'spec' : target === 'kit' ? 'roof' : 'paving'));
+  for (const [name, q] of Object.entries(viewSet === 'spec' ? SPEC_VIEWS : viewSet === 'roof' ? ROOF_VIEWS : VIEWS)) {
     if (only && !only.has(name)) continue;
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: dpr });
     const errors = [];
@@ -76,7 +102,7 @@ try {
         last = c;
       }
     });
-    const stats = await page.evaluate(async ({ blocks, frames, target }) => {
+    const stats = await page.evaluate(async ({ blocks, frames, target, feature }) => {
       const w = window.__world, v = window.__view;
       const { renderer, terrain, buildings } = w.internals;
       const gl = renderer.getContext();
@@ -84,9 +110,15 @@ try {
       const px = new Uint8Array(4);
       const tierName = w.stats().tier;
       // terrain.applyQuality reads only these fields (cloud shadows are High's);
-      // buildings.applyQuality reads the name (detail distance) and microDetail.
-      const setMicro = (on) => (target === 'kit' ? buildings : terrain).applyQuality({ name: tierName, cloudShadow: tierName === 'high', microDetail: on });
-      const alone = target === 'kit' ? buildings.group : terrain.group;
+      // buildings.applyQuality reads the name (detail distance), microDetail
+      // and specular. The feature not under test keeps the tier's setting.
+      const high = tierName === 'high';
+      const setMicro = (on) => {
+        const q = { name: tierName, cloudShadow: high, microDetail: feature === 'micro' ? on : high, specular: feature === 'spec' ? on : high };
+        if (target !== 'kit') terrain.applyQuality(q);
+        if (target !== 'terrain') buildings.applyQuality(q);
+      };
+      const alone = target === 'kit' ? [buildings.group] : target === 'terrain' ? [terrain.group] : [terrain.group, buildings.group];
       async function run(n) {
         const queries = [];
         for (let i = 0; i < n; i++) {
@@ -124,7 +156,7 @@ try {
       const { scene } = w.internals;
       const camera = w.camera.camera;
       const shown = new Map();
-      for (const o of scene.children) { shown.set(o, o.visible); o.visible = o === alone || o.isLight || o === camera; }
+      for (const o of scene.children) { shown.set(o, o.visible); o.visible = alone.includes(o) || o.isLight || o === camera; }
       async function terrainMs() {
         const qq = gl.createQuery();
         gl.beginQuery(ext.TIME_ELAPSED_EXT, qq);
@@ -146,15 +178,31 @@ try {
         tOff.push(pair.false); tOn.push(pair.true); tDiffs.push(pair.true - pair.false);
       }
       for (const [o, vis] of shown) o.visible = vis;
-      setMicro(tierName === 'high');
+      setMicro(high);
       w.requestFrame();
       const r2 = (x) => Math.round(x * 1000) / 1000;
+      if (!blocks) return { drawCalls: s.drawCalls, tier: s.tier };
       return {
         gpuOff: r2(med(off)), gpuOn: r2(med(on)), delta: r2(med(diffs)), deltaMin: r2(Math.min(...diffs)), deltaMax: r2(Math.max(...diffs)),
         aloneOff: r2(med(tOff)), aloneOn: r2(med(tOn)), aloneDelta: r2(med(tDiffs)), tDeltaMin: r2(Math.min(...tDiffs)), tDeltaMax: r2(Math.max(...tDiffs)),
         drawCalls: s.drawCalls, tier: s.tier,
       };
-    }, { blocks, frames, target });
+    }, { blocks, frames, target, feature });
+    if ('shots' in args) {
+      // Off, then on, each after a few drawn frames (the program is warm).
+      for (const on of [false, true]) {
+        await page.evaluate(async ({ on, target, feature }) => {
+          const w = window.__world, { terrain, buildings } = w.internals, tierName = w.stats().tier, high = tierName === 'high';
+          const q = { name: tierName, cloudShadow: high, microDetail: feature === 'micro' ? on : high, specular: feature === 'spec' ? on : high };
+          if (target !== 'kit') terrain.applyQuality(q);
+          if (target !== 'terrain') buildings.applyQuality(q);
+          for (let i = 0; i < 8; i++) { w.requestFrame(); await new Promise((r) => requestAnimationFrame(r)); }
+        }, { on, target, feature });
+        await page.waitForTimeout(400);
+        await page.screenshot({ path: `${out}/${name}-${on ? 'on' : 'off'}.png` });
+      }
+      execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', `${out}/${name}-off.png`, '-i', `${out}/${name}-on.png`, '-filter_complex', 'hstack', '-q:v', '3', `${out}/${name}-ab.jpg`]);
+    }
     rows.push({ name, ...stats, errors: errors.slice(0, 3).join(' | ') });
     await page.close();
   }
@@ -163,4 +211,4 @@ try {
   await server.close();
 }
 console.table(rows);
-writeFileSync(`${out}/micro-ab-${target}-${tier}.json`, JSON.stringify(rows, null, 2));
+writeFileSync(`${out}/${feature}-ab-${target}-${tier}.json`, JSON.stringify(rows, null, 2));

@@ -23,12 +23,12 @@ What it would cost to serve Hearthvale's "System 1" decision model to the public
    - Run vLLM or SGLang, which serve `/v1/systemone` for d1-3B per its model card, on an **L40S or H100** from RunPod, Koyeb or Lambda. A **Hetzner GEX45** at €214/month is a cheap always-on floor.
    - Self-hosting wins because you pay for the shared `state` once per group (your service caches it). Hosted APIs bill it again with every question: about 115 tokens a question versus 300.
    - Rent at least two GPUs for redundancy.
-   - Keep rrh-llm-1 for development and as a last-resort overflow, not as the public backend.
+   - Keep the LAN box for development and as a last-resort overflow, not as the public backend.
 4. **Later, optional:** offer **on-device inference** to players with a capable GPU. There is a community WebGPU build of d1-3B (`onnx-community/d1-3B-ONNX`, 1.76 GB at q4). Every player who opts in costs nothing to serve. The download is too big to make it the default.
 
 **Cost at launch with the lean budget** (about 1 billed q/s per concurrent player after caching, hosted d1): about **$0.02 per player-hour**. That is ~$1.6k/month at 100 average concurrent players (~3k DAU), ~$16k at 1k (~30k DAU) and ~$160k at 10k (~300k DAU). Self-hosting on RunPod L40S cuts that to roughly **$0.6k / $6k / $61k**.
 
-**If nothing changes in the game**, one concurrent player costs **$13–27 per hour** on any hosted API. That loop is most likely also why rrh-llm-1 looks like it won't scale: one player already fills it. No provider fixes it.
+**If nothing changes in the game**, one concurrent player costs **$13–27 per hour** on any hosted API. That loop is most likely also why the LAN box looks like it won't scale: one player already fills it. No provider fixes it.
 
 ---
 
@@ -59,7 +59,7 @@ A scratch script (not committed) loads the `hamlet`, `town` and `city` fixtures.
 - **Tokenizer:** counts use Liquid AI's LFM2 tokenizer (`LiquidAI/LFM2-2.6B`). d1-3B is built on the LFM2.5 backbone, so this is the closest public tokenizer.
 - **Fixtures:** hamlet 28 residents (28 walkers), town 774 (774 walkers), city 5,059 (2,000 walkers, the default `individualCap`).
 - **"Essentials only":** the same run with the client's `room` forced to 0. Only sweeps and on-demand questions go out, so the town plays as today minus walker refresh.
-- **Not measured on the live box:** rrh-llm-1 was not used, and latency is a parameter. `node scripts/benchmark-decisions.js` measures the real box.
+- **Not measured on the live box:** the LAN box was not used, and latency is a parameter. `node scripts/benchmark-decisions.js` measures the real box.
 
 ### 2.3 Questions per player (1× speed, per real second)
 
@@ -356,7 +356,7 @@ Ordered by savings for the effort. "Have" means the code already has it.
 - **The concurrency-to-DAU ratio (3%) is a rule of thumb.** Measure it after launch.
 - **Prices change.** Clef-flash's price fell 58% on 9 October, and `d1` went from $0.04 to $0.02 between its launch blog and the pricing page. Re-check before signing anything.
 - **Not covered:** the narrator LLM (`server/narrator.js`, prose and chronicle) is a separate model with its own cost. It writes far less, but it needs its own estimate.
-- **Infrastructure work for any cloud option:** `server/system1.js` only allows `rrh-llm-1` or loopback endpoints. It runs as Vite middleware, so production needs a standalone proxy, for example a Node server or a Cloudflare Worker.
+- **Infrastructure work for any cloud option:** `server/system1.js` only allows LAN or loopback endpoints. It runs as Vite middleware, so production needs a standalone proxy, for example a Node server or a Cloudflare Worker.
 
 ---
 

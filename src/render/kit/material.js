@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { patchMaterial, NOISE, GRADE_HEAD, MICRO_ARB } from '../shaderlib.js';
+import { patchMaterial, NOISE, GRADE_HEAD, MICRO_ARB, SPEC_HEAD, SPEC_PARS, SPEC_NORMAL, SPEC_END } from '../shaderlib.js';
 import { GROUND_GLSL } from '../ground.js';
 import { CROP_GLSL, FIELD_ROWS } from './crops.js';
 
@@ -160,6 +160,12 @@ float boxMask(vec2 p, vec2 h) {
   return m.x * m.y;
 }
 
+#ifdef SPECULAR
+// Which pane of glass this fragment is in (facade() sets it): the window's
+// column and storey, and its side of each glazing bar.
+vec4 gPane = vec4(0.0);
+#endif
+
 // Facade: returns (glass, frame, door, lit) masks for a wall fragment.
 // s = horizontal metres along the face (centred), h = metres above the ground
 // floor, len = face width, F = storey height.
@@ -188,6 +194,9 @@ vec4 facade(float s, float h, float len, float F, float kind, float seed, float 
     float mull = 1.0 - boxMask(vec2(fract(s / 1.4 + 0.5) - 0.5, 0.0), vec2(0.035, 1e3));
     glass = band * edge * mull;
     frame = band * edge * (1.0 - mull);
+    #ifdef SPECULAR
+      gPane = vec4(floor(s / 1.4 + 0.5), floor(h / F), 0.0, 0.0);
+    #endif
   } else {
     bool shopFloor = kind > 4.5 && kind < 5.5 && floorI < 0.5;
     vec2 w = win;
@@ -215,6 +224,9 @@ vec4 facade(float s, float h, float len, float F, float kind, float seed, float 
       frame += glass * (1.0 - bars);
       glass *= bars;
     }
+    #ifdef SPECULAR
+      gPane = vec4(col, floorI, step(0.0, p.x), step(kind > 5.5 ? -0.3 : 0.0, p.y)) * (kind > 1.5 && !shopFloor ? vec4(1.0) : vec4(1.0, 1.0, 0.0, 0.0));
+    #endif
     // Cottage shutters either side of the window.
     if (kind < 1.5) shutter = boxMask(vec2(abs(p.x) - w.x - 0.24, p.y), vec2(0.2, w.y));
   }
@@ -335,6 +347,20 @@ const FRAGMENT_COLOR = /* glsl */ `
       float pxPerM = 1.0 / max(max(fwidth(s), fwidth(h)), 1e-4);
       float sharp = smoothstep(2.5, 6.0, pxPerM);
       col *= 1.0 - 0.1 * (1.0 - sharp) * step(0.5, vStyle.y);
+      #ifdef SPECULAR
+        // Window glass (docs/design/micro-detail.md §6): a near mirror. Each
+        // pane leans a few degrees its own way, like old crown glass, so a
+        // low sun catches some panes and not their neighbours. Once the
+        // windows blur (sharp), the glass is spread over the wall as its
+        // average share, unlit by panes, so it cannot sparkle. The sun glint
+        // is the mirrored stand-in (gSpecMirror) and only for a low sun.
+        gSpecK = mix(0.12 * step(0.5, vStyle.y), fz.x, sharp) * facadeOn * step(0.15, condition);
+        gSpecMirror = 1.0 - smoothstep(0.3, 0.5, uSunDir.y);
+        gSpecRough = 0.24;
+        gSpecF0 = 0.04;
+        vec2 pane = gPane.xy * 3.0 + gPane.zw + seed * 17.0 + (side ? 41.0 : 0.0) + (N.z + N.x < 0.0 ? 23.0 : 0.0);
+        gSpecTilt = (vec2(hash12(pane), hash12(pane + 5.3)) - 0.5) * 0.12 * sharp;
+      #endif
       fz.xyz *= facadeOn * sharp;
       shutter *= facadeOn * sharp;
       halo *= facadeOn;
@@ -400,6 +426,14 @@ const FRAGMENT_COLOR = /* glsl */ `
           mGradL += mFade * (vec3(0.0, dHdcy / course, 0.0) + vec3(dHdjx / (course * 1.1)) * vec3(1.0, 0.0, 1.0));
         }
       #endif
+      #ifdef SPECULAR
+        // Wet roofs: slate glossiest, then tile, then shingle; the course
+        // lines and joints stay matte (faded by roofSharp, so the gloss
+        // turns to its average with them).
+        gSpecK = smoothstep(0.1, 0.6, uWet) * (rk < 1.5 ? 0.7 : rk < 2.5 ? 1.0 : 0.5) * (1.0 - 0.8 * max(line, joint) * roofSharp)
+          * (1.0 - smoothstep(250.0, 400.0, length(vWorldP - cameraPosition)));
+        gSpecRough = rk < 1.5 ? 0.32 : rk < 2.5 ? 0.2 : 0.42;
+      #endif
       // Ridge tiles.
       col = mix(col, col * 0.7, smoothstep(0.16, 0.12, ridge) * step(0.0, ridge));
     } else {
@@ -450,6 +484,9 @@ const FRAGMENT_COLOR = /* glsl */ `
   float snow = smoothstep(0.25, 0.8, uSnow) * smoothstep(0.35, 0.7, vUpW);
   if (part > 6.5 && part < 7.5) snow *= 0.8;
   col = mix(col, vec3(0.90, 0.92, 0.95), snow * (0.85 + 0.15 * vnoise(vLocal.xz * 2.0)));
+  #ifdef SPECULAR
+    gSpecK *= (1.0 - snow) * step(uOverlay, 0.5);
+  #endif
 
   // Baked ambient occlusion from the kit.
   col *= vPartAO.y;
@@ -484,6 +521,9 @@ const FRAGMENT_NORMAL = /* glsl */ `
   #ifdef MICRO_DETAIL
     if (mGradL != vec3(0.0)) normal = microPerturb(normal, mPdx, mPdy, vec2(dot(mGradL, mLdx), dot(mGradL, mLdy)), faceDirection);
   #endif
+  #ifdef SPECULAR
+${SPEC_NORMAL}
+  #endif
 `;
 
 /** Uniforms shared by every kit material variant. */
@@ -513,9 +553,12 @@ export function createKitMaterials(grade, { variant = '', shared } = {}) {
     vertexNormal: VERTEX_NORMAL,
     vertexBegin: VERTEX_OFFSET,
     vertexEnd: VERTEX_END,
-    fragmentHead: FRAGMENT_HEAD + PALETTE_GLSL.replace('uniform float uYearT;', '') + CROP_VARYINGS + 'float gEmissive = 0.0;\n' + `#ifdef MICRO_DETAIL\n${MICRO_ARB}\n#endif\n`,
+    fragmentHead: FRAGMENT_HEAD + PALETTE_GLSL.replace('uniform float uYearT;', '') + CROP_VARYINGS + 'float gEmissive = 0.0;\n' + `#ifdef MICRO_DETAIL\n${MICRO_ARB}\n#endif\n`
+      + `#ifdef SPECULAR\nuniform vec3 uSkyZenith;\n${SPEC_HEAD}\n#endif\n`,
     fragmentColor: FRAGMENT_COLOR,
     fragmentNormal: FRAGMENT_NORMAL,
+    fragmentPars: `#ifdef SPECULAR\n${SPEC_PARS}\n#endif\n`,
+    fragmentLights: `#ifdef SPECULAR\n${SPEC_END}\n#endif\n`,
     fragmentEmissive: /* glsl */ `
       // Lit windows glow warm at night; a dim glow at dusk.
       float nightW = smoothstep(0.25, 0.7, uNight);
@@ -538,15 +581,18 @@ export function createKitMaterials(grade, { variant = '', shared } = {}) {
 }
 
 /**
- * Micro-detail relief on roof courses (High only; docs/design/micro-detail.md).
- * Off compiles exactly the shader the kit had before.
+ * High-only detail (docs/design/micro-detail.md): relief on roof courses
+ * (micro) and specular on glass and wet roofs (specular). Off compiles
+ * exactly the shader the kit had before.
  */
-export function setKitMicroDetail(material, on) {
+export function setKitDetail(material, { micro = false, specular = false } = {}) {
   material.defines ??= {};
-  if (on === Boolean(material.defines.MICRO_DETAIL)) return;
-  if (on) material.defines.MICRO_DETAIL = 1;
+  if (micro === Boolean(material.defines.MICRO_DETAIL) && specular === Boolean(material.defines.SPECULAR)) return;
+  if (micro) material.defines.MICRO_DETAIL = 1;
   else delete material.defines.MICRO_DETAIL;
-  const key = on ? `${material.userData.kitKey}:micro` : material.userData.kitKey;
+  if (specular) material.defines.SPECULAR = 1;
+  else delete material.defines.SPECULAR;
+  const key = material.userData.kitKey + (micro ? ':micro' : '') + (specular ? ':spec' : '');
   material.customProgramCacheKey = () => key;
   material.needsUpdate = true;
 }

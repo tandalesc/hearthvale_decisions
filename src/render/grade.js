@@ -158,6 +158,10 @@ export function createGrade() {
     uWet: { value: 0 },
     uYearT: { value: 0 },
     uYear: { value: 0 }, // whole years since the founding (crop rotations)
+    // Valley mist in the shared fog (atmosphere.js), driven by mist.js.
+    uMistAmt: { value: 0 },
+    uMistDrift: { value: new THREE.Vector2() },
+    uMistColor: { value: new THREE.Color(0.7, 0.72, 0.72) },
     uOverlay: { value: 0 }, // 0 none, 1 value, 2 roads, 3 health
     uWeatherDetail: { value: 0 }, // set from the tier's `weather` flag (index.js)
   };

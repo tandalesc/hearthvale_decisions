@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import * as T from '../terrain.js';
-import { patchMaterial, NOISE, LAYER_REFLECT, GRADE_HEAD, MICRO_HEAD, MICRO_NORMAL, hashId } from './shaderlib.js';
+import { patchMaterial, NOISE, LAYER_REFLECT, GRADE_HEAD, MICRO_HEAD, MICRO_NORMAL, SPEC_HEAD, SPEC_PARS, SPEC_NORMAL, SPEC_END, hashId } from './shaderlib.js';
 import { ROAD_GLSL } from './roads.js';
 import { GROUND_GLSL, GROUND_ORIGIN, GROUND_LIMIT, shoreCharacter } from './ground.js';
 import './atmosphere.js';
@@ -218,6 +218,10 @@ const SHADE_FRAGMENT = /* glsl */ `
     col = road.rgb;
     roadA = road.a;
   #endif
+  #ifdef SPECULAR
+    // Wet sheen only in the rain, faded out with distance.
+    gSpecK *= smoothstep(0.1, 0.6, uWet) * (1.0 - smoothstep(250.0, 400.0, length(vWorldP - cameraPosition)));
+  #endif
   // Wet weather darkens roads more than grass.
   // Wet ground darkens; trodden roads darken most and read as sheened mud.
   col *= 1.0 - uWet * (0.12 + 0.16 * roadA);
@@ -229,7 +233,15 @@ const SHADE_FRAGMENT = /* glsl */ `
       float pk = smoothstep(0.66 - 0.12 * uWet, 0.74 - 0.1 * uWet, pud) * max(roadA, 0.18 * (1.0 - rock)) * smoothstep(0.85, 0.97, vUp);
       pk *= smoothstep(0.15, 0.6, uWet) * (1.0 - smoothstep(0.3, 0.7, uSnow));
       vec3 skyRefl = mix(uSkyHorizon, uSkyZenith, 0.35) * (1.0 - 0.5 * uNight);
-      col = mix(col, col * 0.45 + skyRefl * 0.32, pk * 0.8);
+      #ifdef SPECULAR
+        // Standing water: a smooth mirror (the specular term reflects the
+        // sky and the sun), over dark wet ground.
+        col = mix(col, col * 0.45 + skyRefl * 0.12, pk * 0.8);
+        gSpecK = mix(gSpecK, 1.0, pk);
+        gSpecRough = mix(gSpecRough, 0.06, pk);
+      #else
+        col = mix(col, col * 0.45 + skyRefl * 0.32, pk * 0.8);
+      #endif
     }
   #endif
   // Valley snow settles on flat ground; trodden roads keep a darker slush.
@@ -242,6 +254,9 @@ const SHADE_FRAGMENT = /* glsl */ `
   float cap = smoothstep(snowline - 5.0, snowline + 5.0, vWorldP.y + (m - 0.5) * 12.0);
   snow = max(snow, cap * smoothstep(0.25, 0.55, vUp) * (1.0 - 0.5 * rock));
   col = mix(col, vec3(0.90, 0.92, 0.94), snow * (0.85 + 0.15 * m));
+  #ifdef SPECULAR
+    gSpecK *= (1.0 - snow) * step(uOverlay, 0.5);
+  #endif
   #ifdef CLOUD_SHADOW
     float cs = vnoise(vWorldP.xz * 0.011 + vec2(uTime * 0.006, 0.0));
     col *= 1.0 - 0.13 * smoothstep(0.5, 0.78, cs) * (1.0 - uNight);
@@ -331,9 +346,12 @@ function makeMaterial(grade, roads, variant) {
         : variant === 'ring' ? 'vShore = aShore.x; vBeach = aShore.y;'
           : 'vShore = abs(aRiverU) - uWaterHalf; vBeach = 0.0;'}
     `,
-    fragmentHead: 'uniform float uWaterHalf;\nuniform float uRiverEnd;\nuniform float uFloodplain;\n' + (strip ? 'varying vec2 vBankS;\n' : '') + MICRO_HEAD + SHADE_GLSL,
+    fragmentHead: 'uniform float uWaterHalf;\nuniform float uRiverEnd;\nuniform float uFloodplain;\n' + (strip ? 'varying vec2 vBankS;\n' : '') + MICRO_HEAD
+      + `#ifdef SPECULAR\n${SPEC_HEAD}\n#endif\n` + SHADE_GLSL,
     fragmentColor: SHADE_FRAGMENT,
-    fragmentNormal: `#ifdef MICRO_DETAIL\n${MICRO_NORMAL}\n#endif\n`,
+    fragmentNormal: `#ifdef MICRO_DETAIL\n${MICRO_NORMAL}\n#endif\n#ifdef SPECULAR\n${SPEC_NORMAL}\n#endif\n`,
+    fragmentPars: `#ifdef SPECULAR\n${SPEC_PARS}\n#endif\n`,
+    fragmentLights: `#ifdef SPECULAR\n${SPEC_END}\n#endif\n`,
   });
   useHaze(material, grade);
   material.userData.variant = variant;
@@ -632,16 +650,24 @@ export function createTerrain({ scene, grade, roads, quality }) {
 
   function applyQuality(q) {
     const cloud = q.cloudShadow ? 1 : 0;
-    // Stone relief on the paving (micro-detail); the far ring draws no roads.
+    // Stone relief on the paving (micro-detail) and the wet sheen
+    // (specular); the far ring draws no roads.
     const micro = q.microDetail ? 1 : 0;
+    const spec = q.specular ? 1 : 0;
     for (const m of materials) {
-      const wantMicro = m.userData.variant === 'ring' ? 0 : micro;
-      if (cloud === (m.defines.CLOUD_SHADOW ? 1 : 0) && wantMicro === (m.defines.MICRO_DETAIL ? 1 : 0)) continue;
+      const ring = m.userData.variant === 'ring';
+      const wantMicro = ring ? 0 : micro;
+      const wantSpec = ring ? 0 : spec;
+      if (cloud === (m.defines.CLOUD_SHADOW ? 1 : 0) && wantMicro === (m.defines.MICRO_DETAIL ? 1 : 0)
+        && wantSpec === (m.defines.SPECULAR ? 1 : 0)) continue;
       if (cloud) m.defines.CLOUD_SHADOW = 1;
       else delete m.defines.CLOUD_SHADOW;
       if (wantMicro) m.defines.MICRO_DETAIL = 1;
       else delete m.defines.MICRO_DETAIL;
-      const key = `terrain:${m.userData.variant}:${cloud}:${wantMicro}`;
+      if (wantSpec) m.defines.SPECULAR = 1;
+      else delete m.defines.SPECULAR;
+      // Off keeps the key it had before the specular term existed.
+      const key = `terrain:${m.userData.variant}:${cloud}:${wantMicro}${wantSpec ? ':spec' : ''}`;
       m.customProgramCacheKey = () => key;
       m.needsUpdate = true;
     }

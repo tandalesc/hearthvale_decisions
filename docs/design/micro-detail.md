@@ -7,8 +7,11 @@
 >
 > **Phase 2 built** (2026-10-21): lapped courses on tile, slate and shingle roofs, High
 > only. Code: the roof branch of `src/render/kit/material.js`, `MICRO_ARB` in
-> `shaderlib.js`, `setKitMicroDetail` called from `buildings.js` `applyQuality`. Results
-> in §4b.
+> `shaderlib.js`, `setKitMicroDetail` (now `setKitDetail`) called from `buildings.js`
+> `applyQuality`. Results in §4b.
+>
+> **Specular built** (2026-10-21): wet sheen on paving and roofs in rain, glints on
+> window glass, High only. Results and recommendation in §4c.
 
 **Recommendation.** Use **procedural normals from the analytic height of the patterns
 we already draw**. Each pattern function (cobbles, setts, roof courses, brick and quoin
@@ -218,7 +221,7 @@ gradient into screen space (`dH/dx = ∇H · dFdx(vLocal)`) and applies Mikkelse
 formula (`microPerturb`, three's `perturbNormalArb` with unnormalised derivatives, so the
 slope is in metres). No new attributes or varyings are needed.
 
-**Gating.** `setKitMicroDetail` adds `MICRO_DETAIL` to every kit material on High (and
+**Gating.** `setKitMicroDetail` (now `setKitDetail`) adds `MICRO_DETAIL` to every kit material on High (and
 under `&micro=1`). Without it, the preprocessed shader is exactly what it was before,
 and the program cache key is unchanged. `micro-detail-ab.js --target=kit` flips it in
 place, over a set of roof views.
@@ -268,6 +271,133 @@ inside its own spread. Whole-frame deltas scatter by ±1 ms both ways under this
 and cannot resolve it. Even the overview, where the relief is faded out, pays about
 the same: the derivatives and the normal hook run on every kit fragment. Under 0.1 ms
 is the honest bound. **Keep it.**
+
+## 4c. Specular: wet sheen and window glass (High only)
+
+> **Built** (2026-10-21), behind the `SPECULAR` define and `specular: true` on High
+> (`quality.js`). Code: `SPEC_HEAD`, `SPEC_PARS`, `SPEC_NORMAL` and `SPEC_END` in
+> `shaderlib.js`; the gloss masks in `ROAD_GLSL` (`roads.js`) and in the walls and roof
+> branches of `kit/material.js`; `setKitDetail` replaces `setKitMicroDetail`. Dev page:
+> `&spec=0|1`. A/B: `micro-detail-ab.js --feature=spec [--shots]`.
+
+**Recommendation: keep it on High.** The wet sheen is the clear win and turns
+rain from a grey filter into wet stone. The window glint works, but only as a stylised
+cheat (see below). Extend it next to iron and still water in troughs, at about the
+same cost.
+
+**How it works.** Lambert remains the diffuse model, and no material changes type. Pattern code
+sets a gloss (`gSpecK`; 0 skips the whole term), a perceptual roughness and F0 for
+what it drew. Two lobes are added on top as radiance after `lights_fragment_end`:
+
+- **Sun (or moon):** GGX D, Schlick F and Kelemen visibility (`1/4(l·h)²`), capped at 6 so a
+  sharp lobe reads as a glint, not a flare. It runs inside three's own light loop: `RE_Direct`
+  is redefined to call `RE_Direct_Lambert` and then the lobe. So it receives the same
+  shadow as the diffuse at no extra cost.
+- **Sky:** the grade's sky gradient (`uSkyHorizon` → `uSkyZenith`, hemisphere
+  ground below the horizon, greyed by `uWet`) in the reflected direction, weighted by
+  Karis's analytic environment BRDF (the 2014 mobile fit). Under overcast rain this is most
+  of the look: grazing wet paving picks up the bright sky.
+- **Specular aliasing:** the roughness is widened by the variance of the shading
+  normal over the pixel (Kaplanyan and Hoffman 2016: `α² += min(2σ², 0.18)`, from
+  `dFdx/dFdy(normal)` after `MICRO_NORMAL`). This tames the relief's chamfers and roof
+  course steps. The gloss masks are band-limited the same way as the relief: past a few
+  pixels per stone, slab or course, the mask turns into its average. The term fades out
+  between 250 and 400 m (fog covers the rest).
+
+**Surfaces.**
+
+| Surface | Gloss / roughness | Mask |
+|---|---|---|
+| Cobbles, setts (road, alleys) | tops 1.0 / 0.22 (setts 0.16); joints 0.3 / 0.6 | `cobbles()` at the same scale; average past 4–10 cm per pixel |
+| Flagstone footways | slabs 0.85 / 0.22; joints 0.3 / 0.6 | `flagstones()`; average sooner (thin joints) |
+| Kerbs | 0.8–0.85 / 0.25–0.28 | the kerb bands |
+| Alley gutter | 1.0 / 0.1 (running water) | the gutter mask |
+| Trodden earth, tracks, gravel | 0.3–0.35 / 0.5–0.55 (dull mud sheen) | tier |
+| Puddles | 1.0 / 0.06; the fake sky in their albedo drops from 0.32 to 0.12 and the real reflection takes over | existing puddle mask |
+| Slate / tile / shingle roofs | 1.0 / 0.2, 0.7 / 0.32, 0.5 / 0.42; course lines and joints matte | `line`, `joint` × `roofSharp` |
+| Window glass | F0 0.04, roughness 0.24, in any weather | `facade()` glass; the average glass share once windows blur |
+
+The wet sheen ramps in with `smoothstep(0.1, 0.6, uWet)` and is killed by snow and by
+overlays. Grass, the far ring and water (`water.js`, untouched) get none.
+
+**Window glint: physics says no, so it's a cheat.** The camera is always above
+the windows, looking down (11–80°). A vertical pane seen from above mirrors the ground
+and never the sun: a true glint needs the eye below the pane. The first prototype was
+physically correct and showed nothing, which matched this. The shipped version mirrors
+the sun's elevation in the horizon for glass only (`gSpecMirror`), as if each pane leant out a
+little. Then a pane flashes when the camera's elevation matches the sun's and the facade
+bisects their bearings. It fades out once the sun is above about 20–30°
+(`uSunDir.y` 0.3–0.5), so it belongs to mornings and evenings. Each real pane, found
+from `facade()`'s window column, storey and its side of each glazing bar (`gPane`), leans
+±3.4° its own way (crown glass). So a few panes catch the sun and their neighbours don't. A
+first version hashed a fixed grid instead, and its glints cut across the glazing bars; this one
+follows the bars. The sky term gives glass a tint that changes with the view angle (mostly ground
+from above, the horizon at grazing angles).
+
+**Shader errors: none** on Low, Medium and High (`fidelity-shots.js --query=…` per
+tier, and every A/B run). Low and Medium compile no specular code: every addition sits under
+`#ifdef SPECULAR`, and without it the material keeps its old program cache key
+(`terrain:…` and `kit:…` gain `:spec` only when on). Whether the preprocessed sources
+are byte-identical was not checked. `npm test` was not completed for this change. One
+run that was stopped early showed a single assertion failure, which was not looked into.
+
+**Look.** Left is off, right is on, all High, from `micro-detail-ab.js --shots`.
+
+Wet setts at the bridge (`rain-bridge`, 22 m): stone tops catch the sky, joints stay dark.
+
+![wet setts, off (left) and on (right)](../media/specular-rain-setts.jpg)
+
+Cobbled square in rain (`rain-street`, 25 m):
+
+![wet cobbles, off and on](../media/specular-rain-cobbles.jpg)
+
+Wet slate (`rain-roofs`, 30 m):
+
+![wet slate, off and on](../media/specular-rain-roofs.jpg)
+
+Glass at golden hour (`evening-glass`, 45 m, `az=145`): single panes catch the low sun.
+
+![window glints, off and on](../media/specular-glass-evening.jpg)
+
+At the default range in rain (`town-rain`, 75 m) it is subtle: roofs and lanes lift a
+little toward the sky colour.
+
+![town in rain, off and on](../media/specular-town-rain.jpg)
+
+**Cost.** `micro-detail-ab.js --feature=spec` (8 blocks; terrain and buildings flipped
+together), M5 Pro, DPR 1.25. The machine was very heavily loaded by other sessions (load
+average 26–44), even more than for §4 and §4b. "Alone" draws only terrain and buildings, with
+no post pass: an upper bound.
+
+| view (High) | terrain + buildings alone, off → on | Δ median (min … max) | whole frame Δ median |
+|---|---:|---:|---:|
+| rain-street (25 m) | 2.41 → 2.53 ms | +0.12 (−0.40 … +0.48) | +0.13 |
+| rain-bridge (22 m) | 2.68 → 2.84 ms | +0.15 (−0.69 … +0.20) | +0.54 |
+| rain-roofs (30 m) | 1.55 → 1.65 ms | +0.09 (−0.12 … +0.11) | +0.90 |
+| rain-dawn (30 m) | 3.39 → 3.67 ms | +0.26 (−0.76 … +0.55) | +0.25 |
+| rain, paving fills the screen (16 m) | 2.94 → 3.17 ms | +0.19 (−0.71 … +0.54) | +0.08 |
+| dawn-glass (40 m, dry) | 2.20 → 2.31 ms | +0.13 (−0.52 … +0.18) | +0.57 |
+| dawn-glass-x (40 m, dry) | 6.41 → 6.96 ms | +0.51 (−0.70 … +1.46) | +0.17 |
+| evening-glass (45 m, dry) | 3.07 → 3.14 ms | +0.14 (−0.93 … +0.55) | +0.80 |
+| town-rain (75 m) | 4.00 → 4.10 ms | +0.15 (−0.58 … +1.24) | +0.21 |
+| city-autumn (overview, dry) | 4.93 → 5.49 ms | +0.49 (−0.10 … +0.89) | +0.61 |
+
+**Plainly: about +0.1 to +0.25 ms of GPU per frame for terrain and buildings together,
+at most about +0.5 ms** in the two views whose spread is widest. That is two to five times
+the relief's cost (§4, §4b), because the gloss masks, the normal derivatives and the sky
+term run on every paved and building fragment, even when the sun lobe is skipped.
+Whole-frame deltas scatter by ±1–2 ms under this load and cannot resolve it.
+`fidelity-shots.js --noshot`, base (`9cdcef8`) against this branch, alternating, three runs each:
+the sum of median GPU ms over the eight views went from 44.8 to 45.5, within the noise.
+Measured on one desktop GPU only; nothing was measured on a phone.
+
+**Verdict: keep on High; do not move to Medium without measuring on a phone.** A few
+tenths of a millisecond on desktop High buys the best rain look the game has had, and a
+morning and evening glint in the glass. Cheaper options, if it ever needs to be: skip the sky
+term when `gSpecK` is small, and gate the terrain's derivatives on `uWet`.
+**Extend:** iron (lamp posts, the iron bridge) as a dry glossy dark metal
+(F0 ≈ 0.5, roughness 0.35), and still water in troughs and water butts (roughness 0.05).
+Both are one gloss assignment in their own shaders plus the same four chunks.
 
 ## 5. Rollout plan
 

@@ -13,19 +13,19 @@ const routineContext={slice:'district',label:'in the west district 0 0',group:40
 const routine=(id,extra={})=>({kind:'routine',id,context:routineContext,...extra});
 const group=(questions,state=town)=>({state,questions});
 const uniform={work:.25,rest:.25,shop:.25,leisure:.25};
-const config={key:'unit-test-secret',endpoint:'http://rrh-llm-1:4000/v1/decisions'};
+const config={key:'unit-test-secret',endpoint:'http://gpu-box:4000/v1/decisions'};
 const snap={era:'town',season:'spring',archetype:'mill',food:'ok',coin:'ok',wellbeing:'fair',jobs:'balanced',homes:'scarce',health:'fair',unrest:'calm',faith:'mid',river:'busy',taxStep:2,rules:'tithe 2',recent:'flood',bodies:'moot'};
 
 test('server configuration loads local.env; failed status contains no secret',async()=>{
  const root=await mkdtemp(join(tmpdir(),'hearthvale-config-'));
- try{await writeFile(join(root,'local.env'),'API_KEY=unit-test-secret\n');const config=await loadLocalConfig(root,{});assert.equal(config.key,'unit-test-secret');assert.equal(config.endpoint,'http://rrh-llm-1:4000/v1/decisions');const status=await checkConnection(config,async()=>{throw new Error('unit-test-secret');});assert.equal(status.state,'service-unavailable');assert.ok(!JSON.stringify(status).includes(config.key));}finally{await rm(root,{recursive:true,force:true});}
+ try{await writeFile(join(root,'local.env'),'API_KEY=unit-test-secret\n');const config=await loadLocalConfig(root,{});assert.equal(config.key,'unit-test-secret');assert.equal(config.endpoint,'http://127.0.0.1:4000/v1/decisions');assert.deepEqual(config.models,[]);const status=await checkConnection(config,async()=>{throw new Error('unit-test-secret');});assert.equal(status.state,'service-unavailable');assert.ok(!JSON.stringify(status).includes(config.key));}finally{await rm(root,{recursive:true,force:true});}
 });
-test('configuration permits the supplied local hostname, rejects arbitrary external endpoints',async()=>{
+test('configuration permits LAN names and loopback, rejects public names and IP literals',async()=>{
  const root=await mkdtemp(join(tmpdir(),'hearthvale-config-'));
- try{for(const host of ['rrh-llm-1','rrh-llm-1.localdomain','127.0.0.1','localhost'])assert.ok(await loadLocalConfig(root,{RRH_DECISIONS_URL:`http://${host}:4000/v1/decisions`}));for(const endpoint of ['https://example.com/v1/decisions','http://unknown-host:4000/v1/decisions','http://127.0.0.1:4000/other','http://secret@localhost:4000/v1/decisions','http://localhost:4000/v1/decisions?key=secret'])await assert.rejects(()=>loadLocalConfig(root,{RRH_DECISIONS_URL:endpoint}));}finally{await rm(root,{recursive:true,force:true});}
+ try{for(const host of ['gpu-box','gpu-box.localdomain','gpu-box.lan','127.0.0.1','localhost'])assert.ok(await loadLocalConfig(root,{DECISIONS_URL:`http://${host}:4000/v1/decisions`}));for(const endpoint of ['https://example.com/v1/decisions','http://example.com:4000/v1/decisions','http://203.0.113.7:4000/v1/decisions','http://[2001:db8::1]:4000/v1/decisions','http://127.0.0.1:4000/other','http://secret@localhost:4000/v1/decisions','http://localhost:4000/v1/decisions?key=secret'])await assert.rejects(()=>loadLocalConfig(root,{DECISIONS_URL:endpoint}));}finally{await rm(root,{recursive:true,force:true});}
 });
 test('status authenticates via the observed header without returning it',async()=>{
- let options;const result=await checkConnection(config,async(url,o)=>{assert.equal(String(url),'http://rrh-llm-1:4000/v1/models');options=o;return new Response('{}');});assert.equal(options.headers['x-litellm-api-key'],'unit-test-secret');assert.equal(result.state,'ready');assert.equal(result.modelConnected,false);assert.ok(!JSON.stringify(result).includes('unit-test-secret'));const failed=await checkConnection({key:'bad',endpoint:config.endpoint},async()=>new Response('{}',{status:401}));assert.equal(failed.state,'authentication-failed');
+ let options;const result=await checkConnection(config,async(url,o)=>{assert.equal(String(url),'http://gpu-box:4000/v1/models');options=o;return new Response('{}');});assert.equal(options.headers['x-litellm-api-key'],'unit-test-secret');assert.equal(result.state,'ready');assert.equal(result.modelConnected,false);assert.ok(!JSON.stringify(result).includes('unit-test-secret'));const failed=await checkConnection({key:'bad',endpoint:config.endpoint},async()=>new Response('{}',{status:401}));assert.equal(failed.state,'authentication-failed');
 });
 
 test('decision kinds register routine plus the simulation kinds with state schemas and sharing metadata',()=>{
@@ -79,13 +79,13 @@ test('one state becomes one /v1/decisions call; several states one /v1/decisions
  const single=buildDecisionPayload(one);assert.deepEqual(single.state,town);assert.deepEqual(Object.keys(single.questions),['routine_0','routine_1']);for(const q of Object.values(single.questions)){assert.deepEqual(Object.keys(q),['type','instructions','criteria']);assert.equal(q.type,'choice');}assert.ok(!JSON.stringify(single).includes('player-secret-id'));
  const two=validateDecisionRequest({groups:[group([routine('a')]),group([routine('b'),routine('c')],{...town,phase:'rest'})]});
  const batch=buildDecisionPayload(two);assert.equal(batch.requests.length,2);assert.equal(batch.requests[1].state.phase,'rest');assert.deepEqual(Object.keys(batch.requests[1].questions),['routine_0','routine_1']);
- assert.equal(upstreamUrl(config,'/v1/decisions'),'http://rrh-llm-1:4000/v1/decisions');assert.equal(upstreamUrl(config,'/v1/decisions/batch'),'http://rrh-llm-1:4000/v1/decisions/batch');
+ assert.equal(upstreamUrl(config,'/v1/decisions'),'http://gpu-box:4000/v1/decisions');assert.equal(upstreamUrl(config,'/v1/decisions/batch'),'http://gpu-box:4000/v1/decisions/batch');
  for(const path of ['/v1/models','/v1/decisions/batch/x','http://evil.example/v1/decisions','/v1/decisions/../admin'])assert.throws(()=>upstreamUrl(config,path),path);
 });
 
 test('answers are normalized per kind: offered choices only, valid probability mass, confidence floor; batch results map back in order',()=>{
  const groups=validateDecisionRequest({groups:[group([routine('a'),routine('b',{allowed:['rest','leisure']}),routine('c'),routine('d'),routine('e'),routine('f')])]});
- const data={model:'ramblerun/Decision-AI',usage:{input_tokens:9},answers:{
+ const data={model:'example/Decision-AI',usage:{input_tokens:9},answers:{
   routine_0:{type:'choice',choice:'work',confidence:.98},
   routine_1:{type:'choice',choice:'rest',confidence:.6,probabilities:{rest:.6,leisure:.4}},
   routine_2:{type:'choice',choice:'shop',confidence:.3,probabilities:{work:.2,rest:.2,shop:.3,leisure:.3}},
@@ -94,7 +94,7 @@ test('answers are normalized per kind: offered choices only, valid probability m
   routine_5:{type:'choice',choice:'work',confidence:.9,probabilities:{work:.9,bribe:.1}},
   routine_9:{type:'choice',choice:'work',confidence:1}}};
  const result=parseDecisionAnswers(data,groups);
- assert.deepEqual(Object.keys(result.answers),['a','b','c']);assert.equal(result.model,'ramblerun/Decision-AI');
+ assert.deepEqual(Object.keys(result.answers),['a','b','c']);assert.equal(result.model,'example/Decision-AI');
  assert.deepEqual(result.answers.a,{kind:'routine',choice:'work',confidence:.98});
  assert.deepEqual(result.answers.b,{kind:'routine',choice:'rest',confidence:.6,probabilities:{rest:.6,leisure:.4}});
  assert.equal(result.answers.c.confidence,.3);assert.equal(result.usage,undefined);
@@ -135,9 +135,9 @@ test('score and noul kinds render in the model\'s native shape and come back as 
 
 test('decision requests authenticate server-side, refuse redirects, pick the endpoint by state count, split on 413 and reject failures for fallback',async()=>{
  const one=validateDecisionRequest({groups:[group([routine('35')])]});const calls=[];
- const answering=async(url,opts)=>{calls.push({url:String(url),body:JSON.parse(opts.body)});assert.equal(opts.method,'POST');assert.equal(opts.redirect,'error');assert.equal(opts.headers['x-litellm-api-key'],'unit-test-secret');assert.equal(opts.headers.Authorization,undefined);const body=JSON.parse(opts.body);const answer=b=>({answers:Object.fromEntries(Object.keys(b.questions).map(k=>[k,{type:'choice',choice:'rest',confidence:.85}]))});return new Response(JSON.stringify(body.requests?{model:'m',results:body.requests.map(answer)}:{model:'ramblerun/Decision-AI',...answer(body),ignored:'private'}));};
- const result=await requestDecisions(config,one,answering);assert.equal(calls[0].url,'http://rrh-llm-1:4000/v1/decisions');assert.deepEqual(calls[0].body.state,town);assert.equal(result.answers['35'].choice,'rest');assert.equal(result.ignored,undefined);assert.ok(!JSON.stringify(result).includes('unit-test-secret'));
- const two=validateDecisionRequest({groups:[group([routine('a')]),group([routine('b')],{...town,phase:'rest'})]});await requestDecisions(config,two,answering);assert.equal(calls[1].url,'http://rrh-llm-1:4000/v1/decisions/batch');assert.equal(calls[1].body.requests.length,2);
+ const answering=async(url,opts)=>{calls.push({url:String(url),body:JSON.parse(opts.body)});assert.equal(opts.method,'POST');assert.equal(opts.redirect,'error');assert.equal(opts.headers['x-litellm-api-key'],'unit-test-secret');assert.equal(opts.headers.Authorization,undefined);const body=JSON.parse(opts.body);const answer=b=>({answers:Object.fromEntries(Object.keys(b.questions).map(k=>[k,{type:'choice',choice:'rest',confidence:.85}]))});return new Response(JSON.stringify(body.requests?{model:'m',results:body.requests.map(answer)}:{model:'example/Decision-AI',...answer(body),ignored:'private'}));};
+ const result=await requestDecisions(config,one,answering);assert.equal(calls[0].url,'http://gpu-box:4000/v1/decisions');assert.deepEqual(calls[0].body.state,town);assert.equal(result.answers['35'].choice,'rest');assert.equal(result.ignored,undefined);assert.ok(!JSON.stringify(result).includes('unit-test-secret'));
+ const two=validateDecisionRequest({groups:[group([routine('a')]),group([routine('b')],{...town,phase:'rest'})]});await requestDecisions(config,two,answering);assert.equal(calls[1].url,'http://gpu-box:4000/v1/decisions/batch');assert.equal(calls[1].body.requests.length,2);
  // 413: halve by groups, then by questions, until each part fits.
  const sizes=[];const picky=async(url,opts)=>{const body=JSON.parse(opts.body);const n=body.requests?body.requests.reduce((t,r)=>t+Object.keys(r.questions).length,0):Object.keys(body.questions).length;sizes.push(n);if(n>2)return new Response('{"detail":"too large"}',{status:413});return answering(url,opts);};
  const big=validateDecisionRequest({groups:[group(Array.from({length:8},(_,i)=>routine(`p${i}`)))]});const split=await requestDecisions(config,big,picky);assert.equal(Object.keys(split.answers).length,8);assert.deepEqual([...sizes].sort((a,b)=>b-a),[8,4,4,2,2,2,2]);

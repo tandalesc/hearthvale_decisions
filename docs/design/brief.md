@@ -1,6 +1,6 @@
 # Hearthvale rework — shared brief
 
-Project: /Users/shishirtandale/Development/relayer_test_game_20261014 (git branch `evolving-city`). Browser 3D town sim, Three.js r180, Vite, plain JS modules, no framework. Current screenshots: scratchpad/shots/desktop.png and scratchpad/shots/phone.png (same folder as this brief).
+Branch `evolving-city`. Browser 3D town sim, Three.js r180, Vite, plain JS modules, no framework. Current screenshots: scratchpad/shots/desktop.png and scratchpad/shots/phone.png (same folder as this brief).
 
 ## The owner's request (paraphrased closely)
 - Game about simulating decisions. Player = "System 2" (deliberative leadership: council choices, policies). Residents/actors = "System 1" (everyday choices, made by a local decision model on our GPU server, see below).

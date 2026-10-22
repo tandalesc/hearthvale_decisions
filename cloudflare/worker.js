@@ -1,5 +1,4 @@
 // Hearthvale on Cloudflare: a sketch of the Worker. It has not been run or deployed.
-// See docs/design/cloudflare-backend.md, section 8 (setup checklist).
 //
 // Static files never reach this code (wrangler.toml: run_worker_first = ["/api/*"]).
 // It assumes step 5 of the checklist: the transport-free parts of server/system1.js and
@@ -48,7 +47,7 @@ function services(env) {
     limits: dailyLimits(env),
   });
   narrator ??= createNarrator({
-    loadConfig: async () => ({key: 'workers-ai', endpoint: 'https://workers-ai.internal/'}),
+    loadConfig: async () => ({key: 'workers-ai', endpoint: 'https://workers-ai.internal/', models: [env.NARRATOR_MODEL]}),
     fetcher: workersAiFetcher(env),
   });
   return {decisions, narrator};
