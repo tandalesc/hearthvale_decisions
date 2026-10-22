@@ -3,7 +3,7 @@
 //
 //   node scripts/distill-collect.js OUT_DIR [--seeds 40] [--years 150] [--start 1] [--workers 6] [--room 8] [--needs 2]
 //        [--answer fallback|student|teacher] [--student BUNDLE.json] [--env ROOT] [--hybrid]
-//        [--salts 1] [--salt-start 0] [--burst] [--player] [--teacher-kinds KIND,KIND]
+//        [--salts 1] [--salt-start 0] [--burst] [--player] [--teacher-kinds KIND,KIND] [--no-record]
 //
 // Each seed grows a town with a stand-in council (styles and water archetypes
 // rotate with the seed) and a recording decision bus: it validates every
@@ -44,6 +44,11 @@
 // --teacher-kinds (with --answer student --hybrid) sends those kinds to the
 // decision model even though the student knows them: a swap test of which kind
 // moves a town's outcome.
+//
+// --no-record is for benchmarks: towns are answered exactly as without it, but
+// no question or state is kept for training (no need variants either; their
+// random draws touch nothing else), so only towns.json is written, faster and
+// in far less memory.
 import {fork} from 'node:child_process';
 import {availableParallelism} from 'node:os';
 import {mkdirSync, createWriteStream, createReadStream, rmSync, readFileSync, writeFileSync} from 'node:fs';
@@ -61,7 +66,7 @@ async function runChild() {
   const {validateQuestion, validateState, stateKey} = await import('../src/decision-kinds.js');
   const {ARCHETYPES} = await import('../src/waters.js');
 
-  process.on('message', async ({seed, index, years, room, needs, dir, answer = 'fallback', student: bundleFile, env, hybrid = false, salt = 0, burst = false, player = false, teacherKinds = []}) => {
+  process.on('message', async ({seed, index, years, room, needs, dir, answer = 'fallback', student: bundleFile, env, hybrid = false, salt = 0, burst = false, player = false, teacherKinds = [], noRecord = false}) => {
     let student = null, config = null, requestDecisions = null;
     if (answer === 'student') {
       const {loadStudent} = await import('../src/decision-student.js');
@@ -101,6 +106,7 @@ async function runChild() {
     const pending = [], taught = new Map();
 
     const record = (question, cleanState, sKey, aug) => {
+      if (noRecord) return;
       const key = `${question.kind}|${sKey}|${JSON.stringify([question.context, question.allowed])}`;
       const seen = questions.get(key);
       if (seen) seen.n++;
@@ -120,7 +126,7 @@ async function runChild() {
         const sKey = stateKey(cleanState);
         record(question, cleanState, sKey, false);
         // Walkers' needs stand still without people stepping: add need variants.
-        if (kind === 'resident_routine' && question.context.energy) {
+        if (!noRecord && kind === 'resident_routine' && question.context.energy) {
           for (let k = 0; k < needs; k++) {
             const variant = {...question.context, energy: NEEDS[Math.floor(random() * 3)], fullness: NEEDS[Math.floor(random() * 3)],
               social: NEEDS[Math.floor(random() * 3)]};
@@ -275,7 +281,7 @@ async function runParent() {
   };
   const answer = text('answer', 'fallback'), student = text('student', null), env = text('env', join(fileURLToPath(import.meta.url), '..', '..'));
   const hybrid = process.argv.includes('--hybrid'), burst = process.argv.includes('--burst'), player = process.argv.includes('--player');
-  const teacherKinds = (text('teacher-kinds', '') ?? '').split(',').filter(Boolean);
+  const teacherKinds = (text('teacher-kinds', '') ?? '').split(',').filter(Boolean), noRecord = process.argv.includes('--no-record');
   if (teacherKinds.length && !(answer === 'student' && hybrid)) throw new Error('--teacher-kinds needs --answer student --hybrid');
   const salts = arg('salts', 1), saltStart = arg('salt-start', 0);
   if (answer === 'student' && !student) throw new Error('--answer student needs --student BUNDLE.json');
@@ -285,7 +291,7 @@ async function runParent() {
   const jobs = [];
   for (let k = 0; k < seeds; k++) {
     for (let salt = saltStart; salt < saltStart + salts; salt++) {
-      jobs.push({seed: 1000 + (start + k) * 7919, index: start + k, years, room, needs, dir: parts, answer, student, env, hybrid, salt, burst, player, teacherKinds});
+      jobs.push({seed: 1000 + (start + k) * 7919, index: start + k, years, room, needs, dir: parts, answer, student, env, hybrid, salt, burst, player, teacherKinds, noRecord});
     }
   }
   const results = await pool(jobs, workers);
