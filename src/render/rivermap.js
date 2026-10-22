@@ -44,6 +44,18 @@ float embanked(vec2 uz) {
 
 const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
+/**
+ * Is the river bank beside a lot a quay wall? toRiver is the side the river
+ * lies on (+1: greater x); checked along the lot's depth.
+ */
+export function quayBeside(riverXAt, half, x, z, d, toRiver, runs) {
+  if (!runs?.length) return false;
+  for (const dz of [-d / 2, 0, d / 2]) {
+    if (embankedAt(-toRiver * half, z + dz, runs) > 0.5) return true;
+  }
+  return false;
+}
+
 /** CPU mirror of EMBANK_GLSL embanked() for runs [{side: 'west'|'east', z0, z1}]. */
 export function embankedAt(u, z, runs) {
   let e = 0;

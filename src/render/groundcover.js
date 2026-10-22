@@ -182,7 +182,9 @@ const VERTEX_PLACE = /* glsl */ `
   float keep = 0.16 + 0.82 * clump;
   float marsh = max(-beach, 0.0);
   float neglect = smoothstep(-0.2, -0.6, care);
-  if (shore < 0.25 && marsh < 0.2) keep = 0.0;
+  // Nothing grows in open water: a delta's marsh reaches over its channels,
+  // but reeds stand only at their edges.
+  if (shore < -0.6 || shore < 0.25 && marsh < 0.2) keep = 0.0;
   else if (shore < 2.6 && beach < 0.5) {
     // Reeds by the water: patchy on wild banks, gone where the bank is kept.
     kind = 2.0;

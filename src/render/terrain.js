@@ -223,6 +223,8 @@ vec3 terrainAlbedo(vec3 p, float up, float e, float beach, out float rock, out f
       vec3 rip = ripples(p.xz, n, 0.0025);
       sand *= 1.0 + 0.04 * rip.x;
     #endif
+    // In a delta's marsh the creeks and river have muddy banks, not sand.
+    sand = mix(sand, ${lin('#77704f')}, smoothstep(0.0, 0.6, marsh) * 0.85);
     vec3 bank = mix(${lin('#a39a6c')}, sand, smoothstep(-0.8, 0.4, e));
     bank = mix(${lin('#7d8a6a')}, bank, smoothstep(-1.6, -1.0, e));
     c = mix(c, sand, (1.0 - smoothstep(0.2, 1.6, e)) * 0.75);
