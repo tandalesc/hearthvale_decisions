@@ -3,7 +3,7 @@
 //
 //   node scripts/distill-collect.js OUT_DIR [--seeds 40] [--years 150] [--start 1] [--workers 6] [--room 8] [--needs 2]
 //        [--answer fallback|student|teacher] [--student BUNDLE.json] [--env ROOT] [--hybrid]
-//        [--salts 1] [--salt-start 0] [--burst]
+//        [--salts 1] [--salt-start 0] [--burst] [--player]
 //
 // Each seed grows a town with a stand-in council (styles and water archetypes
 // rotate with the seed) and a recording decision bus: it validates every
@@ -34,6 +34,12 @@
 // different luck. The spread across salts is the noise floor a student has to
 // stay within. --burst steps one tick at a time and records, per tick, how many
 // questions the student answered and how long that took.
+//
+// --player replaces the stand-in council, which rules every card the moment it
+// surfaces, with a simulated player (src/sim/fixtures.js simulatedPlayer): it opens
+// the docket some months, takes up only some cards and lets the rest lapse, and
+// sometimes picks at random, with its engagement drawn per run from the seed and
+// salt. The style still sets its tastes. Its choices use their own random stream.
 import {fork} from 'node:child_process';
 import {availableParallelism} from 'node:os';
 import {mkdirSync, createWriteStream, createReadStream, rmSync, readFileSync, writeFileSync} from 'node:fs';
@@ -46,12 +52,12 @@ const NEEDS = ['low', 'ok', 'high'];
 
 async function runChild() {
   const {createState, stepTick} = await import('../src/sim/index.js');
-  const {standInCouncil} = await import('../src/sim/fixtures.js');
+  const {standInCouncil, simulatedPlayer} = await import('../src/sim/fixtures.js');
   const {fallbackFor} = await import('../src/sim/decisions/effects.js');
   const {validateQuestion, validateState, stateKey} = await import('../src/decision-kinds.js');
   const {ARCHETYPES} = await import('../src/waters.js');
 
-  process.on('message', async ({seed, index, years, room, needs, dir, answer = 'fallback', student: bundleFile, env, hybrid = false, salt = 0, burst = false}) => {
+  process.on('message', async ({seed, index, years, room, needs, dir, answer = 'fallback', student: bundleFile, env, hybrid = false, salt = 0, burst = false, player = false}) => {
     let student = null, config = null, requestDecisions = null;
     if (answer === 'student') {
       const {loadStudent} = await import('../src/decision-student.js');
@@ -72,7 +78,7 @@ async function runChild() {
       h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
       state.rng.main = ((h ^ (h >>> 13)) >>> 0) || 1;
     }
-    const council = standInCouncil({seed, ...STYLES[style]});
+    const council = player ? simulatedPlayer({...STYLES[style], seed: (Math.imul(seed, 31) + salt) >>> 0}) : standInCouncil({seed, ...STYLES[style]});
     // --burst: student answers and their time within the current tick.
     const tickLoad = {n: 0, ms: 0};
     const questions = new Map(), states = new Map();
@@ -220,7 +226,7 @@ async function runChild() {
       burstStats = {ticks: ticks.length, msMean: ms.reduce((a, b) => a + b, 0) / ms.length, msP99: q(ms, 0.99), msMax: ms.at(-1),
         answersP99: q(n, 0.99), answersMax: n.at(-1), worst: [...ticks].sort((a, b) => b[3] - a[3]).slice(0, 5)};
     }
-    process.send({seed, salt, archetype, style, pop: state.indicators.pop, era: state.era, questions: questions.size, states: states.size, kinds,
+    process.send({seed, salt, archetype, style, player: council.engagement ?? null, pop: state.indicators.pop, era: state.era, questions: questions.size, states: states.size, kinds,
       seconds: Math.round((performance.now() - t0) / 1000), town, shares, burst: burstStats});
   });
 }
@@ -252,7 +258,7 @@ async function runParent() {
     return i > 0 ? process.argv[i + 1] : fallback;
   };
   const answer = text('answer', 'fallback'), student = text('student', null), env = text('env', join(fileURLToPath(import.meta.url), '..', '..'));
-  const hybrid = process.argv.includes('--hybrid'), burst = process.argv.includes('--burst');
+  const hybrid = process.argv.includes('--hybrid'), burst = process.argv.includes('--burst'), player = process.argv.includes('--player');
   const salts = arg('salts', 1), saltStart = arg('salt-start', 0);
   if (answer === 'student' && !student) throw new Error('--answer student needs --student BUNDLE.json');
   const workers = Math.max(1, arg('workers', Math.max(1, availableParallelism() - 2)));
@@ -261,7 +267,7 @@ async function runParent() {
   const jobs = [];
   for (let k = 0; k < seeds; k++) {
     for (let salt = saltStart; salt < saltStart + salts; salt++) {
-      jobs.push({seed: 1000 + (start + k) * 7919, index: start + k, years, room, needs, dir: parts, answer, student, env, hybrid, salt, burst});
+      jobs.push({seed: 1000 + (start + k) * 7919, index: start + k, years, room, needs, dir: parts, answer, student, env, hybrid, salt, burst, player});
     }
   }
   const results = await pool(jobs, workers);
@@ -287,7 +293,7 @@ async function runParent() {
   rmSync(parts, {recursive: true, force: true});
 
   writeFileSync(join(dir, 'towns.json'), JSON.stringify({answer, student, hybrid, years,
-    towns: results.map(({seed, salt, archetype, style, town, shares, burst: b, seconds}) => ({seed, salt, archetype, style, town, shares, burst: b, seconds}))}));
+    player, towns: results.map(({seed, salt, archetype, style, player: engagement, town, shares, burst: b, seconds}) => ({seed, salt, archetype, style, player: engagement, town, shares, burst: b, seconds}))}));
   for (const r of results.filter((x) => x.burst)) {
     console.log(`burst seed ${r.seed}/${r.salt}: ${r.burst.ticks} ticks with student work; per tick mean ${r.burst.msMean.toFixed(2)} ms, ` +
       `p99 ${r.burst.msP99.toFixed(2)} ms, max ${r.burst.msMax.toFixed(1)} ms; answers per tick p99 ${r.burst.answersP99}, max ${r.burst.answersMax}`);

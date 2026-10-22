@@ -107,6 +107,7 @@ export function standInCouncil(profile) {
   let seed = profile.seed >>> 0;
   const rand = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
   const seen = new Set();
+  const choose = chooser(profile, rand);
   return (state) => {
     // Budgets: the season's asks, trimmed alike to the town's room (all approved if they fit).
     if (state.docket.some((c) => c.kind === 'budget')) trimAllToFit(state);
@@ -114,22 +115,70 @@ export function standInCouncil(profile) {
       // Only cards a player could see: queued cards wait for the next session.
       if (seen.has(card.id) || ('surfacedMonth' in card && card.surfacedMonth == null)) continue;
       seen.add(card.id);
-      const options = card.options ?? [];
-      const budget = profile.spendShare ?? 0.3;   // the most of the treasury one card may take
-      const affordable = (o) => profile.reckless || (o.cost ?? card.cost ?? 0) <= budget * state.treasury;
-      const later = options.filter((o) => /not_now|wait|later|hold|quiet/.test(o.key));
-      const no = [...later, ...[...options].reverse()];
-      const taste = profile.prefers ? tasteFor(profile, options) : null;
-      let order;
-      if (taste && taste.best.score > 0.2) order = [taste.best.option, ...no];
-      else if (taste && taste.best.score < -0.2) order = no;
-      else {
-        const forming = String(card.templateId ?? '').startsWith('form:');
-        const yes = rand() < (forming ? profile.acceptBodies : profile.accept) && (state.treasury > 0 || profile.reckless);
-        order = yes ? options.filter(affordable) : no;
-      }
-      for (const o of order) if ((o === order[0] || affordable(o) || no.includes(o)) && rule(state, card.id, o.key)?.ok) break;
+      choose(state, card);
     }
+  };
+}
+
+// A simulated player, for runs that should look like play rather than a perfect
+// council. It opens the docket in sessions (some months, not every month), takes up
+// only some of the cards it sees and lets the rest lapse at their deadline, as an
+// absent player's would, rules on the ones it takes at its next session, and now and
+// then picks an option at random. Otherwise it chooses like standInCouncil with the
+// same profile. Engagement is drawn per player unless given: attend (share of cards
+// taken up), session (chance of opening the docket in a month), slip (chance of a
+// random pick). It keeps its own random stream, so who answers the town's questions
+// does not change how the player behaves, only what it sees.
+export function simulatedPlayer(profile) {
+  let seed = ((profile.seed >>> 0) ^ 0x9e3779b9) >>> 0 || 1;
+  const rand = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+  const attend = profile.attend ?? 0.5 + 0.45 * rand();
+  const session = profile.session ?? 0.35 + 0.5 * rand();
+  const slip = profile.slip ?? 0.05 + 0.15 * rand();
+  const choose = chooser(profile, rand);
+  const taken = new Map();
+  let lastMonth = null;
+  const play = (state) => {
+    const m = state.time.year * 12 + state.time.month;
+    if (m === lastMonth) return;
+    lastMonth = m;
+    if (rand() >= session) return;
+    for (const card of [...state.docket]) {
+      if ('surfacedMonth' in card && card.surfacedMonth == null) continue;
+      if (!taken.has(card.id)) taken.set(card.id, rand() < attend);
+      if (!taken.get(card.id)) continue;
+      // Budgets are answered together, trimmed alike to the town's room.
+      if (card.kind === 'budget') { trimAllToFit(state); continue; }
+      const options = card.options ?? [];
+      if (options.length && rand() < slip) {
+        const o = options[Math.floor(rand() * options.length)];
+        if (rule(state, card.id, o.key)?.ok) continue;
+      }
+      choose(state, card);
+    }
+  };
+  play.engagement = {attend, session, slip};
+  return play;
+}
+
+// How a council profile rules one card.
+function chooser(profile, rand) {
+  return (state, card) => {
+    const options = card.options ?? [];
+    const budget = profile.spendShare ?? 0.3;   // the most of the treasury one card may take
+    const affordable = (o) => profile.reckless || (o.cost ?? card.cost ?? 0) <= budget * state.treasury;
+    const later = options.filter((o) => /not_now|wait|later|hold|quiet/.test(o.key));
+    const no = [...later, ...[...options].reverse()];
+    const taste = profile.prefers ? tasteFor(profile, options) : null;
+    let order;
+    if (taste && taste.best.score > 0.2) order = [taste.best.option, ...no];
+    else if (taste && taste.best.score < -0.2) order = no;
+    else {
+      const forming = String(card.templateId ?? '').startsWith('form:');
+      const yes = rand() < (forming ? profile.acceptBodies : profile.accept) && (state.treasury > 0 || profile.reckless);
+      order = yes ? options.filter(affordable) : no;
+    }
+    for (const o of order) if ((o === order[0] || affordable(o) || no.includes(o)) && rule(state, card.id, o.key)?.ok) break;
   };
 }
 
