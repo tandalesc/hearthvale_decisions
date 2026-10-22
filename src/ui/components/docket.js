@@ -6,7 +6,7 @@ import {icon} from '../icons.js';
 import {collapse, enter, fold, animate, T, EASE} from '../motion.js';
 import {createCard, createNextCard} from './card.js';
 
-export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town gets on with its day.']} = {}) {
+export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town gets on with its day.'], stuckAbove = () => 0} = {}) {
   const el = h('div.docket');
   const pager = h('div.pager', {hidden: true});
   pager.innerHTML = `<button class="icon-btn prev" aria-label="Previous card">${icon('chevron-left')}</button><span class="eyebrow"></span><span class="dots"></span><button class="icon-btn next" aria-label="Next card">${icon('chevron-right')}</button>`;
@@ -86,6 +86,9 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
         else enter(node, leaving ? 140 : 0);
       } else if (fresh) enter(node, 60 + i * 30);
     });
+    // Phones: a ruled card gives way to the next, so bring that card's top
+    // into view if the reader had scrolled down to the options.
+    if (phone && leaving && current) toTop();
     // Forget nodes for cards that no longer exist.
     for (const map of [full, next]) for (const [id, node] of map) if (!ids.includes(id) && !node.isConnected) map.delete(id);
     emptyEl.hidden = cards.length > 0;
@@ -97,6 +100,13 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
       pager.querySelector('.prev').disabled = i <= 0;
       pager.querySelector('.next').disabled = i >= cards.length - 1;
     }
+  }
+
+  function toTop() {
+    const scroller = el.closest('.panel-body');
+    if (!scroller) return;
+    const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - stuckAbove() - 8;
+    if (top < scroller.scrollTop) scroller.scrollTo({top: Math.max(0, top), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
   }
 
   async function exit(node, dir) {

@@ -24,8 +24,6 @@ import {version} from '../package.json';
 const SAVE_KEY = 'hearthvale-save';
 // Town saves go to IndexedDB (gzip), one slot per town; SAVE_KEY is only the legacy localStorage key.
 const saves = createSaveStore({legacyKey: SAVE_KEY});
-const MODEL_KEY = 'hearthvale-model-enabled';
-const DECISION_KEY = 'hearthvale-decision-settings';
 // What to do after a deliberate reload (a new town, an import, the menu's New
 // town screen), so the page skips the main menu and does it.
 const BOOT_KEY = 'hearthvale-boot';
@@ -85,15 +83,12 @@ async function boot() {
     }
   }
 
-  // ---------- decisions (settings; the client lives with the town) ----------
-  let modelEnabled = store.get(MODEL_KEY) !== 'false';
-  let decisionSettings = {mode: 'auto', cap: 100};
-  try {
-    const saved = JSON.parse(store.get(DECISION_KEY));
-    if (saved?.mode === 'auto' || saved?.mode === 'manual') {
-      decisionSettings = {mode: saved.mode, cap: Number.isFinite(saved.cap) ? Math.max(1, Math.min(5000, Math.round(saved.cap))) : 100};
-    }
-  } catch { /* defaults */ }
+  // ---------- decisions (the client lives with the town) ----------
+  // The decision model is always on, with automatic pacing: students answer
+  // what they know and the service the rest. Settings older builds saved for
+  // turning it off or capping it are no longer read.
+  const modelEnabled = true;
+  const decisionSettings = {mode: 'auto', cap: 100};
 
   // ---------- the sim host ----------
   // The town runs in the sim worker unless asked not to, or the sim is the stub. A
@@ -413,18 +408,6 @@ async function boot() {
     save, exportSave, importSave, newTown, toMenu,
     decisions: {
       stats: () => host.decisions.stats(),
-      settings: () => ({...decisionSettings}),
-      configure(next) {
-        decisionSettings = {...decisionSettings, ...next};
-        host.decisions.configure(decisionSettings);
-        store.set(DECISION_KEY, JSON.stringify(decisionSettings));
-      },
-      enabled: () => modelEnabled,
-      setEnabled(on) {
-        modelEnabled = on;
-        store.set(MODEL_KEY, String(on));
-        host.decisions.setEnabled(on);
-      },
     },
   });
   if (notice) app.notices.toast(notice, 6000);

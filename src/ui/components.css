@@ -976,7 +976,7 @@ kbd { font: 500 11px var(--font-mono); padding: 2px 6px; border-radius: 5px; bor
 .sheet-peek .seg button { min-width: 44px; height: 44px; }
 .sheet-peek .seg button.speed { min-width: 46px; }
 .sheet-tabs { min-width: 0; }
-.sheet .panel-body { padding-bottom: calc(18px + var(--safe-b)); touch-action: pan-y; border-top: 1px solid var(--line); }
+.sheet .panel-body { margin-bottom: var(--sheet-cut, 0px); padding-bottom: calc(18px + var(--safe-b)); touch-action: pan-y; border-top: 1px solid var(--line); }
 @media (max-width: 359px) {
   .sheet-peek .seg button { padding: 0 2px; }
   .sheet-head { padding: 0 4px 6px; }
@@ -1330,6 +1330,9 @@ kbd { font: 500 11px var(--font-mono); padding: 2px 6px; border-radius: 5px; bor
   .dk-title h2 { font-size: var(--fs-22); }
 }
 /* In the phone sheet: no frame of its own; the sheet scrolls it, the bodies' strip stays on top. */
+/* No scroll anchoring: a ruled card's successor goes in above it, and the
+   docket scrolls to it rather than holding the folding card in place. */
+.sheet .dk { overflow-anchor: none; }
 .sheet .dk { position: static; width: auto; max-height: none; overflow: visible; border: 0; border-radius: 0; background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .sheet .dk-main { display: block; overflow: visible; }
 /* Stuck under the drawer's head: paper painted a little above it covers the

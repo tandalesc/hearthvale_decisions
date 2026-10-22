@@ -246,6 +246,7 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
     load,
     use,
     stats: () => ({...client.stats(), local: {...counters, queued: queue.length, kinds: [...byKind.keys()], invalidBy: {...invalidBy},
+      students: [...new Set(byKind.values())].map((st) => ({model: st.model, version: st.version, id: st.id})),
       studentRate: Math.round(rate.perSecond), liveShare: rate.perSecond > 0 ? Math.min(liveCfg.share, liveCfg.maxRate / rate.perSecond) : liveCfg.share}}),
     configure: (settings) => client.configure(settings),
     reset: () => client.reset(),

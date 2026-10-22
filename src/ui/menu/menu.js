@@ -25,7 +25,6 @@ import {metaFromSave} from '../../save-store.js';
 import {createValleyMap} from './valley-map.js';
 import {suggestName} from './names.js';
 
-const MODEL_KEY = 'hearthvale-model-enabled';
 
 // Valleys a player can ask for. 'seed' lets the seed decide; 'classic' is the
 // river-only valley every town had before lakes and the sea (terrain version 1).
@@ -140,7 +139,6 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
     seedText: seedCode(newSeed()),
     landscape: 'seed',
     crowd: 'usual',
-    model: store.get(MODEL_KEY) !== 'false',
     found: null,   // what the map found for this seed: {archetype, river}
   };
 
@@ -179,7 +177,7 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
     if (latest) items.push({go: 'continue', label: 'Continue', sub: `${latest.name || 'Hearthvale'}, year ${latest.year ?? 0}. ${townLine(latest)}`, cls: 'mm-continue'});
     items.push({go: 'new', label: 'New town', sub: 'Choose a valley and begin with seven families.'});
     if (towns.length) items.push({go: 'towns', label: 'Your towns', sub: `${towns.length} ${towns.length === 1 ? 'town' : 'towns'} on this device.`});
-    items.push({go: 'settings', label: 'Settings', sub: 'Sound, display, reading and the decision model.'});
+    items.push({go: 'settings', label: 'Settings', sub: 'Sound, display and reading.'});
     items.push({go: 'about', label: 'About', sub: 'What Hearthvale is, and how to play.'});
     body.innerHTML = `<nav aria-label="Main menu"><ul class="mm-list">${items.map((it, i) => `
       <li><button type="button" class="mm-item ${it.cls ?? ''}" data-go="${it.go}"${i === 0 ? ' data-autofocus' : ''}>
@@ -218,10 +216,6 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
           <div class="seg" role="radiogroup" aria-label="Townsfolk who walk">${CROWDS.map((c) => `<button type="button" role="radio" data-crowd="${c.id}" aria-checked="${c.id === crowd.id}" aria-pressed="${c.id === crowd.id}">${esc(c.label)}</button>`).join('')}</div>
           <p class="mm-hint" data-hint="crowd">${esc(crowd.hint)}</p>
         </fieldset>
-        <div class="mm-field mm-switch-field">
-          <span id="mm-model-label">Decision model<small>Townsfolk ask it about their everyday choices. Off, they follow simple local rules.</small></span>
-          <button type="button" class="switch" role="switch" data-act="model" aria-checked="${form.model}" aria-labelledby="mm-model-label"></button>
-        </div>
         <div class="mm-actions">
           <button type="button" class="btn btn-primary mm-found" data-act="found"></button>
         </div>
@@ -345,7 +339,6 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
       ${row('Theme', null, seg('theme', p.theme, [['auto', 'Auto'], ['light', 'Light'], ['night', 'Night']]))}
       ${row('Motion', 'Reduced turns off slides and camera moves.', seg('motion', p.motion, [['full', 'Full'], ['reduced', 'Reduced']]))}
       ${row('Text size', null, seg('textSize', p.textSize, [['normal', 'Normal'], ['large', 'Large']]))}
-      ${row('Decision model', 'Townsfolk ask it about their everyday choices. Off, they follow simple local rules.', `<button type="button" class="switch" role="switch" data-act="model" aria-checked="${form.model}" aria-labelledby="mm-model-set"></button>`, 'mm-model-set')}
     </section>`;
   }
 
@@ -374,8 +367,7 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
     const name = form.name.trim() || suggestName(form.landscape);
     const {version, archetype} = terrainChoice();
     const crowd = CROWDS.find((c) => c.id === form.crowd) ?? CROWDS[1];
-    store.set(MODEL_KEY, String(form.model));
-    pick({kind: 'new', name, seed: seedValue(), terrainVersion: version, archetype, individualCap: crowd.cap, model: form.model});
+    pick({kind: 'new', name, seed: seedValue(), terrainVersion: version, archetype, individualCap: crowd.cap});
   }
 
   async function exportTown(meta) {
@@ -444,12 +436,11 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
       syncNew();
       return drawValley();
     }
-    if (act === 'model' || act === 'sound') {
+    if (act === 'sound') {
       const sw = e.target.closest('[data-act]');
       const on = sw.getAttribute('aria-checked') !== 'true';
       sw.setAttribute('aria-checked', String(on));
-      if (act === 'model') { form.model = on; store.set(MODEL_KEY, String(on)); }
-      else prefs.set('muted', !on);
+      prefs.set('muted', !on);
       return;
     }
     if (act === 'found') return found();

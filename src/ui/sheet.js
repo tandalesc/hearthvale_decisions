@@ -42,7 +42,11 @@ export function createSheet({onSnap} = {}) {
 
   function snapTo(i, animated = true) {
     index = Math.max(0, Math.min(2, i));
-    apply(snaps()[index], animated);
+    const px = snaps()[index];
+    apply(px, animated);
+    // The body ends at the screen's edge, not the sheet's, so a half-open
+    // sheet scrolls all of its content. Set at a snap, not on every drag frame.
+    el.style.setProperty('--sheet-cut', `${Math.round(Math.max(0, sheetHeight() - px))}px`);
     const root = el.closest('.ui');
     if (root) root.dataset.sheet = String(index);
     onSnap?.(index, snaps()[0]);

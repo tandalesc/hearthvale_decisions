@@ -192,11 +192,7 @@ export function createApp(host) {
   });
   const settings = createSettings({
     root, prefs,
-    decisionSettings: () => host.decisions.settings(),
-    configureDecisions: (s) => host.decisions.configure(s),
     decisionStats: () => host.decisions.stats(),
-    modelEnabled: () => host.decisions.enabled(),
-    setModelEnabled: (on) => host.decisions.setEnabled(on),
     renderStats: () => safe(() => world?.stats?.(), null),
     power: () => safe(() => world?.power?.(), null),
     simMs: () => host.simMs(),

@@ -253,7 +253,15 @@ export function loadStudent(bundle) {
   // Expected KL straight from triples, for the same check.
   const expectedFromTriples = (kind, triples, options) => expectedKL(fromTriples(kind, triples, options));
 
-  return {kinds: new Set(bundle.kinds), model, answer, unknownIn, fromTriples, expectedFromTriples, hasConfidence: !!head,
+  // A short fingerprint of the weights, to tell versions apart at a glance.
+  let fp = 2166136261;
+  for (const v of Object.values(bundle.weights)) {
+    const text = v.i8 ?? v.f16 ?? v.f32 ?? '';
+    for (let i = 0; i < text.length; i += 7) fp = Math.imul(fp ^ text.charCodeAt(i), 16777619) >>> 0;
+  }
+  const fingerprint = fp.toString(16).padStart(8, '0');
+
+  return {kinds: new Set(bundle.kinds), model, version: bundle.version, id: fingerprint, answer, unknownIn, fromTriples, expectedFromTriples, hasConfidence: !!head,
     thresholds: bundle.confidence?.thresholds ?? null, quantiles: bundle.confidence?.quantiles ?? null, fixture: bundle.fixture ?? []};
 }
 

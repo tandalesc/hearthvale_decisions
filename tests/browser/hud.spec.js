@@ -339,11 +339,11 @@ test('settings: ARIA tabs, arrow keys, and the last tab is remembered', async ({
   const errors = await open(page, {fixture: 'town', stub: true});
   await page.locator('.settings-btn').click();
   const tabs = page.locator('.settings [role="tablist"] [role="tab"]');
-  await expect(tabs).toHaveCount(5);
-  await expect(tabs).toHaveText(['Game', 'Display', 'Sound', 'Accessibility', 'Decision model']);
+  await expect(tabs).toHaveCount(4);
+  await expect(tabs).toHaveText(['Game', 'Display', 'Sound', 'Accessibility']);
   // Focus lands on the selected tab; only it is in the tab order.
   await expect.poll(() => hv(page, () => document.activeElement?.dataset.tab)).toBe('game');
-  expect(await tabs.evaluateAll((els) => els.map((e) => e.tabIndex))).toEqual([0, -1, -1, -1, -1]);
+  expect(await tabs.evaluateAll((els) => els.map((e) => e.tabIndex))).toEqual([0, -1, -1, -1]);
   await expect(page.locator('#set-panel-game')).toBeVisible();
   await expect(page.locator('#set-panel-game')).toHaveAttribute('aria-labelledby', 'set-tab-game');
   await expect(page.locator('#set-tab-game')).toHaveAttribute('aria-controls', 'set-panel-game');
@@ -355,15 +355,14 @@ test('settings: ARIA tabs, arrow keys, and the last tab is remembered', async ({
   await expect(page.locator('#set-panel-display')).toBeVisible();
   await expect(page.locator('#set-panel-game')).toBeHidden();
   await page.keyboard.press('End');
-  expect(await hv(page, () => document.activeElement?.dataset.tab)).toBe('model');
+  expect(await hv(page, () => document.activeElement?.dataset.tab)).toBe('access');
   await page.keyboard.press('ArrowRight');
   expect(await hv(page, () => document.activeElement?.dataset.tab)).toBe('game');
-  await page.keyboard.press('ArrowLeft');
   await page.keyboard.press('ArrowLeft');
   expect(await hv(page, () => document.activeElement?.dataset.tab)).toBe('access');
   await expect(page.locator('[data-pref="motion"]')).toBeVisible();
   // Every setting lives on exactly one tab.
-  for (const [tab, sel] of [['game', '[data-act="save"]'], ['display', '[data-pref="quality"]'], ['display', '[data-pref="batterySaver"]'], ['display', '.perf-stats'], ['sound', '[data-range="master"]'], ['access', '[data-pref="textSize"]'], ['model', '[data-decision="mode"]']]) {
+  for (const [tab, sel] of [['game', '[data-act="save"]'], ['display', '[data-pref="quality"]'], ['display', '[data-pref="batterySaver"]'], ['display', '.perf-stats'], ['sound', '[data-range="master"]'], ['access', '[data-pref="textSize"]'], ['game', '.model-ver']]) {
     expect(await hv(page, (s) => document.querySelector(s)?.closest('[role="tabpanel"]')?.dataset.panel, sel), sel).toBe(tab);
   }
   // Closed and opened again (and after a reload), the last tab comes back.
@@ -412,7 +411,7 @@ test('phone: settings tabs scroll sideways inside the sheet without widening the
   const card = await box(page, '.settings-card');
   expect(card.right).toBeLessThanOrEqual(320.5);
   await expect(page.locator('.settings .close')).toBeInViewport();
-  await page.locator('#set-tab-model').click();
-  await expect(page.locator('#set-tab-model')).toBeInViewport();
+  await page.locator('#set-tab-access').click();
+  await expect(page.locator('#set-tab-access')).toBeInViewport();
   expect(await hv(page, () => document.documentElement.scrollWidth)).toBe(320);
 });

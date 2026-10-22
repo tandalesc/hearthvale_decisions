@@ -59,7 +59,7 @@ export function createCouncil(ctx) {
     </div>`;
   const $ = (s) => el.querySelector(s);
   // The cards' "The rules" link opens the Rule Book drawer at the card's area.
-  const docket = createDocket(ctx, {empty: ['Nothing waits here.', 'New requests come each season.']});
+  const docket = createDocket(ctx, {empty: ['Nothing waits here.', 'New requests come each season.'], stuckAbove: () => $('.dk-index').offsetHeight});
   $('.dk-cards').append(docket.el);
   const note = explainer(ctx, 'council', EXPLAINERS.council);
   if (note) $('.dk-note').append(note);

@@ -1,18 +1,10 @@
-// Settings (design-visual §8.7) in five ARIA tabs: Game (play and the
-// town's save), Display (and live performance numbers), Sound,
-// Accessibility (motion, text size, keys) and the local Decision model's
-// status and pacing. The last tab opened is remembered.
+// Settings (design-visual §8.7) in four ARIA tabs: Game (play, the town's
+// save and which decision student answers), Display (and live performance
+// numbers), Sound and Accessibility (motion, text size, keys). The last tab
+// opened is remembered.
 import {esc, h, setText} from '../dom.js';
 import {icon} from '../icons.js';
 import {num} from '../format.js';
-
-const STATUS = {
-  ready: ['ok', 'Connected', (r) => `The decision model answers at ${r.endpoint ?? 'the local service'}.`],
-  'service-unavailable': ['bad', 'Service unavailable', (r) => `Nothing answers at ${r.endpoint ?? 'the local service'}. Local rules keep the town running.`],
-  'authentication-failed': ['bad', 'Key rejected', () => 'The service rejected the key in local.env. Local rules keep the town running.'],
-  'key-missing': ['warn', 'No key', () => 'Add API_KEY to local.env, then restart npm run dev. Local rules keep the town running.'],
-  'service-error': ['bad', 'Service error', () => 'The service answered with an error. Local rules keep the town running.'],
-};
 
 function seg(name, value, options) {
   return `<div class="seg" role="radiogroup" data-pref="${name}">${options.map(([v, label]) => `<button type="button" role="radio" data-value="${v}" aria-pressed="${String(v) === String(value)}" aria-checked="${String(v) === String(value)}">${esc(label)}</button>`).join('')}</div>`;
@@ -36,7 +28,6 @@ export const TABS = [
   {id: 'display', label: 'Display'},
   {id: 'sound', label: 'Sound'},
   {id: 'access', label: 'Accessibility'},
-  {id: 'model', label: 'Decision model'},
 ];
 
 export function createSettings(ctx) {
@@ -44,14 +35,14 @@ export function createSettings(ctx) {
 
   function build() {
     const p = ctx.prefs.all();
-    const d = ctx.decisionSettings();
     el = h('div.settings', {role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'settings-title'});
     const tab = TABS.some((t) => t.id === p.settingsTab) ? p.settingsTab : TABS[0].id;
     const panels = {
       game: `
         <fieldset><legend>Play</legend>
-          ${field('Title cards', 'Full-screen cards for a new age, a new body or a disaster. They pause the town.', seg('moments', p.moments, [['fast', 'At 3× and 5×'], ['always', 'Always'], ['never', 'Never']]))}
+          ${field('Title cards', 'Full-screen cards for a new age, a new body or a disaster. They pause the town.', seg('moments', p.moments, [['fast', 'While sped up'], ['always', 'Always'], ['never', 'Never']]))}
           ${field('People who walk', 'More is livelier but heavier on this device.', `<span style="display:flex;gap:10px;align-items:center">${range('individualCap', ctx.getIndividualCap(), 300, 5000, 100, 'People who walk')}<b class="cap-val" style="font:500 13px var(--font-mono);min-width:44px;text-align:right">${num(ctx.getIndividualCap())}</b></span>`)}
+          ${field('Decision model', 'The student that answers most of the town\'s questions in this browser.', '<b class="model-ver" style="font:500 13px var(--font-mono)">–</b>')}
         </fieldset>
         <fieldset><legend>Your town</legend>
           <p style="margin:0 0 8px;font-size:var(--fs-13);color:var(--ink-2)">The town saves itself every 30 seconds on this device. Your other towns wait on the main menu. Export a copy to keep a town safe or move it.</p>
@@ -91,18 +82,6 @@ export function createSettings(ctx) {
         </fieldset>
         <fieldset><legend>Keys</legend>
           <div class="keys"><kbd>Space</kbd><span>Pause or resume</span><kbd>1</kbd><span>Normal speed</span><kbd>2</kbd><span>Three times</span><kbd>3</kbd><span>Five times</span><kbd>4</kbd><span>Ten times</span><kbd>5</kbd><span>Twenty times</span><kbd>C</kbd><span>Open or close the Council</span><kbd>R</kbd><span>Open or close the Rule Book</span><kbd>F</kbd><span>Full screen</span><kbd>H</kbd><span>Hide or show the interface</span><kbd>Esc</kbd><span>Close panels, cards and notices</span><kbd>← →</kbd><span>Move between these tabs</span></div>
-        </fieldset>`,
-      model: `
-        <fieldset><legend>Decision model</legend>
-          ${field('Use the local model', 'Townsfolk ask it about their everyday choices. Your rulings stay with you.', switchCtl('model', ctx.modelEnabled(), 'Use the local decision model'))}
-          ${field('Pacing', 'Automatic asks what the town needs, and never asks the same question twice.', `<select data-decision="mode" aria-label="Pacing"><option value="auto" ${d.mode === 'auto' ? 'selected' : ''}>Automatic</option><option value="manual" ${d.mode === 'manual' ? 'selected' : ''}>Manual ceiling</option></select>`)}
-          ${field('Most questions a second', 'Used in manual pacing. 1 to 5,000.', `<input type="number" min="1" max="5000" step="1" data-decision="cap" value="${d.cap}" aria-label="Most questions a second">`)}
-          <div class="status-box" role="status">
-            <div class="status-line"><span class="status-dot"></span><span class="status-title">Checking…</span></div>
-            <div class="status-text" style="margin-top:4px">Asking the local decision service.</div>
-            <div class="stat-grid decision-stats"></div>
-            <div class="btn-row" style="margin-top:10px"><button class="btn btn-secondary" data-act="check">${icon('refresh')}Check again</button></div>
-          </div>
         </fieldset>`,
     };
     el.innerHTML = `<div class="settings-card paper">
@@ -162,7 +141,6 @@ export function createSettings(ctx) {
         const on = sw.getAttribute('aria-checked') !== 'true';
         sw.setAttribute('aria-checked', String(on));
         if (sw.dataset.switch === 'sound') ctx.prefs.set('muted', !on);
-        else if (sw.dataset.switch === 'model') { ctx.setModelEnabled(on); refreshStatus(); }
         else ctx.prefs.set(sw.dataset.switch, on);
         return;
       }
@@ -180,7 +158,6 @@ export function createSettings(ctx) {
         const btn = e.target.closest('button');
         navigator.clipboard?.writeText(ctx.seedCode()).then(() => { btn.textContent = 'Copied'; }, () => { btn.textContent = 'Copy failed'; });
       }
-      if (act === 'check') refreshStatus();
     });
     el.addEventListener('input', (e) => {
       const r = e.target.dataset.range;
@@ -193,11 +170,6 @@ export function createSettings(ctx) {
     });
     el.addEventListener('change', (e) => {
       if (e.target.dataset.act === 'import' && e.target.files?.[0]) ctx.importSave(e.target.files[0]);
-      if (e.target.dataset.decision) {
-        const mode = el.querySelector('[data-decision="mode"]').value;
-        const cap = Math.max(1, Math.min(5000, Math.round(Number(el.querySelector('[data-decision="cap"]').value) || 100)));
-        ctx.configureDecisions({mode, cap});
-      }
     });
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.stopPropagation(); close(); }
@@ -213,46 +185,12 @@ export function createSettings(ctx) {
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
 
-  async function refreshStatus() {
-    if (!el) return;
-    const dot = el.querySelector('.status-dot');
-    setText(el.querySelector('.status-title'), 'Checking…');
-    try {
-      const res = await fetch('/api/system1/status', {cache: 'no-store', signal: AbortSignal.timeout(4500)});
-      if (!res.ok) throw new Error(String(res.status));
-      const r = await res.json();
-      const [tone, title, text] = STATUS[r.state] ?? ['warn', 'Unknown', () => 'The service gave an unexpected answer. Local rules keep the town running.'];
-      if (!el) return;
-      dot.className = `status-dot ${ctx.modelEnabled() ? tone : ''}`;
-      setText(el.querySelector('.status-title'), ctx.modelEnabled() ? `${title}${r.model ? ` · ${r.model}` : ''}` : 'Model off · local rules');
-      setText(el.querySelector('.status-text'), ctx.modelEnabled() ? text(r) : 'Townsfolk use simple local rules. Turn the model on to let them think for themselves.');
-    } catch {
-      if (!el) return;
-      dot.className = 'status-dot bad';
-      setText(el.querySelector('.status-title'), 'No answer');
-      setText(el.querySelector('.status-text'), 'The status check failed. Restart npm run dev. Local rules keep the town running.');
-    }
-  }
-
   function refreshStats() {
     if (!el) return;
-    const s = ctx.decisionStats() ?? {};
-    const rows = [
-      ['State', s.state === 'backoff' ? `retry in ${((s.backoffMs ?? 0) / 1000).toFixed(1)} s` : s.state ?? '–'],
-      ['Answered a second', fmt(s.observedRate, 1)],
-      ['Capacity a second', fmt(s.capacity, 0)],
-      ['Response time', Number.isFinite(s.latencyMs) ? `${Math.round(s.latencyMs)} ms` : '–'],
-      ['In flight', `${s.inFlight ?? 0} / ${s.concurrency ?? '–'}`],
-      ['Queued', fmt(s.queueDepth, 0)],
-      ['Batch size', fmt(s.batchSize, 0)],
-      ['Answered', fmt(s.answered, 0)],
-      ['Slice questions', fmt(s.tags?.slice?.asked ?? s.slices, 0)],
-      ['Refinements', fmt(s.tags?.refine?.asked ?? s.refinements, 0)],
-      ['Shared states', fmt(s.groupsPerRequest, 1)],
-      ['Merged repeats', fmt(s.deduped, 0)],
-      ['Failures', fmt(s.failures, 0)],
-    ];
-    el.querySelector('.decision-stats').innerHTML = rows.map(([k, v]) => `<div><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('');
+    // The decision student answering in this browser: its version and a short
+    // fingerprint of its weights.
+    const students = ctx.decisionStats()?.local?.students ?? [];
+    setText(el.querySelector('.model-ver'), students.length ? students.map((st) => `v${st.version} · ${st.id}`).join(', ') : 'None loaded');
     const w = ctx.renderStats() ?? {};
     const perf = [
       ['Frames a second', fmt(w.fps, 0)], ['Frame time', Number.isFinite(w.frameMs) ? `${w.frameMs.toFixed(1)} ms` : '–'],
@@ -267,7 +205,6 @@ export function createSettings(ctx) {
     if (el) return;
     lastFocus = document.activeElement;
     ctx.root.append(build());
-    refreshStatus();
     refreshStats();
     timer = setInterval(refreshStats, 500);
     requestAnimationFrame(() => el?.querySelector('[role="tab"][aria-selected="true"]')?.focus());
