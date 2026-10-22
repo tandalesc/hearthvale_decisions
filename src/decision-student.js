@@ -179,11 +179,23 @@ export function loadStudent(bundle) {
     const x = new Float32Array(n * d);
     x.set(qx, 0);
     x.set(opts, qn * d);
-    for (let l = 0; l < cfg.question_layers; l++) {
+    const L = cfg.question_layers, k = options.length;
+    for (let l = 0; l < L - 1; l++) {
       const p = `question.layers.${l}`;
       addInto(x, attendFlat(W, `${p}.self_attn`, lnFlat(x, n, d, W, `${p}.norm1`), n, d, null, cfg.n_heads));
       addInto(x, attendFlat(W, `${p}.multihead_attn`, lnFlat(x, n, d, W, `${p}.norm2`), n, d, mem[l], cfg.n_heads));
       addInto(x, ffnFlat(W, p, lnFlat(x, n, d, W, `${p}.norm3`), n, d));
+    }
+    // The last layer carries on only the option rows, the only ones read after it
+    // (keys and values still come from every row). Each step works row by row, so
+    // a kept row's arithmetic, and the answer, is exactly what the full pass gives.
+    if (L > 0) {
+      const p = `question.layers.${L - 1}`;
+      const h = lnFlat(x, n, d, W, `${p}.norm1`);
+      const xo = x.subarray(qn * d);
+      addInto(xo, attendFlat(W, `${p}.self_attn`, h.subarray(qn * d), k, d, projectFlat(W, `${p}.self_attn`, h, n, d), cfg.n_heads));
+      addInto(xo, attendFlat(W, `${p}.multihead_attn`, lnFlat(xo, k, d, W, `${p}.norm2`), k, d, mem[L - 1], cfg.n_heads));
+      addInto(xo, ffnFlat(W, p, lnFlat(xo, k, d, W, `${p}.norm3`), k, d));
     }
     const out = lnFlat(x.subarray(qn * d), options.length, d, W, 'out_norm');
     const ws = W['score.weight'].data, bs = W['score.bias'].data[0];
