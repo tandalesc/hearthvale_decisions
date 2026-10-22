@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { patchMaterial, hashId, NOISE } from './shaderlib.js';
 import { GROUND_GLSL } from './ground.js';
+import * as Terrain from '../terrain.js';
 import { GROUND_AO, GROUND_AO_GLSL, bakeOcclusionSteps, setGroundField, aoDayFactor, bakedWeights } from './occlusion.js';
 
 // Ground decals (design-visual §3.3, §6): what sells "sitting on the table".
@@ -27,7 +28,7 @@ float landHeight(vec2 p) {
 
 // Era fill (share of the lot the body covers), as in kit/styles.js.
 const FILL = [0.7, 0.76, 0.86, 0.94, 0.94, 0.9];
-const KIND = { PARK: 0, GARDEN: 1, YARD: 2 };
+const KIND = { PARK: 0, GARDEN: 1, YARD: 2, BEACH: 3 };
 
 // ---------------------------------------------------------------------------
 // Multiply-blended contact shadows
@@ -321,6 +322,17 @@ const COLOR_FRAG = /* glsl */ `
     vec3 flower = h < 0.66 ? vec3(0.80, 0.30, 0.42) : h < 0.77 ? vec3(0.86, 0.70, 0.18) : h < 0.88 ? vec3(0.88, 0.84, 0.80) : vec3(0.42, 0.34, 0.70);
     col = mix(col, flower, dot * (1.0 - uSnow));
     alpha = max(alpha, dot * (1.0 - smoothstep(-0.8, 0.0, d)));
+  } else if (kind > 2.5) {
+    // Beach park: sand from inside the park's water side down into the
+    // river, in the terrain's own beach colours (terrain.js), ragged where
+    // the grass takes over, damp at the waterline and gone under the water.
+    float e = groundShore(vDecalWorld);
+    float ragged = (vnoise(L * 0.45 + seed * 9.0) - 0.5) * 2.4 + (m - 0.5) * 0.8;
+    alpha = 1.0 - smoothstep(-2.6, 0.2, d + ragged);
+    alpha *= smoothstep(-1.0, 0.1, e);
+    col = mix(vec3(0.61, 0.49, 0.25), vec3(0.76, 0.66, 0.37), smoothstep(0.5, 4.0, e) * (0.6 + 0.4 * m));
+    col *= 0.95 + 0.08 * vnoise(L * 2.3 + seed * 3.0);
+    col = mix(col * vec3(0.72, 0.74, 0.78), col, smoothstep(0.0, 1.8, e));
   } else {
     // Building yard: trodden dirt, a stack of planks in one corner.
     alpha = (1.0 - smoothstep(-1.0, 0.2, d + (m - 0.5) * 1.2)) * 0.85;
@@ -456,7 +468,7 @@ export function createDecals(ctx) {
   function rebuildLots() {
     const lots = ctx.buildings.lots;
     lotSet.ensure(lots.size * 2 + 1);
-    colorSet.ensure(lots.size + 1);
+    colorSet.ensure(lots.size * 2 + 1);
     const lc = lotSet.attrs.iCenter.array, ls = lotSet.attrs.iShape.array;
     const cc = colorSet.attrs.iCenter.array, cd = colorSet.attrs.iDecal.array, ck = colorSet.attrs.iColor.array;
     let n = 0, c = 0;
@@ -480,6 +492,18 @@ export function createDecals(ctx) {
       cd[c * 4] = (s.w / 2) * grow; cd[c * 4 + 1] = (s.d / 2) * grow; cd[c * 4 + 2] = kind; cd[c * 4 + 3] = hashId(s.id, 91);
       color.toArray(ck, c * 3);
       c++;
+      // A park by the river is a beach: sand from inside its water side to
+      // the river, drawn over the lawn (same draw, later instance). It is
+      // ground like the lawn, so it shows at every distance.
+      if (kind === KIND.PARK && lot.record?.flags?.beach) {
+        const toRiver = Math.sign(Terrain.riverX(s.z) - s.x) || 1;
+        const inner = s.x + toRiver * (s.w / 2 - 2.5);
+        const water = Terrain.riverX(s.z) - toRiver * (Terrain.WATER_HALF - 1.5);
+        cc[c * 3] = (inner + water) / 2; cc[c * 3 + 1] = 0; cc[c * 3 + 2] = s.z;
+        cd[c * 4] = Math.abs(water - inner) / 2 + 1; cd[c * 4 + 1] = s.d / 2 + 2; cd[c * 4 + 2] = KIND.BEACH; cd[c * 4 + 3] = hashId(s.id, 92);
+        LAWN.toArray(ck, c * 3);
+        c++;
+      }
     }
     lotSet.commit(n);
     colorSet.commit(c);
@@ -491,8 +515,8 @@ export function createDecals(ctx) {
     for (const lot of ctx.buildings.lots.values()) {
       const r = lot.record;
       if (!r) continue;
-      const flag = ((r.built ?? 1) < 1 ? 1 : 0) | ((r.wealth ?? 0) > 0.6 ? 2 : 0);
-      h = Math.imul(h ^ (r.id * 4 + flag), 16777619);
+      const flag = ((r.built ?? 1) < 1 ? 1 : 0) | ((r.wealth ?? 0) > 0.6 ? 2 : 0) | (r.flags?.beach ? 4 : 0);
+      h = Math.imul(h ^ (r.id * 8 + flag), 16777619);
     }
     return h;
   }

@@ -29,8 +29,9 @@ import { createCattle } from './cattle.js';
 //             a notice board, wildflowers, lamps in later eras; beaches get a
 //             sandy bank, boats pulled up, towels in summer and a bathing hut.
 //
-// Three draw calls: one box batch, one blob batch (foliage turns with the
-// season) and one draped sand mesh. The box and blob batches also cast into
+// Two draw calls: one box batch and one blob batch (foliage turns with the
+// season); a beach's sand is ground, drawn by the park decal (decals.js) at
+// every distance. The box and blob batches also cast into
 // the sun's shadow map (two draws in the shadow pass). Decor stands still, so
 // the map is only asked to redraw when the layout changes (or the decor is
 // hidden or shown), not every frame. Only what lies within reach of the view
@@ -54,7 +55,7 @@ const K = {
   hedge: col('#4f7a40'), hedgeDark: col('#3d6234'), shrub: col('#5f8c4a'), shrubLight: col('#79a055'),
   weeds: col('#8a9a4a'), weedsDry: col('#a69a5a'), gravel: col('#b3a487'), board: col('#e8dcc0'),
   bin: col('#5d6a58'), binLid: col('#46503f'), litter: col('#e8e2d0'), litterDark: col('#9c8c6a'),
-  sand: col('#e3cf9f'), hut: col('#e9e1cd'), hutRoof: col('#b2563f'), lampGlass: col('#f2d9a0'),
+  hut: col('#e9e1cd'), hutRoof: col('#b2563f'), lampGlass: col('#f2d9a0'),
   thatch: col('#b89a5a'),
 };
 const FLOWERS = ['#d9574a', '#e8c04a', '#c97ab8', '#f1ead8', '#7a8fd0', '#e88a5a'].map(col);
@@ -130,20 +131,6 @@ export function createDecor(ctx) {
   blobs.setColorAt(0, K.shrub);
   group.add(blobs);
 
-  // Sand: one draped mesh for every beach in reach.
-  const sandMat = gradeLambert(grade, 'decor-sand', { vertexColors: true });
-  sandMat.transparent = true;
-  sandMat.depthWrite = false;
-  sandMat.polygonOffset = true;
-  sandMat.polygonOffsetFactor = -2;
-  sandMat.polygonOffsetUnits = -4;
-  sandMat.vertexColors = true;
-  const sand = new THREE.Mesh(new THREE.BufferGeometry(), sandMat);
-  sand.frustumCulled = false;
-  sand.receiveShadow = true;
-  sand.renderOrder = 1;
-  sand.visible = false;
-  group.add(sand);
 
   // --- Instance writers ----------------------------------------------------
   const M = new THREE.Matrix4();
@@ -707,7 +694,7 @@ export function createDecor(ctx) {
   }
 
   // --- Parks ---------------------------------------------------------------
-  function park(b, era, season, sandQuads, level) {
+  function park(b, era, season, level) {
     const id = b.id | 0;
     // A park the town stops keeping goes back to meadow and scrub.
     const neglect = Math.max(0, -level);
@@ -772,16 +759,15 @@ export function createDecor(ctx) {
       const rr = 0.45 + hashId(id * 37 + i, 77) * 0.5;
       blob(x, heightAt(x, z) + rr * 0.6, z, rr, rr * 0.8, rr, i % 2 ? K.weeds : K.shrub, 1);
     }
-    if (beach) beachDressing(b, era, season, toRiver, sandQuads);
+    if (beach) beachDressing(b, era, season, toRiver);
   }
 
-  function beachDressing(b, era, season, toRiver, sandQuads) {
+  function beachDressing(b, era, season, toRiver) {
     const id = b.id | 0;
     const hd = b.d / 2;
-    // The sand runs from the park's water edge down to the river.
+    // The sand (decals.js) runs from the park's water edge down to the river.
     const edge = b.x + toRiver * (b.w / 2);
     const water = riverX(b.z) - toRiver * waterHalf();
-    sandQuads.push({ x0: Math.min(edge - toRiver * 2.5, water), x1: Math.max(edge - toRiver * 2.5, water), z0: b.z - hd - 2, z1: b.z + hd + 2 });
     const mid = (edge + water) / 2;
     // Boats pulled up on the sand.
     for (let i = 0; i < 2; i++) {
@@ -809,38 +795,6 @@ export function createDecor(ctx) {
       box(x, (low + y + 2) / 2, z, 1.6, y + 2 - low, 1.6, K.hut);
       box(x, y + 2.15, z, 1.9, 0.3, 1.9, K.hutRoof);
     }
-  }
-
-  function buildSand(quads) {
-    const pos = [], colr = [];
-    const step = 1.5;
-    for (const q of quads) {
-      const nx = Math.max(1, Math.ceil((q.x1 - q.x0) / step)), nz = Math.max(1, Math.ceil((q.z1 - q.z0) / step));
-      const vx = (i) => q.x0 + ((q.x1 - q.x0) * i) / nx, vz = (j) => q.z0 + ((q.z1 - q.z0) * j) / nz;
-      const alpha = (x, z) => {
-        // Soft at the land edge and the ends; under the water line it fades into the shallows.
-        const ez = Math.min(z - q.z0, q.z1 - z) / 2.2;
-        const bank = bankDistance(x, z);
-        const ew = bank < 0 ? 1 + bank / 1.2 : 1;
-        return Math.max(0, Math.min(1, ez, ew)) * 0.85;
-      };
-      for (let j = 0; j < nz; j++)
-        for (let i = 0; i < nx; i++) {
-          const c = [[vx(i), vz(j)], [vx(i + 1), vz(j)], [vx(i + 1), vz(j + 1)], [vx(i), vz(j + 1)]];
-          for (const k of [0, 2, 1, 0, 3, 2]) {
-            const [x, z] = c[k];
-            pos.push(x, heightAt(x, z) + 0.04, z);
-            colr.push(K.sand.r, K.sand.g, K.sand.b, alpha(x, z));
-          }
-        }
-    }
-    sand.geometry.dispose();
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(colr, 4));
-    g.computeVertexNormals();
-    sand.geometry = g;
-    sand.visible = pos.length > 0;
   }
 
   // --- Streets -------------------------------------------------------------
@@ -1064,7 +1018,6 @@ export function createDecor(ctx) {
     const cx = centre.x, cz = centre.z;
     const lotCells = new Set();
     const r = view.roads;
-    const sandQuads = [];
     // Litter hot spots residents complain about (aesthetics.js).
     const litterSpots = [];
     for (const list of Object.values(view.aesthetics?.experiences ?? {})) {
@@ -1089,7 +1042,7 @@ export function createDecor(ctx) {
     const dry = dryDay(view);
     for (const b of near) {
       if ((b.built ?? 1) < 1) continue;
-      if (b.type === 'park') { park(b, era, season, sandQuads, view.landscape ? landAt(view, b.x, b.z) : 0.5); continue; }
+      if (b.type === 'park') { park(b, era, season, view.landscape ? landAt(view, b.x, b.z) : 0.5); continue; }
       if (!NO_GARDEN.has(b.type)) garden(b, era);
       if (yards) yard(b, era, dry, season, yardFree);
       if (SIGNED.has(b.type) && b.occupied !== false && !b.flags?.derelict && era >= 1) shopSign(b, era);
@@ -1138,7 +1091,6 @@ export function createDecor(ctx) {
     leafAttr.needsUpdate = true;
     boxes.visible = nBox > 0;
     blobs.visible = nBlob > 0;
-    buildSand(sandQuads);
     lastCentre.set(cx, 0, cz);
     // Benches, planters and the rest cast shadows: redraw the map once.
     lights?.markDirty?.();
@@ -1175,10 +1127,8 @@ export function createDecor(ctx) {
       cattle.dispose();
       boxGeo.dispose();
       blobGeo.dispose();
-      sand.geometry.dispose();
       boxMat.dispose();
       blobMat.dispose();
-      sandMat.dispose();
     },
   };
 }
