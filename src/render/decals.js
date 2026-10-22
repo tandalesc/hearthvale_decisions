@@ -289,16 +289,21 @@ const COLOR_FRAG = /* glsl */ `
   float alpha = 0.0;
   if (kind < 0.5) {
     // Park: mown lawn with a gravel cross and a ring path around the centre.
-    alpha = 1.0 - smoothstep(-0.5, 0.15, d);
+    // A wide, slightly ragged edge, so a lawn melts into the ground around it
+    // and neighbouring park lots join without seams.
+    float ragged = (vnoise(L * 0.9 + seed * 7.0) - 0.5) * 1.2;
+    alpha = 1.0 - smoothstep(-1.6, 0.6, d + ragged);
     col *= 0.92 + 0.14 * m;
     // Mowing stripes, very faint.
     col *= 1.0 + 0.035 * sign(sin(L.x * 1.4));
     float R = min(H.x, H.y) * 0.42;
     float path = min(min(abs(L.x), abs(L.y)), abs(length(L) - R));
     float onPath = 1.0 - smoothstep(0.7, 0.9, path + (m - 0.5) * 0.2);
-    // A darker clipped-hedge rim frames the lawn.
-    col *= 1.0 - 0.22 * smoothstep(-0.9, -0.4, d);
-    vec3 gravel = vec3(0.66, 0.56, 0.36) * (0.9 + 0.2 * hash12(floor(L * 5.0)));
+    // A faint darker rim where the mown lawn meets rougher grass.
+    col *= 1.0 - 0.07 * smoothstep(-1.4, -0.6, d + ragged);
+    // Paths: the roads' earthen gravel, soft noise rather than a pixel grid.
+    float grit = vnoise(L * 3.0 + seed * 5.0) * 0.6 + vnoise(L * 8.0 + 3.0) * 0.4;
+    vec3 gravel = vec3(0.50, 0.43, 0.31) * (0.92 + 0.12 * grit);
     col = mix(col, gravel, onPath);
   } else if (kind < 1.5) {
     // Cottage garden: brighter grass with dots of flowers, soft edges.
@@ -357,7 +362,7 @@ function colorMaterial(grade) {
 // ---------------------------------------------------------------------------
 // System
 
-const LAWN = new THREE.Color('#8fbb5f');
+const LAWN = new THREE.Color('#87aa5d');
 const GARDEN = new THREE.Color('#a8c972');
 const YARD = new THREE.Color('#9c8460');
 
