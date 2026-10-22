@@ -136,7 +136,10 @@ void main() {
 `;
 
 // Ambient weather: world-anchored particles in a box that wraps around the
-// camera target and scales with the zoom (side ~1.3x the camera distance),
+// camera target and scales with the zoom in steps (side ~1.3x the camera
+// distance; a continuous change would slide every particle across the
+// ground as you zoom, so the box only changes size at a step, behind a
+// quick fade),
 // so coverage is uniform wherever you look and the on-screen density stays
 // the same when zooming out. Particles fade at the box's rim, near the
 // camera and with the eased intensity, so nothing ever pops. Motion uses its
@@ -155,6 +158,7 @@ uniform float uPTime;      // particle clock: frozen while paused
 uniform float uCount;      // live particle fraction (quality)
 uniform vec4 uModes;       // rain, snow, leaves, pollen intensities 0..1
 uniform float uFireflies;
+uniform float uBoxFade;  // 0..1: dips to 0 while the box changes size
 varying vec2 vUv;
 varying float vAlpha;
 varying float vMode;       // 0 rain, 1 snow, 2 leaf, 3 pollen/blossom, 4 firefly
@@ -234,7 +238,7 @@ void main() {
   // and fade out close to the camera so no flake fills the screen.
   float rim = length(p.xz - uCenter.xz) / (uBox * 0.5);
   alpha *= 1.0 - smoothstep(0.6, 0.95, rim);
-  alpha *= smoothstep(3.0, 12.0, distance(p, cameraPosition));
+  alpha *= smoothstep(3.0, 12.0, distance(p, cameraPosition)) * uBoxFade;
   vec4 mvPosition;
   if (mode < 0.5) {
     // Rain streaks stay vertical in screen space: offset in world y.
@@ -485,6 +489,7 @@ export function createParticles(ctx) {
     uCount: { value: 1 },
     uModes: { value: new THREE.Vector4() },
     uFireflies: { value: 0 },
+    uBoxFade: { value: 1 },
   });
   const ambient = makeMesh(ambGeo, new THREE.ShaderMaterial({
     uniforms: ambUniforms, vertexShader: AMBIENT_VERT, fragmentShader: AMBIENT_FRAG,
@@ -493,6 +498,9 @@ export function createParticles(ctx) {
   scene.add(ambient);
 
 
+  // The box's size in steps, with hysteresis; boxFade dips while it changes.
+  const BOX_STEPS = [70, 140, 280, 520];
+  let boxTarget = ambUniforms.uBox.value, boxFade = 1;
   function updateAmbient(view, frame) {
     const u = grade.uniforms;
     const yearT = u.uYearT.value;
@@ -510,8 +518,16 @@ export function createParticles(ctx) {
     const fireflies = u.uNight.value * summerT * 0.5 * (1 - rain);
     // Motion pauses with the game (particles stay visible).
     if (!frame.paused) ambUniforms.uPTime.value += Math.min(frame.dt, 0.25);
-    // Box scales with the zoom so the whole view is covered at any distance.
-    ambUniforms.uBox.value = THREE.MathUtils.clamp(frame.distance * 1.3, 70, 520);
+    // Box scales with the zoom so the whole view is covered at any distance,
+    // in steps: between them the particles stay put in the world.
+    const want = THREE.MathUtils.clamp(frame.distance * 1.3, 70, 520);
+    if (want > boxTarget * 1.05 || want < boxTarget * 0.45) boxTarget = BOX_STEPS.find((b) => b >= want) ?? BOX_STEPS[BOX_STEPS.length - 1];
+    const fdt = Math.min(frame.dt ?? 0.016, 0.1);
+    if (ambUniforms.uBox.value !== boxTarget) {
+      boxFade = Math.max(0, boxFade - fdt / 0.2);
+      if (boxFade === 0) ambUniforms.uBox.value = boxTarget;
+    } else boxFade = Math.min(1, boxFade + fdt / 0.35);
+    ambUniforms.uBoxFade.value = boxFade;
     ambUniforms.uFallH.value = THREE.MathUtils.clamp(frame.distance * 0.45, 24, 150);
     ambUniforms.uModes.value.set(rain, snowFall, leaves, pollen);
     ambUniforms.uFireflies.value = fireflies;
