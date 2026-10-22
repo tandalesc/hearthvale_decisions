@@ -34,6 +34,14 @@ const MAX_FLAGS = 900;
 const MAX_MARKS = 40;
 const MAX_POOLS = 300;
 const MAX_PENNANTS = 24;
+const POOL_RADIUS = 4.6; // a lamp's light pool on the ground (m)
+const LANTERN_Y = 2.72;  // the lantern's centre above the lamp's base (lampGeometry)
+
+/** A lamp's arm angle (its instance rotation) and its lantern, 0.52 m out along the arm. */
+function lampArm(x, z) {
+  const r = Math.floor(hashId(Math.round(x * 3 + z * 7), 1) * 4) * Math.PI / 2;
+  return { r, lx: x + Math.cos(r) * 0.52, lz: z - Math.sin(r) * 0.52 };
+}
 
 const col = (h) => new THREE.Color(h);
 const C = {
@@ -919,8 +927,10 @@ attribute vec4 aMarkCol; // rgb, mode
 varying vec2 vLocal;
 varying vec4 vCol;
 varying float vSeed;
+varying float vRadius;
 void main() {
   vec2 xz = aMark.xy + position.xz * aMark.z;
+  vRadius = aMark.z;
   vec3 p = vec3(xz.x, groundHeight(xz) + 0.05, xz.y);
   vec4 mvPosition = viewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * mvPosition;
@@ -938,9 +948,20 @@ uniform float uTime;
 uniform vec3 uSunColor;
 uniform vec3 uSkyHorizon;
 uniform float uNight;
+uniform float uLampShadows;
 varying vec2 vLocal;
 varying vec4 vCol;
 varying float vSeed;
+varying float vRadius;
+// The lamp post's own shadow from its lantern (High tier). The post stands 0.52 m
+// behind the lantern (vSeed = arm angle) and is taller than it, so it blocks a
+// wedge from the post outward; the 0.3 m lantern makes it a soft partial shade.
+float postShade(vec2 p, float ang) {
+  vec2 u = vec2(-cos(ang), sin(ang));       // lantern -> post, in plan
+  float t = dot(p, u);                       // metres along it
+  float s = abs(p.x * u.y - p.y * u.x) / max(t, 1e-3); // tan of the angle off it
+  return (1.0 - smoothstep(0.06, 0.3, s)) * smoothstep(0.45, 0.9, t) * 0.7;
+}
 void main() {
   float r = length(vLocal);
   if (r > 1.0) discard;
@@ -961,6 +982,7 @@ void main() {
     // Lamp pool: warm light falling off with distance; adds, never darkens.
     float i = (1.0 - r * r);
     i = i * i * smoothstep(0.25, 0.75, uNight) * 0.42;
+    i *= 1.0 - uLampShadows * postShade(vLocal * vRadius, vSeed);
     outc = vec4(vCol.rgb * i, 0.0);
   }
   if (outc.a < 0.003 && dot(outc.rgb, vec3(1.0)) < 0.003) discard;
@@ -1396,6 +1418,7 @@ export function createProps(ctx) {
   glows.renderOrder = 8;
   group.add(glows);
   const lastGlowCentre = new THREE.Vector3(1e9, 0, 0);
+  const lastShadowLampCentre = new THREE.Vector3(1e9, 0, 0);
   let lampGlowCount = 0;
   let eventGlowCount = 0;
   const lampOrder = [];
@@ -1419,7 +1442,7 @@ export function createProps(ctx) {
     const n = Math.min(MAX_LAMPS, list.length);
     for (let i = 0; i < n; i++) {
       const { x, z } = list[i];
-      scratchQ.setFromAxisAngle(Y_AXIS, Math.floor(hashId(Math.round(x * 3 + z * 7), 1) * 4) * Math.PI / 2);
+      scratchQ.setFromAxisAngle(Y_AXIS, lampArm(x, z).r);
       scratchM.compose(scratchP.set(x, lampBase(x, z), z), scratchQ, scratchS.set(1, 1, 1));
       lamps.setMatrixAt(i, scratchM);
     }
@@ -1439,14 +1462,13 @@ export function createProps(ctx) {
     lampGlowCount = Math.min(lampOrder.length, MAX_GLOWS - 40);
     for (let k = 0; k < lampGlowCount; k++) {
       const { x, z } = list[lampOrder[k]];
-      // Lantern position matches the instance rotation used for the post.
-      const r = Math.floor(hashId(Math.round(x * 3 + z * 7), 1) * 4) * Math.PI / 2;
-      const lx = x + Math.cos(r) * 0.52, lz = z - Math.sin(r) * 0.52;
-      writeGlow(k, lx, lampBase(x, z) + 2.72, lz, 3.0, 0, hashId(k, 3));
-      // A warm pool of light on the street under the lantern.
+      const { r, lx, lz } = lampArm(x, z);
+      writeGlow(k, lx, lampBase(x, z) + LANTERN_Y, lz, 3.0, 0, hashId(k, 3));
+      // A warm pool of light on the street under the lantern; its seed slot
+      // carries the arm angle, for the post's shadow.
       if (k < MAX_POOLS) {
         const o = (MAX_MARKS + k) * 4;
-        markPos.array.set([lx, lz, 4.6, hashId(k, 4)], o);
+        markPos.array.set([lx, lz, POOL_RADIUS, r], o);
         markCol.array.set([POOL_COLOR.r, POOL_COLOR.g, POOL_COLOR.b, 4], o);
       }
     }
@@ -1519,6 +1541,7 @@ export function createProps(ctx) {
   markGeo.instanceCount = 0;
   const markUniforms = THREE.UniformsUtils.merge([THREE.UniformsLib.fog]);
   Object.assign(markUniforms, grade.uniforms);
+  markUniforms.uLampShadows = { value: ctx.quality?.lampShadows ? 1 : 0 }; // the post's wedge in its pool
   const marks = new THREE.Mesh(markGeo, new THREE.ShaderMaterial({
     uniforms: markUniforms, vertexShader: MARK_VERT, fragmentShader: MARK_FRAG,
     transparent: true, depthWrite: false, fog: true,
@@ -2001,6 +2024,29 @@ export function createProps(ctx) {
       }
       if (glowsDirty) flushGlows();
       updateMarkCount();
+      // The 16 lamps nearest the view, for walkers' lamp shadows (people.js).
+      if (ctx.lampShadow && markUniforms.uLampShadows.value
+        && (glowsDirty || lastShadowLampCentre.distanceToSquared(frame.target) > 36)) {
+        lastShadowLampCentre.copy(frame.target);
+        const list = view.lamps ?? [];
+        const t = frame.target;
+        const near = [];
+        for (let i = 0; i < Math.min(MAX_LAMPS, list.length); i++) {
+          const d2 = (list[i].x - t.x) ** 2 + (list[i].z - t.z) ** 2;
+          if (near.length < 16 || d2 < near[near.length - 1][0]) {
+            near.push([d2, i]);
+            near.sort((p, q) => p[0] - q[0]);
+            if (near.length > 16) near.pop();
+          }
+        }
+        const u = ctx.lampShadow;
+        near.forEach(([, i], k) => {
+          const { x, z } = list[i];
+          const { lx, lz } = lampArm(x, z);
+          u.uLamps.value[k].set(lx, lz, lampBase(x, z) + LANTERN_Y, POOL_RADIUS);
+        });
+        u.uLampN.value = near.length;
+      }
 
       // Pennants: raise/lower on attention changes; re-seat on lot changes.
       const as = attentionSignature(view);
@@ -2023,7 +2069,10 @@ export function createProps(ctx) {
       // Reduced motion: no birds (boats stay, moored where the frozen clock left them).
       birds.visible = !ctxReduced();
     },
-    applyQuality() {},
+    applyQuality(q) {
+      markUniforms.uLampShadows.value = q.lampShadows ? 1 : 0;
+      lastShadowLampCentre.set(1e9, 0, 0); // refill the walkers' lamps on the way back up
+    },
     dispose() {
       riverPath.dispose();
       scene.remove(group);

@@ -671,6 +671,12 @@ uniform vec3 uEye;
 uniform vec3 uSunDir;
 uniform float uSunShadow; // 0 = contact only; else direct-sun share (rain dims it)
 uniform float uNight;
+#ifdef BLOB_LAMP
+// The street lamps nearest the view (props.js): lantern x, z, lantern y, pool radius.
+uniform vec4 uLamps[16];
+uniform int uLampN;
+varying vec3 vLamp;
+#endif
 varying vec2 vUv;
 varying float vWade;
 varying float vEdge;    // 0 where the quad is held up over a ledge (fades out)
@@ -756,6 +762,28 @@ void main() {
     // Lit slopes show a slightly crisper shadow, glancing ones a slightly
     // softer one; never gone, so it reads on every hill.
     sun *= mix(0.8, 1.15, clamp(ndl / max(sunY, 0.1), 0.0, 1.0));
+  #ifdef BLOB_LAMP
+    // Cast from the nearest lit lantern instead of the sun, fading out
+    // toward the pool's rim and right under the lantern.
+    float best = 1e9;
+    vec4 L = vec4(0.0, 0.0, 0.0, 1.0);
+    for (int k = 0; k < 16; k++) {
+      if (k >= uLampN) break;
+      vec2 dv = base.xz - uLamps[k].xy;
+      float d2 = dot(dv, dv);
+      if (d2 < best) { best = d2; L = uLamps[k]; }
+    }
+    float sL = sqrt(best);
+    float lampOn = smoothstep(0.25, 0.75, uNight) * (1.0 - smoothstep(L.w * 0.75, L.w, sL)) * smoothstep(0.1, 0.3, sL);
+    away = (base.xz - L.xy) / max(sL, 1e-3);
+    side = vec2(away.y, -away.x);
+    // Similar triangles: the head's shadow lands sL * h / (H - h) past the feet.
+    float lampH = L.z - base.y;
+    len = min(sL * height / max(lampH - height, 0.3), L.w * 1.5);
+    sun = lampOn;
+    on *= step(1e-3, lampOn);
+    vLamp = vec3(L.xy, L.w);
+  #endif
     // Body-wide near the feet; the penumbra widens toward the far end, so
     // the tip is feathered more than the feet.
     float r0 = 0.42 * S;
@@ -825,6 +853,10 @@ varying vec2 vWorldXZ;
 uniform float uNight;
 uniform float uStrength;
 uniform float uTime;
+#ifdef BLOB_LAMP
+uniform vec3 uPoolColor;
+varying vec3 vLamp;
+#endif
 varying vec2 vUv;
 varying float vWade;
 varying vec2 vLocal;
@@ -837,7 +869,7 @@ float bump(float x) {
   return k * k * k;
 }
 void main() {
-  #ifdef BLOB_COVER
+  #if defined(BLOB_COVER) || defined(BLOB_LAMP)
     if (vWade > 0.5) discard;
   #endif
   if (vWade > 0.5) {
@@ -896,6 +928,17 @@ void main() {
       float t2 = len > 1e-3 ? clamp(vLocal.x / len, 0.0, 1.0) : 0.0;
       float blocked = bump(dist / mix(vShape.y, vShape.z, t2)) * mix(1.0, 0.7, t2) * step(1e-3, vShape.w) * keep;
       gl_FragColor = vec4(blocked, contact * 0.66 * keep, vWorldY, 1.0);
+    #elif defined(BLOB_LAMP)
+      // Take back the lamp pool's light (the same falloff as the pool,
+      // props.js) where the walker blocks it. Blending: rgb = dst - src *
+      // dstAlpha, alpha = dstAlpha * (1 - blocked), so overlapping walkers
+      // block the union and it never goes darker than the unlit ground.
+      float tL = len > 1e-3 ? clamp(vLocal.x / len, 0.0, 1.0) : 0.0;
+      float blockedL = bump(dist / mix(vShape.y, vShape.z, tL)) * mix(1.0, 0.55, tL) * vShape.w * keep * 0.85;
+      vec2 q = (vWorldXZ - vLamp.xy) / vLamp.z;
+      float pool = max(1.0 - dot(q, q), 0.0);
+      pool = pool * pool * smoothstep(0.25, 0.75, uNight) * 0.42;
+      gl_FragColor = vec4(uPoolColor * pool * blockedL, blockedL);
     #else
       discard;
     #endif
@@ -1060,6 +1103,25 @@ export function createPeople(ctx) {
     blendDstAlpha: THREE.ZeroFactor,
   });
 
+  // Walkers' shadows from the street lamps at night, High tier only
+  // (props.js fills uLamps with the lamps nearest the view).
+  const lampShadow = { uLamps: { value: Array.from({ length: 16 }, () => new THREE.Vector4()) }, uLampN: { value: 0 } };
+  ctx.lampShadow = lampShadow;
+  const blobLampMaterial = new THREE.ShaderMaterial({
+    ...blobOptions,
+    uniforms: { ...blobUniforms, ...lampShadow, uPoolColor: { value: new THREE.Color('#ffb866') } },
+    defines: { BLOB_LAMP: 1 },
+    // The frame's alpha is 1 on the ground (pools and ripples keep it); post
+    // ignores it, so here it carries the pool light still unblocked.
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.ReverseSubtractEquation,
+    blendSrc: THREE.DstAlphaFactor,
+    blendDst: THREE.OneFactor,
+    blendEquationAlpha: THREE.AddEquation,
+    blendSrcAlpha: THREE.ZeroFactor,
+    blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+  });
+
   const mesh = new THREE.Mesh(new THREE.InstancedBufferGeometry(), material);
   mesh.name = 'people';
   mesh.frustumCulled = false;
@@ -1078,7 +1140,12 @@ export function createPeople(ctx) {
   blobsApply.frustumCulled = false;
   blobsApply.renderOrder = 1.51;
   blobsApply.visible = false;
-  scene.add(mesh, blobsApply);
+  const blobsLamp = new THREE.Mesh(blobs.geometry, blobLampMaterial);
+  blobsLamp.name = 'people-blobs-lamp';
+  blobsLamp.frustumCulled = false;
+  blobsLamp.renderOrder = 1.55; // after the lamp pools (props marks, 1) and the ripples (alpha back to 1)
+  blobsLamp.visible = false;
+  scene.add(mesh, blobsApply, blobsLamp);
   (ctx.shadowSurface?.scene ?? scene).add(blobs);
 
   let stride = STRIDE; // 16, or 20 when the view carries segment ends
@@ -1097,6 +1164,7 @@ export function createPeople(ctx) {
   let shadowMode = 'blob';
   let contactOnly = false; // only the round blob under the feet (full shadows, or the low tier)
   let tierQuality = ctx.quality;
+  let lampShadows = false; // tier allows walkers' lamp shadows
 
   /** (Re)bind the sim's Float32Array as the interleaved instance buffer. */
   function bind(array, version, rowFloats) {
@@ -1109,7 +1177,7 @@ export function createPeople(ctx) {
         m.needsUpdate = true;
       }
     }
-    for (const m of [blobMaterial, blobApplyMaterial]) {
+    for (const m of [blobMaterial, blobApplyMaterial, blobLampMaterial]) {
       if (!!m.defines?.SEGMENT_END !== segment) {
         m.defines = { ...(m.defines ?? {}) };
         if (segment) m.defines.SEGMENT_END = 1; else delete m.defines.SEGMENT_END;
@@ -1159,6 +1227,7 @@ export function createPeople(ctx) {
     mesh.geometry = g;
     blobs.geometry = b;
     blobsApply.geometry = b;
+    blobsLamp.geometry = b;
     boundArray = array;
     boundVersion = version;
   }
@@ -1187,6 +1256,7 @@ export function createPeople(ctx) {
     mesh.geometry.instanceCount = count;
     blobs.geometry.instanceCount = count;
     mesh.visible = blobs.visible = blobsApply.visible = count > 0;
+    blobsLamp.visible = lampShadows && count > 0 && lampShadow.uLampN.value > 0 && grade.uniforms.uNight.value > 0.2;
 
     updateMarker(frame.time);
     syncTurnEase();
@@ -1295,6 +1365,7 @@ export function createPeople(ctx) {
 
   function applyQuality(q) {
     tierQuality = q;
+    lampShadows = Boolean(q.lampShadows);
     castShadow = shadowMode === 'full' && q.shadowMapSize > 0;
     mesh.castShadow = castShadow;
     const near = q.name === 'low' ? 90 : q.name === 'high' ? 140 : 120;
