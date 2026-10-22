@@ -165,7 +165,9 @@ export function createBuildings({ scene, grade, lights, ground }) {
   function syncPads(lot, pads) {
     if (!ground) return;
     const id = lot.record.id;
-    for (let i = 0; i < pads.length; i++) ground.setPad(`${id}:${i}`, pads[i]);
+    // A park by the water keeps the beach under it (decals.js fades its lawn into the sand).
+    const sand = lot.summary?.type === 'park';
+    for (let i = 0; i < pads.length; i++) ground.setPad(`${id}:${i}`, sand ? {...pads[i], sand} : pads[i]);
     for (let i = pads.length; i < (lot.padCount ?? 0); i++) ground.removePad(`${id}:${i}`);
     lot.padCount = pads.length;
   }

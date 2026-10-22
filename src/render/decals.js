@@ -266,6 +266,7 @@ ${HEIGHT_GLSL}
 `;
 
 const COLOR_FRAG_HEAD = /* glsl */ `
+${GROUND_GLSL}
 varying vec2 vDecalLocal;
 varying vec2 vDecalWorld;
 ${GROUND_AO_GLSL}
@@ -293,6 +294,10 @@ const COLOR_FRAG = /* glsl */ `
     // and neighbouring park lots join without seams.
     float ragged = (vnoise(L * 0.9 + seed * 7.0) - 0.5) * 1.2;
     alpha = 1.0 - smoothstep(-1.6, 0.6, d + ragged);
+    // By the water a park becomes a beach: the lawn gives way to the sand the
+    // ground keeps under a park (ground.js), with a soft, ragged edge.
+    float sandW = max(groundBeach(vDecalWorld), 0.0);
+    if (sandW > 0.0) alpha *= smoothstep(sandW * 0.7, sandW * 0.7 + 4.0, groundShore(vDecalWorld) + (m - 0.5) * 2.0);
     col *= 0.92 + 0.14 * m;
     // Mowing stripes, very faint.
     col *= 1.0 + 0.035 * sign(sin(L.x * 1.4));

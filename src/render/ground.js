@@ -133,6 +133,8 @@ const toI = (x) => (x - GROUND_ORIGIN) / GROUND_STEP;
 export function createGround() {
   const count = GROUND_N * GROUND_N;
   const natural = new Float32Array(count);
+  // Shore character before pads (channel A): built ground takes no sand.
+  const shoreBase = new Float32Array(count);
   const height = new Float32Array(count); // CPU mirror of channel R
   const data = new Float32Array(count * 4); // RGBA texture data
   const texture = new THREE.DataTexture(data, GROUND_N, GROUND_N, THREE.RGBAFormat, THREE.FloatType);
@@ -175,6 +177,7 @@ export function createGround() {
       }
     }
     smoothBeach(data, GROUND_N);
+    for (let k = 0; k < count; k++) shoreBase[k] = data[k * 4 + 3];
     composite({ i0: 0, j0: 0, i1: GROUND_N - 1, j1: GROUND_N - 1 });
     uniforms.uWaterHalf.value = T.WATER_HALF;
     texture.clearUpdateRanges();
@@ -208,6 +211,9 @@ export function createGround() {
   function composite(r) {
     const rw = r.i1 - r.i0 + 1, rh = r.j1 - r.j0 + 1;
     const wSum = new Float32Array(rw * rh), wy = new Float32Array(rw * rh), core = new Float32Array(rw * rh).fill(-Infinity);
+    // How built each sample is, for the beach: pads that keep their sand
+    // (a park by the water becomes a beach) do not count.
+    const builtW = new Float32Array(rw * rh);
     for (const pad of pads.values()) {
       const a0 = Math.max(r.i0, Math.floor(toI(pad.x0 - PAD_BLEND)));
       const a1 = Math.min(r.i1, Math.ceil(toI(pad.x1 + PAD_BLEND)));
@@ -220,12 +226,17 @@ export function createGround() {
           const x = GROUND_ORIGIN + i * GROUND_STEP;
           const dx = Math.max(pad.x0 - x, 0, x - pad.x1);
           const q = (j - r.j0) * rw + (i - r.i0);
-          if (dx === 0 && dz === 0) { core[q] = Math.max(core[q], pad.y); continue; }
+          if (dx === 0 && dz === 0) {
+            core[q] = Math.max(core[q], pad.y);
+            if (!pad.sand) builtW[q] = 1;
+            continue;
+          }
           // Rounded-rect distance outside the footprint, eased to natural ground.
           const w = 1 - smooth(Math.hypot(dx, dz) / PAD_BLEND);
           if (w <= 0) continue;
           wSum[q] += w;
           wy[q] += w * pad.y;
+          if (!pad.sand) builtW[q] = Math.min(1, builtW[q] + w);
         }
       }
     }
@@ -236,6 +247,12 @@ export function createGround() {
         const h = core[q] > -Infinity ? core[q] : wSum[q] > 0 ? n + (wy[q] / wSum[q] - n) * Math.min(1, wSum[q]) : n;
         height[k] = h;
         data[k * 4] = h;
+        // A beach stops at built ground: under a footprint no sand at all,
+        // in its blend ring less by the pads' weight (marsh is left alone).
+        // Parks keep theirs.
+        const built = builtW[q];
+        const b = shoreBase[k];
+        data[k * 4 + 3] = b > 0 ? b * (1 - built) : b;
       }
     }
   }
@@ -262,10 +279,10 @@ export function createGround() {
    * Flatten an axis-aligned footprint to height y (a building's foundation).
    * Re-setting the same id with the same values is a no-op.
    */
-  function setPad(id, { x, z, w, d, y }) {
-    const next = { x0: x - w / 2, z0: z - d / 2, x1: x + w / 2, z1: z + d / 2, y };
+  function setPad(id, { x, z, w, d, y, sand = false }) {
+    const next = { x0: x - w / 2, z0: z - d / 2, x1: x + w / 2, z1: z + d / 2, y, sand };
     const old = pads.get(id);
-    if (old && old.x0 === next.x0 && old.z0 === next.z0 && old.x1 === next.x1 && old.z1 === next.z1 && old.y === next.y) return;
+    if (old && old.x0 === next.x0 && old.z0 === next.z0 && old.x1 === next.x1 && old.z1 === next.z1 && old.y === next.y && old.sand === sand) return;
     pads.set(id, next);
     const r = rectOf(next);
     if (old) {
