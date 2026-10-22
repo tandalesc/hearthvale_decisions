@@ -468,36 +468,26 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
   float walls = 1.0 - smoothstep(0.25, 0.75, r.a);
   float n = vnoise(world.xz * 0.9) * 0.6 + vnoise(world.xz * 2.7) * 0.4 - 0.5;
   #ifdef GROUND_RELIEF
-    // Trodden soil up close: lumps, pebbles and, in dry earth, a network of
-    // cracks (isolines of value noise, never narrower than 1.5 pixels).
+    // Trodden soil up close: soft lumps of packed earth, no sharp features
+    // (pebbles and cracks read as flaking plaster rather than dirt).
     // soilShade tints the earth colours below; soilSl is the slope.
     float soilShade = 1.0;
     vec3 soilSl = vec3(0.0);
     float lumpK = reliefFade(0.5, px);
     if (lumpK > 0.0 && (tier < 3.0 || dirt > 0.01)) {
       vec3 lump = vnoised(world.xz * 2.0 + 13.0);
-      soilSl.xz += lump.yz * (2.0 * 0.02 * lumpK);
-      float pebK = reliefFade(1.0 / 6.3, px);
-      if (pebK > 0.0) {
-        vec3 pb = pebbles(world.xz, 6.3, 0.012);
-        soilSl.xz += pb.yz * pebK;
-        soilShade *= 1.0 + 0.16 * pb.x * pebK;
-      }
-      vec3 cv = vnoised(world.xz * 1.3 + 9.0);
-      float cw = max(0.03, 1.5 * px * 1.3 * length(cv.yz));
-      float ct = clamp(abs(cv.x - 0.5) / cw, 0.0, 1.0);
-      // Only in patches (where the lumps are high), and fewer when wet.
-      float crackK = lumpK * smoothstep(0.45, 0.7, lump.x) * (1.0 - 0.7 * uWet);
-      soilShade *= 1.0 - 0.18 * (1.0 - ct * ct * (3.0 - 2.0 * ct)) * crackK;
-      // 1 cm deep: the walls slope down into the crack.
-      soilSl.xz += cv.yz * (sign(cv.x - 0.5) * 6.0 * ct * (1.0 - ct) / cw * 1.3 * 0.01 * crackK);
+      soilSl.xz += lump.yz * (2.0 * 0.01 * lumpK);
+      soilShade *= 1.0 - 0.06 * (lump.x - 0.5) * lumpK;
     }
   #endif
+  // Mud: broad, soft damp patches that darken worn earth (all tiers).
+  float mudN = vnoise(world.xz * 0.55 + 3.0) * 0.65 + vnoise(world.xz * 1.6 + 7.0) * 0.35;
+  float damp = smoothstep(0.5, 0.78, mudN) * (0.6 + 0.4 * uWet);
 
   // Bare dirt: wear on ground that is not yet a trail, ragged and patchy.
   float lo = 0.3 + n * 0.32;
   float bareCover = smoothstep(lo, lo + 0.16, dirt) * walls;
-  vec3 bare = mix(grass, vec3(0.38, 0.29, 0.17), 0.82);
+  vec3 bare = mix(grass, vec3(0.38, 0.29, 0.17), 0.82) * (1.0 - 0.22 * damp);
   #ifdef GROUND_RELIEF
     bare *= soilShade;
   #endif
@@ -518,28 +508,29 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
 
   // Linear-space albedos: trodden earth, packed dirt, pale gravel.
   vec3 earth = vec3(0.38, 0.29, 0.17);
-  vec3 trail = mix(mix(grass, earth, 0.62), earth * 0.94, (1.0 - dc) * 0.55 * lane);
-  vec3 dirtC = vec3(0.30, 0.21, 0.12) * (0.92 + 0.16 * vnoise(world.xz * 3.0));
+  vec3 trail = mix(mix(grass, earth, 0.62), earth * 0.94, (1.0 - dc) * 0.55 * lane) * (1.0 - 0.22 * damp);
+  vec3 dirtC = vec3(0.30, 0.21, 0.12) * (0.94 + 0.1 * vnoise(world.xz * 1.2)) * (1.0 - 0.25 * damp);
   #ifdef GROUND_RELIEF
     trail *= soilShade;
     dirtC *= soilShade;
   #endif
-  // Tracks: two wheel ruts and a faint grassy crown.
-  float rut = exp(-pow((dc - 0.55) / 0.16, 2.0)) * lane;
-  vec3 track = dirtC * (1.0 - 0.16 * rut);
-  track = mix(track, mix(dirtC, grass, 0.45), (1.0 - smoothstep(0.0, 0.22, dc)) * 0.35 * lane);
+  // Tracks: packed mud, with grass breaking through here and there along the
+  // crown (in patches, so it never reads as a stripe).
+  float crownK = smoothstep(0.5, 0.75, vnoise(world.xz * 0.7 + 21.0));
+  vec3 track = mix(dirtC, mix(dirtC, grass, 0.45), (1.0 - smoothstep(0.0, 0.18, dc)) * 0.3 * lane * crownK);
   // Grit: soft two-octave noise (a hash per 16 cm square read as pixels up
   // close), flattened to its average once it is under a few pixels.
   #ifdef GROUND_RELIEF
     // The same grit, its first octave with a slope: stones 1 cm proud.
     vec3 gr = vnoised(world.xz * 7.0);
     float grit = mix(0.5, gr.x * 0.6 + vnoise(world.xz * 19.0 + 5.0) * 0.4, smoothstep(0.06, 0.02, px));
-    vec2 gritSl = gr.yz * (7.0 * 0.6 * 0.012 * reliefFade(1.0 / 7.0, px));
+    vec2 gritSl = gr.yz * (7.0 * 0.6 * 0.004 * reliefFade(1.0 / 7.0, px));
   #else
   float grit = mix(0.5, vnoise(world.xz * 7.0) * 0.6 + vnoise(world.xz * 19.0 + 5.0) * 0.4, smoothstep(0.06, 0.02, px));
   #endif
-  vec3 gravel = vec3(0.55, 0.48, 0.36) * (0.9 + 0.16 * grit);
-  gravel *= 1.0 - 0.07 * rut - 0.08 * smoothstep(0.7, 1.0, dc);
+  // Packed earthen gravel: the dirt it is laid on shows through, and it darkens with the damp.
+  vec3 gravel = vec3(0.44, 0.37, 0.27) * (0.93 + 0.1 * grit) * (1.0 - 0.15 * damp);
+  gravel *= 1.0 - 0.08 * smoothstep(0.7, 1.0, dc);
   vec3 cobble = mix(vec3(0.38, 0.36, 0.33), vec3(0.62, 0.60, 0.56), cobbles(world.xz));
   vec3 setts = mix(vec3(0.30, 0.30, 0.31), vec3(0.50, 0.50, 0.51), cobbles(world.xz * 1.35));
 
