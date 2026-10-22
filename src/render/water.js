@@ -35,10 +35,13 @@ function laneOffsets(H = WATER_HALF) {
 }
 
 // How much of a ribbon vertex lies in still water (a lake, or the sea at the
-// river's mouth): the ribbon fades out there and the still surface takes over.
+// river's mouth): over the first STILL_BLEND metres the river's water takes
+// on the still surface's colour and calm and fades out, so the river runs
+// into the open water instead of ending in a band.
+const STILL_BLEND = 16;
 function stillShare(x, z) {
   const d = stillDistanceAt(x, z);
-  return d >= 0 ? 0 : Math.min(1, -d / 6);
+  return d >= 0 ? 0 : Math.min(1, -d / STILL_BLEND);
 }
 
 /**
@@ -528,6 +531,17 @@ void main() {
   #else
     vec2 s = slope(base * 0.085 + vec2(0.0, uTime * 0.05));
   #endif
+  #ifdef STILL
+    // Open water spans hundreds of metres, where the river's two aligned
+    // octaves of one 12 m tile repeat in a visible grid. Read the tile
+    // through a slow warp, turn the octaves apart and add a broad third one.
+    vec2 warp = vec2(texture2D(tNormals, base * 0.0061 + 0.21).b, texture2D(tNormals, base * 0.0057 + 0.63).b) - 0.5;
+    vec2 bw = base + warp * 14.0;
+    s = slope(bw * 0.085 + vec2(uTime * 0.004, uTime * 0.009));
+    s += 0.6 * slope(mat2(0.8, -0.6, 0.6, 0.8) * bw * 0.173 + vec2(uTime * 0.011, uTime * 0.026) + 0.37);
+    s += 0.55 * slope(mat2(0.34, 0.94, -0.94, 0.34) * bw * 0.037 - vec2(uTime * 0.006, uTime * 0.003) + 0.11);
+    s *= 0.8;
+  #endif
   // Fords: shallow water mid-channel (not the bank shallows) runs as riffles;
   // steep reaches coming down from the hills run as rapids.
   float riffle = (1.0 - smoothstep(0.28, 0.46, depth)) * smoothstep(0.8, 2.0, vBank) * (1.0 - smoothstep(0.5, 0.9, vDepth0 - depth));
@@ -539,6 +553,11 @@ void main() {
     riffle = 0.0;
     // Wind chop on open water: the sea is never glassy.
     white = 0.0;
+  #endif
+  #if !defined(STILL)
+    // Into the open water the current dies away: no riffles or white water.
+    riffle *= 1.0 - vStill;
+    white *= 1.0 - vStill;
   #endif
   float rough = max(riffle, white);
   // Strength: pools lie glassy, riffles and white water break up.
@@ -599,6 +618,9 @@ void main() {
   #ifdef STILL
     // Open water reads bluer and deeper the more exposed it is.
     deep = mix(deep, vec3(0.012, 0.05, 0.085), vFlow.x);
+  #else
+    // A river mouth takes on the open water's colour as it fades into it.
+    deep = mix(deep, vec3(0.012, 0.05, 0.085), vStill * 0.8);
   #endif
   vec3 body = mix(shallow, deep, smoothstep(0.05, 0.75, max(depth, riffle * 0.5) + pool * 0.2));
   body = mix(body, body * vec3(0.8, 0.88, 0.95), pool * 0.5);
@@ -687,7 +709,9 @@ void main() {
   alpha = max(alpha, ice * 0.9);
 
   // A river entering a lake or the sea fades into the still surface.
-  alpha *= 1.0 - vStill;
+  // Its sides go first, so it ends as a soft tongue rather than a band.
+  alpha *= 1.0 - smoothstep(0.15, 1.0, vStill);
+  alpha *= mix(1.0, smoothstep(0.0, 3.5, vBank), min(1.0, vStill * 4.0));
   gl_FragColor = vec4(col, alpha);
   // The shared atmosphere is applied by the tone mapping chunk (atmosphere.js).
   #include <tonemapping_fragment>

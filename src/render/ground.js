@@ -127,6 +127,32 @@ export function smoothBeach(data, n, r = 6) {
   for (let k = 0; k < n * n; k++) if (data[k * 4 + 3] >= 0) data[k * 4 + 3] = b[k];
 }
 
+/**
+ * Where the river meets the sea or a great lake, let the shore's beach wrap
+ * round the mouth and run a little way up both banks, thinning as it goes
+ * (render only: channel A). Without it the beach stopped dead at the river
+ * and each bank ended in a sharp grass point at the shore. A delta's mouths
+ * keep their marsh.
+ */
+export function estuaryBeach(data, n, run = 28) {
+  const W = typeof T.terrainWaters === 'function' ? T.terrainWaters() : null;
+  if (!W || W.noRiver || W.mouth == null || W.delta) return;
+  const width = W.sea ? BEACH.sea : BEACH.lake;
+  // Upstream is away from the open water (riverEnd lies past the mouth).
+  const out = Math.sign((W.riverEnd ?? W.mouth - 1) - W.mouth) || -1;
+  const reach = T.WATER_HALF + 12;
+  for (let j = 0; j < n; j++) {
+    const up = (GROUND_ORIGIN + j * GROUND_STEP - W.mouth) * -out;
+    if (up < -12 || up > run) continue;
+    const b = width * (up <= 0 ? 1 : 1 - smooth(up / run));
+    for (let i = 0; i < n; i++) {
+      const k = (j * n + i) * 4;
+      if (Math.abs(data[k + 1]) > reach || data[k + 3] < 0) continue;
+      data[k + 3] = Math.max(data[k + 3], b);
+    }
+  }
+}
+
 const smooth = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 const toI = (x) => (x - GROUND_ORIGIN) / GROUND_STEP;
 
@@ -176,6 +202,7 @@ export function createGround() {
         data[k * 4 + 3] = shoreCharacter(x, z, shore);
       }
     }
+    estuaryBeach(data, GROUND_N);
     smoothBeach(data, GROUND_N);
     for (let k = 0; k < count; k++) shoreBase[k] = data[k * 4 + 3];
     composite({ i0: 0, j0: 0, i1: GROUND_N - 1, j1: GROUND_N - 1 });
