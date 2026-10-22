@@ -112,6 +112,10 @@ Most of the town's questions are answered right in your browser by a small stude
 
 **A few controls:** drag to look around and scroll to zoom. `Space` pauses, `C` opens or closes the docket, `F` toggles full screen, and `H` hides the interface so you can just watch.
 
+## License
+
+Copyright 2026 Shishir Tandale. The code is licensed under the [Apache License 2.0](LICENSE). The name Hearthvale and its branding are not licensed under it, so please give a modified or rehosted copy a name of its own.
+
 ---
 
 <p align="center"><sub>Built with Three.js and plain JavaScript, no framework. Developers: start with <a href="HANDOFF.md">HANDOFF.md</a>.</sub></p>
