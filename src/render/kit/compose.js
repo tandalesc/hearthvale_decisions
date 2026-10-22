@@ -525,6 +525,16 @@ export function composeLot(b, pool, anim = null, selected = false) {
     add('wheel', ux, waterY + D / 2 - 0.35, uz, Math.atan2(-tz * spin, tx * spin), D, D, W, { trim: WHEEL_FLOATS, seed: h2 });
   }
 
+  /** A windmill (the mill variant 'windmill'): tapered tower body, cap and turning sails. */
+  function windmill() {
+    const ts = Math.min(bw, 4.6);
+    const top = body(0, 0, ts, ts, 1, { window: WINDOW.COTTAGE, floorH: 7.5, details: era === 0 ? DETAIL.PLANKS : DETAIL.QUOINS });
+    roofOn('hip', 0, 0, ts, ts, top, { pitch: 48, overhang: 0.35 });
+    if (detailsIn) add('sails', 0, top - 0.6, ts / 2 + 0.45, 0, 10, 10, 10, { trim: new THREE.Color('#ece3c9'), seed: h2 });
+    scaffold(0, 0, ts, ts, top);
+    summary.bodyH = top - lo + 5;
+  }
+
   const storeys = Math.max(1, Math.min(style.maxStoreys + 2, b.storeys ?? 1));
   const fill = style.fill;
   const bw = Math.max(3.4, lw * fill);
@@ -591,9 +601,11 @@ export function composeLot(b, pool, anim = null, selected = false) {
     }
 
     case 'mill': {
-      // The sim's mill is a water mill (it must touch the river); the
-      // 'sails' piece waits for a real windmill type.
-      if (era < 3) {
+      // A windmill stands where the wind is; every other mill before steam
+      // is a water mill (it must touch the river).
+      if (b.variant === 'windmill') {
+        windmill();
+      } else if (era < 3) {
         waterMill();
       } else {
         const { top } = house(0, frontZ, bw, bd, Math.max(3, storeys), { window: WINDOW.INDUSTRIAL, chimneys: 0, form: 'gable', roofOpts: { pitch: 30 } });

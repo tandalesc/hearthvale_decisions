@@ -159,6 +159,8 @@ test('early mills are water mills: a wheel on the river side, turning with the f
     }
   }
   assert.ok(!specs(record({ type: 'mill', styleEra: 3 })).list.some((s) => s.piece === 'wheel'), 'a steam mill has no wheel');
+  const wind = specs(record({ type: 'mill', variant: 'windmill', styleEra: 1 })).list.map((s) => s.piece);
+  assert.ok(wind.includes('sails') && !wind.includes('wheel'), 'a windmill keeps its sails');
 });
 
 test('kit pieces are flat-shaded with unit normals and valid parts', () => {
