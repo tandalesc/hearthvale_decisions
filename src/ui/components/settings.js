@@ -41,7 +41,6 @@ export function createSettings(ctx) {
       game: `
         <fieldset><legend>Play</legend>
           ${field('Title cards', 'Full-screen cards for a new age, a new body or a disaster. They pause the town.', seg('moments', p.moments, [['fast', 'While sped up'], ['always', 'Always'], ['never', 'Never']]))}
-          ${field('People who walk', 'More is livelier but heavier on this device.', `<span style="display:flex;gap:10px;align-items:center">${range('individualCap', ctx.getIndividualCap(), 300, 5000, 100, 'People who walk')}<b class="cap-val" style="font:500 13px var(--font-mono);min-width:44px;text-align:right">${num(ctx.getIndividualCap())}</b></span>`)}
           ${field('Decision model', 'The student that answers most of the town\'s questions in this browser.', '<b class="model-ver" style="font:500 13px var(--font-mono)">–</b>')}
         </fieldset>
         <fieldset><legend>Your town</legend>
@@ -161,10 +160,7 @@ export function createSettings(ctx) {
       const r = e.target.dataset.range;
       if (!r) return;
       const v = Number(e.target.value);
-      if (r === 'individualCap') {
-        setText(el.querySelector('.cap-val'), num(v));
-        ctx.setIndividualCap(v);
-      } else ctx.prefs.set(r, v);
+      ctx.prefs.set(r, v);
     });
     el.addEventListener('change', (e) => {
       if (e.target.dataset.act === 'import' && e.target.files?.[0]) ctx.importSave(e.target.files[0]);

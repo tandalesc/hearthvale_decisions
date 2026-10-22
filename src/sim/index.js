@@ -185,9 +185,10 @@ export function fastForward(state, years, services = {}, {skipPeople = true} = {
   return state;
 }
 
-// Settings: how many people walk as individuals (300-5,000).
+// How many people walk as individuals: null (the game) is everyone; a number
+// (at least 300) caps it, for tests and benchmarks.
 export function setIndividualCap(state, n) {
-  state.settings.individualCap = Math.max(300, Math.min(5000, Math.round(n)));
+  state.settings.individualCap = n == null ? null : Math.max(300, Math.round(n));
   syncIndividuals(state);
   return state.settings.individualCap;
 }

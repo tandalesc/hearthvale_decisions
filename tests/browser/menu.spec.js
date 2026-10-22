@@ -32,19 +32,17 @@ test('a first visit shows the menu without Continue, and founds a named town in 
   await expect(page.locator('.mm-cart-name')).toHaveText('Testbrook');
   await expect(page.locator('.mm-cart-sub')).toContainText('Lake valley');
   await expect(page.locator('.mm-map')).toHaveAttribute('data-loading', 'false', {timeout: 15000});
-  await page.locator('[data-crowd="light"]').click();
   await expect(page.locator('[data-act="found"]')).toHaveText('Found Testbrook');
   await page.locator('[data-act="found"]').click();
   await booted(page);
   const s = await hv(page, async () => {
     const st = await window.hearthvale.snapshot();
-    return {name: st.townName, year: st.time.year, archetype: st.terrainArchetype ?? null, cap: st.settings?.individualCap};
+    return {name: st.townName, year: st.time.year, archetype: st.terrainArchetype ?? null};
   });
   expect(s.name).toBe('Testbrook');
   expect(s.year).toBe(0);
   if (await hv(page, () => window.hearthvale.sim) === 'real') {
     expect(s.archetype).toBe('lake');
-    expect(s.cap).toBe(800);
   }
   await expect(page.locator('.brand h1')).toHaveText('Testbrook');
   expect(errors).toEqual([]);

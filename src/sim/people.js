@@ -1,6 +1,7 @@
-// Visible walkers. Up to state.settings.individualCap people are simulated one by
-// one: needs, tasks, routes and movement. Everyone else lives only as a household
-// count. syncIndividuals() promotes and demotes walkers as the population changes.
+// Visible walkers. Every resident is simulated one by one: needs, tasks, routes
+// and movement (state.settings.individualCap, when a test or benchmark sets one,
+// keeps the rest as household counts). syncIndividuals() promotes and demotes
+// walkers as the population changes.
 //
 // Movement runs every tick with dt = 0.1 s. A walker moves along a flat route
 // [x0, z0, x1, z1, ...] at a speed set by the road tier underneath. Whenever the
@@ -91,12 +92,13 @@ export function doorOf(b) {
 // ---------------------------------------------------------------------------
 // Promote / demote
 
-// Keep min(cap, pop) walkers, spread over households in proportion to their size.
+// Keep everyone walking (or min(cap, pop) under a cap), spread over households
+// in proportion to their size.
 export function syncIndividuals(state) {
-  const cap = Math.max(0, state.settings.individualCap | 0);
+  const cap = state.settings?.individualCap;
   const households = state.households.filter((h) => h.homeId != null);
   const pop = households.reduce((n, h) => n + h.size, 0);
-  const target = Math.min(cap, pop);
+  const target = cap > 0 ? Math.min(cap | 0, pop) : pop;
   const ratio = pop > 0 ? target / pop : 0;
 
   const want = new Map();

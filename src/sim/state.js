@@ -59,7 +59,8 @@ export function emptyState(seed = DEFAULT_SEED, options = {}) {
     terrainVersion: 1,
     terrainArchetype: null,
     rng: seedStreams(seed),
-    settings: {individualCap: 2000, ...(options.settings ?? {})},
+    // individualCap: null = everyone walks (a number caps it, for tests and benchmarks).
+    settings: {individualCap: null, ...(options.settings ?? {})},
     time: createTime(),
     nextId: 1,
 

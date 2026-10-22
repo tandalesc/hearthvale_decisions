@@ -342,13 +342,15 @@ test('150 headless years without a decision service stay finite and reach era 2'
   assert.ok(ms < 60000, `took ${ms.toFixed(0)} ms`);
 });
 
-test('walkers: promoted and demoted with the population and the cap', () => {
+test('walkers: everyone walks; a test cap promotes and demotes them', () => {
   const s = fixtureState('city');
-  assert.equal(s.people.length, Math.min(2000, s.indicators.pop));
+  const housed = () => s.households.filter((h) => h.homeId != null).reduce((n, h) => n + h.size, 0);
+  // (Households move between syncs, so the restored walkers only come close.)
+  assert.ok(s.people.length > 2000 && s.people.length <= s.indicators.pop, `${s.people.length} walkers of ${s.indicators.pop}`);
   setIndividualCap(s, 300);
   assert.equal(s.people.length, 300);
-  setIndividualCap(s, 5000);
-  assert.equal(s.people.length, s.households.filter((h) => h.homeId != null).reduce((n, h) => n + h.size, 0));
+  setIndividualCap(s, null);
+  assert.equal(s.people.length, housed());
   const ids = new Set(s.people.map((p) => p.id));
   assert.equal(ids.size, s.people.length);
 });

@@ -81,6 +81,8 @@ export const worldSystem = {
   },
   restore(state) {
     ensureRoads(state);
+    // Everyone walks: saves from when the menu chose a walker cap lose it.
+    if (state.settings) state.settings.individualCap = null;
     // Saves from before landscaping: tend what already stands once, now.
     if (!state.landscape) yearlyAesthetics(state);
   },

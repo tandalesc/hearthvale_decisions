@@ -41,13 +41,6 @@ export const LANDSCAPES = [
 ];
 const LANDSCAPE_NAMES = {river: 'River valley', lake: 'Lake valley', greatlake: 'Great lake', delta: 'Delta', coast: 'Coast', shore: 'Shore', dry: 'Dry plain'};
 
-// How many townsfolk walk the streets (state.settings.individualCap).
-export const CROWDS = [
-  {id: 'light', label: 'Light', cap: 800, hint: 'Fewer people on the streets. Smoothest on older devices.'},
-  {id: 'usual', label: 'Usual', cap: 2000, hint: 'The usual crowd. Good on most computers.'},
-  {id: 'lively', label: 'Lively', cap: 4000, hint: 'Busy streets in a big city. Needs a strong device.'},
-];
-
 const store = {
   get(key) { try { return localStorage.getItem(key); } catch { return null; } },
   set(key, value) { try { localStorage.setItem(key, value); } catch { /* blocked */ } },
@@ -138,7 +131,6 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
     name: suggestName('seed'),
     seedText: seedCode(newSeed()),
     landscape: 'seed',
-    crowd: 'usual',
     found: null,   // what the map found for this seed: {archetype, river}
   };
 
@@ -187,7 +179,6 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
   }
 
   function renderNew() {
-    const crowd = CROWDS.find((c) => c.id === form.crowd) ?? CROWDS[1];
     body.innerHTML = `
       <section class="mm-screen" aria-labelledby="mm-new-title">
         <h2 id="mm-new-title" tabindex="-1">A new town</h2>
@@ -210,11 +201,6 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
           <legend>Landscape</legend>
           <div class="mm-chips" role="radiogroup" aria-label="Landscape">${LANDSCAPES.map((l) => `<button type="button" role="radio" class="mm-chip" data-landscape="${l.id}" aria-checked="${l.id === form.landscape}" tabindex="${l.id === form.landscape ? 0 : -1}">${esc(l.label)}</button>`).join('')}</div>
           <p class="mm-hint" data-hint="landscape"></p>
-        </fieldset>
-        <fieldset class="mm-field">
-          <legend>Townsfolk who walk</legend>
-          <div class="seg" role="radiogroup" aria-label="Townsfolk who walk">${CROWDS.map((c) => `<button type="button" role="radio" data-crowd="${c.id}" aria-checked="${c.id === crowd.id}" aria-pressed="${c.id === crowd.id}">${esc(c.label)}</button>`).join('')}</div>
-          <p class="mm-hint" data-hint="crowd">${esc(crowd.hint)}</p>
         </fieldset>
         <div class="mm-actions">
           <button type="button" class="btn btn-primary mm-found" data-act="found"></button>
@@ -366,8 +352,7 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
   function found() {
     const name = form.name.trim() || suggestName(form.landscape);
     const {version, archetype} = terrainChoice();
-    const crowd = CROWDS.find((c) => c.id === form.crowd) ?? CROWDS[1];
-    pick({kind: 'new', name, seed: seedValue(), terrainVersion: version, archetype, individualCap: crowd.cap});
+    pick({kind: 'new', name, seed: seedValue(), terrainVersion: version, archetype});
   }
 
   async function exportTown(meta) {
@@ -404,13 +389,6 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
       form.found = null;
       syncNew();
       return drawValley();
-    }
-    const crowdBtn = e.target.closest('[data-crowd]');
-    if (crowdBtn) {
-      form.crowd = crowdBtn.dataset.crowd;
-      for (const b of crowdBtn.parentElement.children) { const on = b === crowdBtn; b.setAttribute('aria-checked', String(on)); b.setAttribute('aria-pressed', String(on)); }
-      body.querySelector('[data-hint="crowd"]').textContent = CROWDS.find((c) => c.id === form.crowd).hint;
-      return;
     }
     const prefBtn = e.target.closest('.seg[data-pref] button');
     if (prefBtn) {
