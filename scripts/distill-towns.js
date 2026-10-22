@@ -12,7 +12,14 @@
 //   ratio         cand vs ref over the noise floor: about 1 when the candidate
 //                 is as close to the reference as the reference is to itself;
 //   shift         the mean signed difference (candidate − reference) over seeds,
-//                 with a bootstrap 90% interval over runs.
+//                 with a bootstrap 90% interval over runs, and a two-sided p value
+//                 from permuting candidate and reference labels within each seed;
+//   spread        the candidate's within-seed standard deviation over the
+//                 reference's (pooled over seeds), with a bootstrap 90% interval:
+//                 about 1 when the candidate's towns vary as much as the reference's.
+// The ratio is not a test of fidelity on its own: a candidate with no run-to-run
+// variance, sitting at the reference median, scores about 0.71 on a normal
+// outcome. Read it with shift and spread.
 // Population is compared on a log scale (so a ratio of towns, not people).
 import {readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
@@ -80,8 +87,35 @@ function compare(cand, metric) {
     })));
   }
   boots.sort((a, b) => a - b);
+  // Permutation: shuffle the labels within each seed, keeping the group sizes.
+  let extreme = 0;
+  const PERMS = 5000;
+  for (let k = 0; k < PERMS; k++) {
+    const d = mean(shifts.map(({r, c}) => {
+      const all = [...r, ...c];
+      for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
+      return mean(all.slice(r.length)) - mean(all.slice(0, r.length));
+    }));
+    if (Math.abs(d) >= Math.abs(shift) - 1e-12) extreme++;
+  }
+  // Spread: pooled within-seed standard deviation, candidate over reference.
+  const pooledSd = (groups) => {
+    let ss = 0, dof = 0;
+    for (const xs of groups) { if (xs.length < 2) continue; const m = mean(xs); ss += xs.reduce((a, x) => a + (x - m) ** 2, 0); dof += xs.length - 1; }
+    return dof ? Math.sqrt(ss / dof) : NaN;
+  };
+  const spread = pooledSd(shifts.map(({c}) => c)) / pooledSd(shifts.map(({r}) => r));
+  const sboots = [];
+  for (let k = 0; k < 2000; k++) {
+    const pick = (xs) => xs.map(() => xs[Math.floor(random() * xs.length)]);
+    const v = pooledSd(shifts.map(({c}) => pick(c))) / pooledSd(shifts.map(({r}) => pick(r)));
+    if (Number.isFinite(v)) sboots.push(v);
+  }
+  sboots.sort((a, b) => a - b);
   return {noiseFloor: floor.length ? mean(floor) : NaN, candVsRef: mean(across), ratio: mean(across) / mean(floor), shift,
-    lo: boots[Math.floor(0.05 * boots.length)], hi: boots[Math.floor(0.95 * boots.length)], refRuns: floor.length ? undefined : 'one run per seed'};
+    lo: boots[Math.floor(0.05 * boots.length)], hi: boots[Math.floor(0.95 * boots.length)], p: (extreme + 1) / (PERMS + 1),
+    spread, spreadLo: sboots.length ? sboots[Math.floor(0.05 * sboots.length)] : NaN, spreadHi: sboots.length ? sboots[Math.floor(0.95 * sboots.length)] : NaN,
+    refRuns: floor.length ? undefined : 'one run per seed'};
 }
 
 const report = {seeds, ref: ref.name, runs: {}, metrics: {}};
@@ -96,7 +130,8 @@ for (const metric of Object.keys(METRICS)) {
     const r = compare(g, metric);
     report.metrics[metric][g.name] = r;
     console.log(`  ${g.name.padEnd(12)} noise floor ${r.noiseFloor.toFixed(3)}  vs ${ref.name} ${r.candVsRef.toFixed(3)}  ratio ${r.ratio.toFixed(2)}  ` +
-      `shift ${r.shift >= 0 ? '+' : ''}${r.shift.toFixed(3)} [${r.lo.toFixed(3)}, ${r.hi.toFixed(3)}]`);
+      `shift ${r.shift >= 0 ? '+' : ''}${r.shift.toFixed(3)} [${r.lo.toFixed(3)}, ${r.hi.toFixed(3)}] p ${r.p.toFixed(3)}  ` +
+      `spread ${Number.isFinite(r.spread) ? `${r.spread.toFixed(2)} [${r.spreadLo.toFixed(2)}, ${r.spreadHi.toFixed(2)}]` : 'n/a'}`);
   }
 }
 console.log('\npopulation at year 150, per seed:');
