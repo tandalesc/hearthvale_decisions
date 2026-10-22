@@ -11,6 +11,8 @@
 #   /work/env/local.env     the decision service settings (labels come from the teacher)
 #
 #   docker build -f Dockerfile.loop -t hearthvale-loop .
+#   # The simulation imports three.js; give the mounted repository its runtime packages once:
+#   docker run --rm -v LOOP_DIR/hearthvale:/app -w /app node:22-slim npm ci --omit=dev --ignore-scripts
 #   docker run -d --name hearthvale-loop --restart unless-stopped --network host --cpus 4 --memory 13g \
 #     -v LOOP_DIR:/work -v NOVEL_DIR:/work/hearthvale/data/novel:ro -v STUDENTS_DIR:/work/students \
 #     hearthvale-loop node scripts/distill-loop-watch.js --every 60 -- --publish
