@@ -15,6 +15,7 @@ import {loadNarrator, loadRenderer, loadSim} from './ui/bridge.js';
 import {createInlineHost, createWorkerHost} from './sim-host.js';
 import {useTerrain} from './terrain.js';
 import {createApp} from './ui/app.js';
+import {createLoading, painted} from './ui/loading.js';
 import {createPrefs} from './ui/prefs.js';
 import {createAudio} from './audio/index.js';
 import {rapidsSources} from './river.js';
@@ -46,8 +47,12 @@ const store = {
   remove(key) { try { localStorage.removeItem(key); } catch { /* ignore */ } },
 };
 
+// The loading screen (index.html) is already showing; main.js moves it on.
+const loader = createLoading();
+
 boot().catch((err) => {
   console.error(err);
+  loader.hide();
   document.body.insertAdjacentHTML('beforeend', '<p style="position:fixed;inset:auto 16px 16px;padding:12px 16px;border-radius:12px;background:#fafbf2;color:#2f3f2f;font:15px system-ui">Hearthvale could not start. Reload the page to try again.</p>');
 });
 
@@ -68,6 +73,8 @@ function setIntent(intent) {
 async function boot() {
   // The sim and the renderer load while the player looks at the menu.
   const loading = Promise.all([loadSim(params), loadRenderer(params)]);
+  // The narrator's chunks follow at once, fetched while the town is read or founded.
+  const narrating = loading.then(([s]) => loadNarrator(s.kind)).catch(() => null);
   const prefs = createPrefs();
 
   // ---------- the main menu ----------
@@ -79,8 +86,10 @@ async function boot() {
     try {
       const {createMainMenu} = await import('./ui/menu/menu.js');
       menu = createMainMenu({saves, prefs, version, start: intent?.screen});
+      loader.toMenu();
     } catch (err) {
       console.error('[hearthvale] the main menu failed; continuing the last town', err);
+      loader.show();
     }
   }
 
@@ -138,6 +147,7 @@ async function boot() {
   let info = null;
   async function openChoice(choice) {
     const h = await getHost();
+    loader.phase('chronicle');
     if (choice.kind === 'new') {
       const r = await h.init({...choice, kind: 'new', name: choice.name || suggestName(choice.archetype)}, performance.now());
       if (r.error) throw new Error('A new town could not be founded.');
@@ -166,16 +176,28 @@ async function boot() {
       const choice = await menu.choose();
       const name = choice.kind === 'new' ? choice.name : choice.name ?? (await saves.list()).find((t) => t.id === choice.id)?.name;
       menu.busy(choice.kind === 'new' ? `Founding ${name}…` : `Opening ${name || 'your town'}…`);
+      loader.show({name, founding: choice.kind === 'new'});
       try {
         ({info, slot: slotId} = await openChoice(choice));
         break;
       } catch (err) {
         console.warn('[hearthvale] could not open the town', err);
+        loader.pause();
         await menu.fail(err.message);
       }
     }
+    // The loading screen covers it now.
+    menu.close();
+    menu = null;
   } else {
+    loader.show({fade: false});
+    // The town's name while the code loads: the save it will most likely continue.
+    if (!fixture && intent?.kind !== 'new') {
+      const named = intent?.kind === 'load' ? saves.list().then((l) => l.find((t) => t.id === intent.id)) : saves.latest();
+      named.then((t) => loader.name(t?.name), () => {});
+    }
     const h = await getHost();
+    loader.phase('chronicle');
     if (fixture) {
       const r = await h.init({kind: 'fixture', name: fixture}, performance.now());
       if (r.info) info = r.info;
@@ -199,14 +221,16 @@ async function boot() {
       }
     }
     if (!info) {
+      loader.founding();
       // "Start a new town from seed…" in Settings leaves the seed in the intent.
       ({info, slot: slotId} = await openChoice({kind: 'new', seed: intent?.seed ?? null}));
     }
     if (fixture && persist && !slotId) slotId = newSlotId();
   }
+  loader.name(info.townName);
   // This thread's valley: the renderer, picking, the camera and the water sounds read it.
   useTerrain(info.terrain.seed, info.terrain.version, info.terrain.archetype);
-  const narrator = await loadNarrator(sim.kind);
+  const narrator = await narrating;
   // The inline host keeps notes and card prose through this thread's narrator.
   host.useNarrator(narrator && {facts: narrator.facts, peekNote: narrator.peekNote, keepNote: narrator.keepNote, touchNote: narrator.touchNote}, narrator?.startProseKeeper ?? null);
   const audio = createAudio(prefs);
@@ -223,6 +247,9 @@ async function boot() {
     return canvas;
   };
   let world;
+  loader.phase('land');
+  // The land, woods and HUD are built in long synchronous steps: let each phase paint first.
+  if (loader.active) await painted();
   try {
     world = renderer.createWorld(makeCanvas(), {quality: prefs.get('quality'), batterySaver: prefs.get('batterySaver')});
   } catch (err) {
@@ -232,6 +259,17 @@ async function boot() {
     world = createWorld(makeCanvas(), {quality: prefs.get('quality'), batterySaver: prefs.get('batterySaver')});
     renderer.kind = 'stub-fallback';
   }
+  loader.phase('town');
+  if (loader.active) await painted();
+  // The loading screen goes once the town is drawn: the renderer's first real frame
+  // (built and its materials compiled), or the first update of a world without that signal.
+  let townDrawn = false;
+  const townShown = () => {
+    if (townDrawn) return;
+    townDrawn = true;
+    loader.done();
+  };
+  world.onFirstFrame?.(townShown);
   // The in-game Motion setting also calms the 3D world (weather, birds, sway).
   const applyWorldMotion = () => world?.setReducedMotion?.(prefs.get('motion') === 'reduced');
   applyWorldMotion();
@@ -452,6 +490,7 @@ async function boot() {
   host.onFail((message) => {
     failed = true;
     console.error('[hearthvale] the sim worker stopped:', message);
+    loader.hide();
     app.notices.nudge('The town stopped working. Reopen it from its last save.', {icon: 'refresh', onClick: () => {
       leaving = true;
       if (slotId && persist) setIntent({kind: 'load', id: slotId});
@@ -478,8 +517,11 @@ async function boot() {
         world.update(view, now / 1000, dt);
         worldErrors = 0;
         if (thumbWaiters.length) takeThumb();
-        // The menu fades out once the town is on screen behind it.
-        if (menu) { menu.close(); menu = null; }
+        if (!townDrawn) {
+          if (!world.onFirstFrame) townShown();
+          // Built, but the first draw waits for its materials to compile.
+          else loader.phase('lamps');
+        }
       } catch (err) {
         if (worldErrors++ === 0) console.error('[hearthvale] render failed', err);
         if (worldErrors === 30) swapToStubWorld();
@@ -504,6 +546,7 @@ async function boot() {
     try { world.dispose?.(); } catch { /* already broken */ }
     world = createWorld(makeCanvas(), {quality: prefs.get('quality'), batterySaver: prefs.get('batterySaver')});
     renderer.kind = 'stub-fallback';
+    townShown();
     window.hearthvale.world = world;
     app.setWorld(world);
   }
