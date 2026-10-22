@@ -562,6 +562,14 @@ void main() {
   float rough = max(riffle, white);
   // Strength: pools lie glassy, riffles and white water break up.
   float calm = smoothstep(0.0, 0.35, depth) * (1.0 + 1.6 * rough) * (1.0 - 0.55 * pool) + rough * 0.5;
+  #ifdef CALM
+    // Delta creeks are shallow: keep a breath of ripple and a water colour,
+    // or they mirror the pale sky flat and read as roads.
+    calm = max(calm, 0.55 * smoothstep(0.0, 0.08, depth));
+    float bodyDepth = max(depth, 0.4);
+  #else
+    float bodyDepth = depth;
+  #endif
   #ifdef STILL
     // Wind on open water comes in broad patches (cat's paws and calm slicks),
     // which also hides the ripple tile's repeat.
@@ -622,7 +630,7 @@ void main() {
     // A river mouth takes on the open water's colour as it fades into it.
     deep = mix(deep, vec3(0.012, 0.05, 0.085), vStill * 0.8);
   #endif
-  vec3 body = mix(shallow, deep, smoothstep(0.05, 0.75, max(depth, riffle * 0.5) + pool * 0.2));
+  vec3 body = mix(shallow, deep, smoothstep(0.05, 0.75, max(bodyDepth, riffle * 0.5) + pool * 0.2));
   body = mix(body, body * vec3(0.8, 0.88, 0.95), pool * 0.5);
   body = mix(body, vec3(0.16, 0.26, 0.24), white * 0.45);
   float shadow = 1.0;
@@ -662,6 +670,9 @@ void main() {
   // A ford is shallow but still a river: keep it mostly opaque and green so
   // the pale bed never reads as a translucent slab.
   alpha = max(alpha, riffle * 0.86 * smoothstep(0.0, 0.08, depth));
+  #ifdef CALM
+    alpha = max(alpha, 0.85 * smoothstep(0.0, 0.08, depth));
+  #endif
   col = mix(col, col * vec3(0.9, 1.04, 1.0), riffle * 0.5);
   #if WATER_TIER > 0
     // Shoreline foam: a broken band near the waterline, drifting with the flow.
