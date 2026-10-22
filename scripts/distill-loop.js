@@ -1,20 +1,27 @@
 // The continual-update loop for decision students (docs/design/decision-distillation.md §7).
 //
-//   node scripts/distill-loop.js [--state data/loop/state.json] [--publish] [--dry] [--min-clients 2]
+//   node scripts/distill-loop.js [--state data/loop/state.json] [--publish] [--dry] [--min-clients 1]
+//   node scripts/distill-loop-watch.js --every 60 -- --publish   (a cycle whenever enough is new)
 //
 // One run turns what players' students flagged into the next student version:
 //   1. Read the novel-question log the proxy keeps (server/system1.js
 //      fileNovelLog: data/novel/novel.jsonl) and the labels the proxy already
 //      got from the teacher for it (novel.jsonl.labels.jsonl).
-//   2. Input gates. Every question is validated again. It must have been
-//      reported by --min-clients distinct clients (salted hashes; nothing
-//      identifies a player). Its snapshot is checked against everything the
-//      headless towns ever produced: a pair of categorical field values no
-//      simulated town showed is "unseen". An ordinary state has 0-2 (rare but
-//      real combinations); an impossible one many. A question with more than
-//      `maxUnseenPairs` needs `quarantineClients` reports before it is used. Labels count only from the
-//      teacher model (`teacher` in the state's config; any model the service
-//      reports when unset), with a full distribution.
+//   2. Input gates. Every question is validated again, and one already trained
+//      on (its key is in a training file) is skipped. One report is enough
+//      (--min-clients, default 1): labels come only from the teacher, so a
+//      single player can at worst point the teacher at odd states, and the
+//      model gates judge the result. What one player can do is bounded instead:
+//      at most `maxPerClient` questions per client per cycle (clients are
+//      salted hashes; nothing identifies a player), the rest deferred to later
+//      cycles in the order they arrived. Each snapshot is checked against
+//      everything the headless towns produced: a pair of categorical field
+//      values no simulated town showed is "unseen". An ordinary state has 0-2;
+//      an impossible one many. Questions with more than `maxUnseenPairs` are
+//      "unusual" and make up at most `maxUnusualShare` of a cycle unless
+//      `quarantineClients` players reported them; the rest wait. Labels count
+//      only from the teacher model (`teacher` in the state's config; any model
+//      the service reports when unset), with a full distribution.
 //   3. Questions still without a label are sent to the teacher now, at `qps`.
 //   4. The next version warm-starts from the current one (train_decision_student.py
 //      --init-from: new vocabulary rows, no rebuild) on everything trained so far
@@ -37,7 +44,7 @@
 //    "realplay": "data/distill/realplay-test.jsonl",         // frozen, teacher-labelled, never trained on
 //    "realplayQuestions": "data/distill/gate-teacher/questions.jsonl", "baseline": "data/distill/train-a.jsonl",
 //    "reference": ["data/distill/onpolicy-1", ...],          // collection dirs whose states define "seen"
-//    "config": {"minClients": 2, "excludeKinds": [...], ...}}  // overrides of the defaults below;
+//    "config": {"maxPerClient": 400, "excludeKinds": [...], ...}}  // overrides of the defaults below;
 //                                                            // excludeKinds: kinds left to the hosted model
 import {spawn} from 'node:child_process';
 import {createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync, createWriteStream, statSync} from 'node:fs';
@@ -56,7 +63,8 @@ const statePath = resolve(ROOT, flag('state', 'data/loop/state.json'));
 if (!existsSync(statePath)) throw new Error(`No loop state at ${statePath}; the header of scripts/distill-loop.js shows its shape`);
 const S = JSON.parse(readFileSync(statePath, 'utf8'));
 const cfg = {
-  novel: 'data/novel/novel.jsonl', teacher: null, minClients: 2, quarantineClients: 3, maxUnseenPairs: 2, minRows: 50, qps: 40,
+  novel: 'data/novel/novel.jsonl', teacher: null, minClients: 1, maxPerClient: 400, maxUnusualShare: 0.25, quarantineClients: 3, maxUnseenPairs: 2,
+  minRows: 50, qps: 40,
   epochs: 6, lr: 1e-3, maxBundleKB: 450, maxCachedUs: 400, tolerance: 0.03, kindTolerance: 0.2, maxBias: 0.05, tail: [0.67, 1.5],
   workShareDelta: 3, canary: {seeds: 4, start: 65, years: 40}, publishDir: 'public/students', excludeKinds: [],
   ...S.config,
@@ -103,7 +111,7 @@ function pairs(snapshot) {
 const byKey = new Map();
 for await (const l of readLines(p(cfg.novel))) {
   let e = byKey.get(l.key);
-  if (!e) byKey.set(l.key, (e = {q: {kind: l.kind, context: l.context, allowed: l.allowed, state: l.state}, clients: new Set(), reasons: new Set()}));
+  if (!e) byKey.set(l.key, (e = {q: {kind: l.kind, context: l.context, allowed: l.allowed, state: l.state}, first: l.client, clients: new Set(), reasons: new Set()}));
   e.clients.add(l.client);
   e.reasons.add(l.reason);
 }
@@ -123,9 +131,13 @@ else {
   for (const dir of S.reference ?? []) for await (const s of readLines(p(join(dir, 'states.jsonl')))) for (const pr of pairs(s.snapshot)) reference.add(pr);
   writeFileSync(refCache, JSON.stringify({dirs: S.reference ?? [], pairs: [...reference]}));
 }
-const verdicts = {invalid: 0, fewClients: 0, quarantined: 0, accepted: 0};
-const accepted = [];
+// Keys already trained on, from every training file.
+const trained = new Set();
+for (const f of S.train) for await (const r of readLines(p(f))) if (r.key) trained.add(r.key);
+const verdicts = {invalid: 0, trained: 0, fewClients: 0, deferredClient: 0, deferredUnusual: 0, accepted: 0};
+const usual = [], unusual = [];
 for (const [key, e] of byKey) {
+  if (trained.has(key)) { verdicts.trained++; continue; }
   let question, state;
   try {
     question = validateQuestion({kind: e.q.kind, id: 'n', context: e.q.context, ...(e.q.allowed ? {allowed: e.q.allowed} : {})});
@@ -134,10 +146,25 @@ for (const [key, e] of byKey) {
   } catch { verdicts.invalid++; continue; }
   if (e.clients.size < cfg.minClients) { verdicts.fewClients++; continue; }
   const unseen = reference.size ? pairs(state).filter((pr) => !reference.has(pr)).length : 0;
-  if (unseen > cfg.maxUnseenPairs && e.clients.size < cfg.quarantineClients) { verdicts.quarantined++; continue; }
-  verdicts.accepted++;
-  accepted.push({key, question, state, unseen, reasons: [...e.reasons]});
+  const q = {key, question, state, unseen, client: e.first, reasons: [...e.reasons]};
+  (unseen > cfg.maxUnseenPairs && e.clients.size < cfg.quarantineClients ? unusual : usual).push(q);
 }
+// Per-client cap, in arrival order; unusual states up to their share of the cycle.
+const perClient = new Map(), accepted = [];
+const take = (q) => {
+  const n = perClient.get(q.client) ?? 0;
+  if (n >= cfg.maxPerClient) return false;
+  perClient.set(q.client, n + 1);
+  accepted.push(q);
+  return true;
+};
+for (const q of usual) if (!take(q)) verdicts.deferredClient++;
+let unusualLeft = Math.ceil(cfg.maxUnusualShare * (usual.length + unusual.length));
+for (const q of unusual) {
+  if (unusualLeft <= 0) { verdicts.deferredUnusual++; continue; }
+  if (take(q)) unusualLeft--; else verdicts.deferredClient++;
+}
+verdicts.accepted = accepted.length;
 report.steps.inputGates = {...verdicts, referencePairs: reference.size};
 log(`input gates: ${JSON.stringify(verdicts)} (reference pairs ${reference.size})`);
 save();
