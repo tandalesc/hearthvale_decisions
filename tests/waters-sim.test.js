@@ -11,9 +11,10 @@ const seedFor = (archetype) => {
 };
 
 // Each archetype's valley grown for decades: no building stands in the water,
-// mills and quays keep to the river, and no walker stands in deep water.
+// water mills and quays keep to the river (windmills stand where the wind is), and no
+// walker stands in deep water.
 for (const archetype of ARCHETYPES) {
-  test(`${archetype}: buildings keep out of the water, mills keep to the river, walkers never in the deep`, async () => {
+  test(`${archetype}: buildings keep out of the water, water mills keep to the river, walkers never in the deep`, async () => {
     const { createState, fastForward, stepTick } = await import('../src/sim/index.js');
     const { createRoutePlanner } = await import('../src/route-planner.js');
     const { deckHeightAt } = await import('../src/sim/bridges.js');
@@ -25,7 +26,7 @@ for (const archetype of ARCHETYPES) {
       if (b.type === 'bridge') continue;
       const fb = footprintBank(b, 0);
       assert.ok(fb.minBankCore > -0.5, `${b.type} ${b.id} stands out of the water (${fb.minBankCore.toFixed(2)})`);
-      if (b.type === 'mill' || b.type === 'quay') {
+      if ((b.type === 'mill' && b.variant !== 'windmill') || b.type === 'quay') {
         assert.equal(T.nearestWaterKind(fb.nearest.x, fb.nearest.z), T.KIND.RIVER, `${b.type} ${b.id} is on the river`);
       }
     }
