@@ -337,8 +337,8 @@ function colorMaterial(grade) {
     transparent: true,
     depthWrite: false,
     polygonOffset: true,
-    polygonOffsetFactor: -1,
-    polygonOffsetUnits: -2,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -4,
   });
   patchMaterial(material, grade, {
     key: 'decal-color',
@@ -347,7 +347,7 @@ function colorMaterial(grade) {
     vertexBegin: /* glsl */ `
       vec2 decalLocal = position.xz * iDecal.xy;
       transformed = vec3(iCenter.x + decalLocal.x, 0.0, iCenter.z + decalLocal.y);
-      transformed.y = landHeight(transformed.xz) + 0.04;
+      transformed.y = landHeight(transformed.xz) + 0.06;
       vDecalLocal = decalLocal;
       vDecalWorld = transformed.xz;
       vDecal = iDecal;
@@ -382,8 +382,11 @@ export function createDecals(ctx) {
   // Tree shadows go into the ground's shadow surface (shadowsurface.js),
   // drawn before the frame; nothing of them is blended over the frame.
   const blobMesh = new THREE.Mesh(blobGeo, contactMaterial(grade, false, ctx.shadowSurface ? 'cover' : undefined));
-  // Coloured ground.
-  const colorGeo = gridGeometry(6);
+  // Coloured ground. A park can span 30-40 m: the grid must follow the ground
+  // about as finely as the terrain mesh does (1-2 m), or the terrain's
+  // triangles poke through a lawn wherever the ground bends (pad edges,
+  // banks) and it shows only in pieces.
+  const colorGeo = gridGeometry(32);
   const colorSet = instanceSet(colorGeo, [['iCenter', 3], ['iDecal', 4], ['iColor', 3]], 64);
   const colorMesh = new THREE.Mesh(colorGeo, colorMaterial(grade));
   colorMesh.receiveShadow = true;
