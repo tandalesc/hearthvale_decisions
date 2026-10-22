@@ -1145,6 +1145,42 @@ test('a basic bridge is wanted within two years of the first cross-river househo
   assert.ok(year != null && year <= 2, `wanted after ${year} years`);
 });
 
+test('a walker caught in a ford a new bridge has closed wades out the shallow way, never across the channel', async () => {
+  const { fixtureState } = await import('../src/sim/index.js');
+  const { createRoutePlanner } = await import('../src/route-planner.js');
+  const s = fixtureState('town');
+  const routes = createRoutePlanner({ worker: false, clock: () => 0 });
+  routes.tick(s, 4);
+  const g = navGrid(s), { water } = terrainGrid();
+  const closed = [];
+  for (let i = 0; i < water.length; i++) if (water[i] === 2 && !Number.isFinite(g.cost[i])) closed.push(i);
+  assert.ok(closed.length > 0, 'a bridge has closed the fords beside it');
+  const deep = (x0, z0, x1, z1) => {
+    const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.25);
+    for (let k = 0; k <= n; k++) {
+      const x = x0 + (x1 - x0) * k / n, z = z0 + (z1 - z0) * k / n;
+      if (g.water[Math.floor((z - g.oz) / g.cell) * g.W + Math.floor((x - g.ox) / g.cell)] === 1) return true;
+    }
+    return false;
+  };
+  let planned = 0;
+  const wading = [];
+  for (const i of closed) {
+    const { x, z } = cellCenter(i);
+    for (const [tx, tz] of [[45, 135], [-120, 100], [-60, -40], [60, -60]]) {
+      let route;
+      routes.plan(s, x, z, tx, tz, r => { route = r; });
+      for (let t = 0; t < 400 && route === undefined; t++) routes.tick(s, 4);
+      if (!route || route.length < 4) continue;
+      planned++;
+      if (deep(route[0], route[1], route[2], route[3]) && wading.length < 3) wading.push(route.slice(0, 4).map(v => +v.toFixed(1)));
+    }
+  }
+  routes.dispose();
+  assert.ok(planned > 50, `enough routes to judge: ${planned}`);
+  assert.deepEqual(wading, [], 'first legs that wade deep water');
+});
+
 test('walkers in a town use the bridges and never stand in deep water', async () => {
   const { fixtureState, stepTick } = await import('../src/sim/index.js');
   const { createRoutePlanner } = await import('../src/route-planner.js');

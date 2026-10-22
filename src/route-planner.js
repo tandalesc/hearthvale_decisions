@@ -101,9 +101,13 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
     // Start where the walker stands. A walker mid-ford or on a bridge deck starts
     // there too: nearestOpen only gives dry land, which can be across the deep
     // channel, and the first leg (from the walker to that cell) would wade it.
+    // A walker in a ford that has just closed (a bridge opened nearby) wades
+    // back out the way the ford goes, never across the deep channel.
     const here = cellOf(x0, z0);
-    const from = here >= 0 && (g.water[here] === 2 || g.water[here] === 3) && Number.isFinite(g.cost[here])
-      ? here : nearestOpen(state, here, 6, true);
+    const wet = here >= 0 && g.water[here] > 0;
+    let from = wet && (g.water[here] === 2 || g.water[here] === 3) && Number.isFinite(g.cost[here]) ? here : -1;
+    if (from < 0 && wet) from = wadeOut(g, x0, z0, here);
+    if (from < 0) from = nearestOpen(state, here, 6, true);
     // Goals in the water or inside a wall move to the nearest open ground.
     let to = cellOf(goal.x, goal.z);
     let target = { x: goal.x, z: goal.z };
@@ -202,6 +206,48 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
 }
 
 const GRID_ARRAYS = ['cost', 'water', 'height', 'nodeX', 'nodeZ', 'nodeLinks'];
+
+// From a walker standing in water at (x0, z0), cell `here`: the nearest passable
+// cell it can wade to, searching through shallow water only (fords, decks), and
+// whose straight leg from the walker crosses no deep water. -1 if none is near.
+const WADE_STEPS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+function wadeOut(g, x0, z0, here, radius = 12) {
+  const { W, H, water, cost } = g;
+  const seen = new Set([here]);
+  let frontier = [here];
+  for (let step = 0; step < radius && frontier.length; step++) {
+    const next = [];
+    for (const i of frontier) {
+      const x = i % W, z = (i - x) / W;
+      for (const [dx, dz] of WADE_STEPS) {
+        const nx = x + dx, nz = z + dz;
+        if (nx < 0 || nz < 0 || nx >= W || nz >= H) continue;
+        const j = nz * W + nx;
+        if (seen.has(j)) continue;
+        seen.add(j);
+        // Deep water is never waded; dry ground that is walled off is not a way through.
+        if (water[j] === 1 || (!water[j] && !Number.isFinite(cost[j]))) continue;
+        if (Number.isFinite(cost[j]) && shallowLeg(g, x0, z0, j)) return j;
+        next.push(j);
+      }
+    }
+    frontier = next;
+  }
+  return -1;
+}
+
+// Does the straight leg from (x0, z0) to cell j's centre keep out of deep water?
+function shallowLeg(g, x0, z0, j) {
+  const { W, ox, oz, cell, water } = g;
+  const x1 = ox + (j % W + 0.5) * cell, z1 = oz + (Math.floor(j / W) + 0.5) * cell;
+  const steps = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / (cell * 0.25));
+  for (let k = 0; k <= steps; k++) {
+    const t = steps ? k / steps : 0;
+    const i = Math.floor((z0 + (z1 - z0) * t - oz) / cell) * W + Math.floor((x0 + (x1 - x0) * t - ox) / cell);
+    if (water[i] === 1) return false;
+  }
+  return true;
+}
 
 // The cells where cost b differs from a (by their bits) and b's values there, or null
 // when there are many (sending the whole array is then as cheap).
