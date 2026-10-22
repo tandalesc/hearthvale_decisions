@@ -1,6 +1,6 @@
 // The continual-update loop for decision students (docs/design/decision-distillation.md §7).
 //
-//   node scripts/distill-loop.js [--state data/loop/state.json] [--publish] [--dry] [--min-clients 1]
+//   node scripts/distill-loop.js [--state data/loop/state.json] [--publish] [--dry] [--min-clients 1] [--fresh "TRAINER ARGS"]
 //   node scripts/distill-loop-watch.js --every 60 -- --publish   (a cycle whenever enough is new)
 //
 // One run turns what players' students flagged into the next student version:
@@ -26,6 +26,9 @@
 //   4. The next version warm-starts from the current one (train_decision_student.py
 //      --init-from: new vocabulary rows, no rebuild) on everything trained so far
 //      plus the new rows; its confidence head is retrained; it is exported.
+//      --fresh "ARGS" trains it from scratch instead, with those trainer arguments
+//      (a new architecture, say "--arch set --state-layers 0 --epochs 20 ..."); the
+//      gates and the rest of the cycle are the same.
 //   5. Model gates, against the current version on the same sets: real-play KL
 //      (distinct and traffic-weighted), each busy kind's traffic-weighted KL,
 //      the largest signed option bias, rare-option ratios, KL on the held-out new
@@ -70,7 +73,7 @@ const cfg = {
   ...S.config,
 };
 if (flag('min-clients', null)) cfg.minClients = Number(flag('min-clients'));
-const publish = args.includes('--publish'), dry = args.includes('--dry');
+const publish = args.includes('--publish'), dry = args.includes('--dry'), fresh = flag('fresh', null);
 const next = S.current.version + 1;
 const out = resolve(ROOT, 'data', 'loop', `v${next}`);
 mkdirSync(out, {recursive: true});
@@ -216,9 +219,10 @@ await writeJsonl(newRows, rows);
 const py = S.python ?? join(S.twm, '.venv', 'bin', 'python');
 const runDir = join(S.twm, 'results', 'decision_student', 'loop', `v${next}`);
 const trainFiles = [...S.train.map(p), newRows];
-log(`training v${next}: warm start from ${S.current.run} on ${trainFiles.length} files (${rows.length} new rows)`);
-await run(py, ['-u', 'scripts/train_decision_student.py', ...trainFiles, '--init-from', S.current.run, '--epochs', String(cfg.epochs), '--lr', String(cfg.lr),
-  '--batch-size', '1024', '--out', runDir], {cwd: S.twm});
+log(`training v${next}: ${fresh ? `from scratch (${fresh})` : `warm start from ${S.current.run}`} on ${trainFiles.length} files (${rows.length} new rows)`);
+const trainArgs = fresh ? fresh.split(/\s+/).filter(Boolean) : ['--init-from', S.current.run, '--epochs', String(cfg.epochs), '--lr', String(cfg.lr)];
+await run(py, ['-u', 'scripts/train_decision_student.py', ...trainFiles, ...trainArgs, '--batch-size', '1024', '--out', runDir], {cwd: S.twm});
+report.steps.trainArgs = trainArgs;
 await run(py, ['-u', 'scripts/train_error_head.py', runDir, '--data', ...trainFiles, '--eval', p(S.realplay)], {cwd: S.twm});
 const bundle = join(out, `decisions.v${next}.json`);
 await run(py, ['scripts/export_decision_student.py', runDir, bundle, '--data', p(S.realplay), '--fixture', '64', '--version', String(next),
