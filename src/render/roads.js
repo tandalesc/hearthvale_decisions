@@ -381,6 +381,32 @@ vec2 stoneSlope(vec2 w, float scale, float amp, float edge, float round, float p
 }
 #endif
 
+#ifdef GROUND_RELIEF
+// Ground relief (docs/design/graphics-review.md P1): the slope of trodden
+// soil (bare dirt, trails, tracks, gravel), which the terrain adds to gBumpW
+// once it knows where puddles and snow flatten it.
+vec3 gSoil = vec3(0.0);
+
+// 1 while a noise cell of \`size\` metres spans 6 pixels or more, 0 under 3:
+// the relief fades out before it can shimmer (and is skipped beyond).
+float reliefFade(float size, float pxM) {
+  return smoothstep(3.0, 6.0, size / max(pxM, 1e-4));
+}
+
+// Pebbles: rounded stones where value noise at \`freq\` per metre peaks. x is
+// the stone (0..1, for colour), yz the world slope of \`amp\` metres of it.
+// Two octaves on grids turned against each other: one alone thresholds into
+// blobs that line up with its grid (they read as pixel art).
+vec3 pebbles(vec2 p, float freq, float amp) {
+  mat2 r1 = mat2(0.8, 0.6, -0.6, 0.8), r2 = mat2(0.28, -0.96, 0.96, 0.28);
+  vec3 a = vnoised(r1 * p * freq), b = vnoised(r2 * p * (freq * 1.7) + 3.1);
+  float v = a.x * 0.6 + b.x * 0.4;
+  vec2 g = (transpose(r1) * a.yz * 0.6 + transpose(r2) * b.yz * (0.4 * 1.7)) * freq;
+  float t = clamp((v - 0.55) / 0.2, 0.0, 1.0);
+  return vec3(t * t * (3.0 - 2.0 * t), g * (6.0 * t * (1.0 - t) / 0.2 * amp));
+}
+#endif
+
 #ifdef SPECULAR
 // Wet sheen (docs/design/micro-detail.md §6): gloss (x) and roughness (y) of
 // wet laid stone, cobbles (sett 0) or setts (1), from the same stones as
@@ -441,11 +467,40 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
   float planned = smoothstep(3.4, 4.0, tier);
   float walls = 1.0 - smoothstep(0.25, 0.75, r.a);
   float n = vnoise(world.xz * 0.9) * 0.6 + vnoise(world.xz * 2.7) * 0.4 - 0.5;
+  #ifdef GROUND_RELIEF
+    // Trodden soil up close: lumps, pebbles and, in dry earth, a network of
+    // cracks (isolines of value noise, never narrower than 1.5 pixels).
+    // soilShade tints the earth colours below; soilSl is the slope.
+    float soilShade = 1.0;
+    vec3 soilSl = vec3(0.0);
+    float lumpK = reliefFade(0.5, px);
+    if (lumpK > 0.0 && (tier < 3.0 || dirt > 0.01)) {
+      vec3 lump = vnoised(world.xz * 2.0 + 13.0);
+      soilSl.xz += lump.yz * (2.0 * 0.02 * lumpK);
+      float pebK = reliefFade(1.0 / 6.3, px);
+      if (pebK > 0.0) {
+        vec3 pb = pebbles(world.xz, 6.3, 0.012);
+        soilSl.xz += pb.yz * pebK;
+        soilShade *= 1.0 + 0.16 * pb.x * pebK;
+      }
+      vec3 cv = vnoised(world.xz * 1.3 + 9.0);
+      float cw = max(0.03, 1.5 * px * 1.3 * length(cv.yz));
+      float ct = clamp(abs(cv.x - 0.5) / cw, 0.0, 1.0);
+      // Only in patches (where the lumps are high), and fewer when wet.
+      float crackK = lumpK * smoothstep(0.45, 0.7, lump.x) * (1.0 - 0.7 * uWet);
+      soilShade *= 1.0 - 0.18 * (1.0 - ct * ct * (3.0 - 2.0 * ct)) * crackK;
+      // 1 cm deep: the walls slope down into the crack.
+      soilSl.xz += cv.yz * (sign(cv.x - 0.5) * 6.0 * ct * (1.0 - ct) / cw * 1.3 * 0.01 * crackK);
+    }
+  #endif
 
   // Bare dirt: wear on ground that is not yet a trail, ragged and patchy.
   float lo = 0.3 + n * 0.32;
   float bareCover = smoothstep(lo, lo + 0.16, dirt) * walls;
   vec3 bare = mix(grass, vec3(0.38, 0.29, 0.17), 0.82);
+  #ifdef GROUND_RELIEF
+    bare *= soilShade;
+  #endif
   vec3 col = mix(grass, bare, bareCover);
   col = mix(col, mix(grass, bare, 0.5), (1.0 - bareCover) * smoothstep(0.08, 0.35, dirt) * 0.35);
 
@@ -465,13 +520,24 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
   vec3 earth = vec3(0.38, 0.29, 0.17);
   vec3 trail = mix(mix(grass, earth, 0.62), earth * 0.94, (1.0 - dc) * 0.55 * lane);
   vec3 dirtC = vec3(0.30, 0.21, 0.12) * (0.92 + 0.16 * vnoise(world.xz * 3.0));
+  #ifdef GROUND_RELIEF
+    trail *= soilShade;
+    dirtC *= soilShade;
+  #endif
   // Tracks: two wheel ruts and a faint grassy crown.
   float rut = exp(-pow((dc - 0.55) / 0.16, 2.0)) * lane;
   vec3 track = dirtC * (1.0 - 0.16 * rut);
   track = mix(track, mix(dirtC, grass, 0.45), (1.0 - smoothstep(0.0, 0.22, dc)) * 0.35 * lane);
   // Grit: soft two-octave noise (a hash per 16 cm square read as pixels up
   // close), flattened to its average once it is under a few pixels.
+  #ifdef GROUND_RELIEF
+    // The same grit, its first octave with a slope: stones 1 cm proud.
+    vec3 gr = vnoised(world.xz * 7.0);
+    float grit = mix(0.5, gr.x * 0.6 + vnoise(world.xz * 19.0 + 5.0) * 0.4, smoothstep(0.06, 0.02, px));
+    vec2 gritSl = gr.yz * (7.0 * 0.6 * 0.012 * reliefFade(1.0 / 7.0, px));
+  #else
   float grit = mix(0.5, vnoise(world.xz * 7.0) * 0.6 + vnoise(world.xz * 19.0 + 5.0) * 0.4, smoothstep(0.06, 0.02, px));
+  #endif
   vec3 gravel = vec3(0.55, 0.48, 0.36) * (0.9 + 0.16 * grit);
   gravel *= 1.0 - 0.07 * rut - 0.08 * smoothstep(0.7, 1.0, dc);
   vec3 cobble = mix(vec3(0.38, 0.36, 0.33), vec3(0.62, 0.60, 0.56), cobbles(world.xz));
@@ -583,6 +649,14 @@ vec4 roadSurface(vec3 world, vec3 grass, float detail) {
       if (setK > 0.0) sl += stoneSlope(world.xz, 1.35, 0.02, 0.42, 0.25, px) * setK;
       gBumpW.xz += sl * reliefK;
     }
+  #endif
+  #ifdef GROUND_RELIEF
+    // Soil relief where earth shows (bare dirt, trails, tracks), grit on
+    // gravel; none on alleys and footways, which are surfaced.
+    float gravelK = smoothstep(2.4, 3.0, tier);
+    float unpaved = 1.0 - max(alleyK, footK);
+    gSoil = soilSl * mix(bareCover, 1.0 - gravelK, cover) * unpaved;
+    gSoil.xz += gritSl * cover * gravelK * (1.0 - smoothstep(3.4, 4.0, tier)) * unpaved;
   #endif
   return vec4(col, max(max(cover, bareCover * 0.8), max(alleyK, footK)));
 }

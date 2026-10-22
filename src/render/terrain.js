@@ -93,8 +93,43 @@ varying float vUp;
 varying float vRiverU;
 varying float vShore;
 varying float vBeach;
+// Ground detail (docs/design/graphics-review.md P1) rides on micro-detail
+// (relief) and specular (the wet-sand sheen). NO_GROUND_DETAIL turns it off
+// on its own, for A/B runs (micro-detail-ab.js --feature=ground).
+#if defined(MICRO_DETAIL) && !defined(NO_GROUND_DETAIL)
+  #define GROUND_RELIEF
+#endif
+#if defined(SPECULAR) && !defined(NO_GROUND_DETAIL)
+  #define GROUND_SHEEN
+#endif
 ${NOISE}
 ${ROAD_GLSL}
+#ifdef GROUND_RELIEF
+// Relief of the ground the roads lie on (grass, sand, shingle, rock): world
+// slope, mixed as the colours are. gGrassW is the share that is sward, gPx
+// metres per pixel, gPud standing water (which lies flat).
+vec3 gGround = vec3(0.0);
+float gGrassW = 1.0;
+float gPx = 1.0;
+float gPud = 0.0;
+
+// Wind ripples on sand, crests about 0.7 m apart, wobbling every couple of
+// metres and dying out in patches: x the crest (-1..1, for colour), yz the
+// slope of amp metres of them. n is the albedo's broad noise.
+vec3 ripples(vec2 p, float n, float amp) {
+  float k = reliefFade(0.7, gPx);
+  if (k <= 0.0) return vec3(0.0);
+  vec2 d = vec2(0.6, 0.8);
+  vec3 w = vnoised(p * 0.45 + 21.0);
+  float ph = dot(p, d) * 9.0 + n * 4.0 + w.x * 3.0;
+  amp *= k * smoothstep(0.2, 0.75, vnoise(p * 0.3 + 7.0) * 0.6 + n * 0.4);
+  return vec3(sin(ph) * amp / 0.012, (d * 9.0 + w.yz * (3.0 * 0.45)) * (cos(ph) * amp));
+}
+#endif
+#ifdef GROUND_SHEEN
+// Wet sand just above the waterline (0..1): it shines in any weather.
+float gWetSand = 0.0;
+#endif
 
 // Ground albedo from position, up-ness of the normal, the distance to the
 // nearest water (e, negative over it) and the shore's character (beach width
@@ -130,6 +165,21 @@ vec3 terrainAlbedo(vec3 p, float up, float e, float beach, out float rock, out f
   float strata = 0.9 + 0.12 * smoothstep(0.3, 0.7, abs(fract(p.y * 0.18 + n * 0.4) - 0.5) * 2.0);
   vec3 c = mix(g, ${lin('#a69d8c')} * (0.9 + 0.2 * n), scree * 0.75);
   c = mix(c, uRockColor * strata * (0.85 + 0.25 * n), rock);
+  #ifdef GROUND_RELIEF
+    gGrassW = 1.0 - scree * 0.75;
+    // Rock faces: knobs from two planes of noise, the plan (p.xz, 1.7 m)
+    // and an upright one (across and up the face, 0.6 m). Two are enough on
+    // a height field: a steep face spans height more than plan.
+    float rk1 = reliefFade(1.7, gPx);
+    if (rock > 0.0 && rk1 > 0.0) {
+      vec3 r1 = vnoised(p.xz / 1.7);
+      vec3 r2 = vnoised(vec2(p.x - p.z, p.y * 1.3) / 0.6 + 5.0);
+      vec3 rs = vec3(r1.y, 0.0, r1.z) * (0.12 / 1.7 * rk1);
+      rs += vec3(r2.y, r2.z * 1.3, -r2.y) * (0.05 / 0.6 * reliefFade(0.6, gPx));
+      gGround = rs * rock;
+      c *= mix(1.0, 0.86 + 0.28 * (r1.x * 0.6 + r2.x * 0.4), rock * rk1);
+    }
+  #endif
   // Beaches: pale sand above the sea's waterline, grey-gold shingle on lake
   // shores, a ragged edge where the grass takes over.
   float bw = max(beach, 0.0);
@@ -140,7 +190,23 @@ vec3 terrainAlbedo(vec3 p, float up, float e, float beach, out float rock, out f
     vec3 shore = mix(shingle, sand, smoothstep(4.0, 10.0, bw));
     // Wet sand: darker and cooler just above the waterline.
     shore = mix(shore * vec3(0.72, 0.74, 0.78), shore, smoothstep(0.0, 1.8, e));
+    #ifdef GROUND_RELIEF
+      // Wind ripples on sand; shingle stays smooth.
+      float sandK = smoothstep(4.0, 10.0, bw);
+      vec3 rip = ripples(p.xz, n, 0.008) * sandK;
+      shore *= 1.0 + 0.04 * rip.x;
+    #endif
     c = mix(c, shore, (1.0 - smoothstep(edge, edge + 2.5, e)) * (1.0 - rock * 0.7));
+    #if defined(GROUND_RELIEF) || defined(GROUND_SHEEN)
+      float shoreW = (1.0 - smoothstep(edge, edge + 2.5, e)) * (1.0 - rock * 0.7);
+    #endif
+    #ifdef GROUND_RELIEF
+      gGround = mix(gGround, vec3(rip.y, 0.0, rip.z), shoreW);
+      gGrassW *= 1.0 - shoreW;
+    #endif
+    #ifdef GROUND_SHEEN
+      gWetSand = (1.0 - smoothstep(0.0, 1.8, e)) * smoothstep(-0.5, -0.1, e) * shoreW;
+    #endif
   }
   // Delta marsh: reed-green flats and dark mud by the creeks.
   float marsh = max(-beach, 0.0);
@@ -153,10 +219,22 @@ vec3 terrainAlbedo(vec3 p, float up, float e, float beach, out float rock, out f
   // Banks: damp sand at the waterline, dry sand above, bed below.
   if (e < 3.0) {
     vec3 sand = ${lin('#d5c48f')};
+    #ifdef GROUND_RELIEF
+      vec3 rip = ripples(p.xz, n, 0.005);
+      sand *= 1.0 + 0.04 * rip.x;
+    #endif
     vec3 bank = mix(${lin('#a39a6c')}, sand, smoothstep(-0.8, 0.4, e));
     bank = mix(${lin('#7d8a6a')}, bank, smoothstep(-1.6, -1.0, e));
     c = mix(c, sand, (1.0 - smoothstep(0.2, 1.6, e)) * 0.75);
     c = mix(c, bank, 1.0 - smoothstep(0.2, 0.6, e));
+    #ifdef GROUND_RELIEF
+      float bankW = 1.0 - (1.0 - (1.0 - smoothstep(0.2, 1.6, e)) * 0.75) * smoothstep(0.2, 0.6, e);
+      gGround = mix(gGround, vec3(rip.y, 0.0, rip.z), bankW);
+      gGrassW *= 1.0 - bankW;
+    #endif
+    #ifdef GROUND_SHEEN
+      gWetSand = max(gWetSand, (1.0 - smoothstep(0.1, 0.7, e)) * smoothstep(-0.4, -0.05, e));
+    #endif
   }
   return c;
 }
@@ -166,6 +244,9 @@ const SHADE_FRAGMENT = /* glsl */ `
   #ifdef GRID
     // The channel strip draws the river banks here (down to the river's mouth).
     if (abs(vRiverU) < uWaterHalf + 2.5 && vWorldP.z > uRiverEnd) discard;
+  #endif
+  #ifdef GROUND_RELIEF
+    gPx = length(fwidth(vWorldP));
   #endif
   float rock, n;
   vec3 ground = terrainAlbedo(vWorldP, vUp, vShore, vBeach, rock, n);
@@ -186,7 +267,21 @@ const SHADE_FRAGMENT = /* glsl */ `
   // distance so it never shimmers.
   float nearK = 1.0 - smoothstep(60.0, 170.0, length(vWorldP - cameraPosition));
   if (nearK > 0.0) {
+    #ifdef GROUND_RELIEF
+      // The same tufts with their slopes: tussocks of a few centimetres
+      // that catch a low sun, each octave faded by its own footprint.
+      vec3 t1 = vnoised(vWorldP.xz * 0.9), t2 = vnoised(vWorldP.xz * 2.7 + 3.0), t3 = vnoised(vWorldP.xz * 7.3);
+      float tuft = t1.x * 0.55 + t2.x * 0.3 + t3.x * 0.15;
+      vec2 tg = t1.yz * (0.9 * 0.05 * reliefFade(1.0 / 0.9, gPx)) + t2.yz * (2.7 * 0.03 * reliefFade(1.0 / 2.7, gPx))
+        + t3.yz * (7.3 * 0.02 * reliefFade(1.0 / 7.3, gPx));
+      gGround.xz += tg * gGrassW * (1.0 - rock) * nearK;
+      // Lay: the sward combed along the prevailing wind, long faint streaks.
+      vec2 ld = vec2(0.894, 0.447);
+      float lay = vnoise(vec2(dot(vWorldP.xz, ld) * 0.25, dot(vWorldP.xz, vec2(-ld.y, ld.x)) * 1.4));
+      grassy *= 1.0 + (lay - 0.5) * 0.1 * nearK;
+    #else
     float tuft = vnoise(vWorldP.xz * 0.9) * 0.55 + vnoise(vWorldP.xz * 2.7 + 3.0) * 0.3 + vnoise(vWorldP.xz * 7.3) * 0.15;
+    #endif
     grassy *= mix(1.0, 0.9 + 0.2 * tuft, nearK);
     grassy = mix(grassy, grassy * vec3(1.1, 1.04, 0.82), smoothstep(0.62, 0.8, tuft) * 0.35 * nearK);
   }
@@ -208,6 +303,11 @@ const SHADE_FRAGMENT = /* glsl */ `
       float scrub = smoothstep(0.1, 0.16, vBankS.y) * smoothstep(0.5, 0.7, vnoise(vWorldP.xz * 0.6 + 4.0));
       gravel = mix(gravel, ground, scrub * 0.6);
       ground = mix(ground, gravel, barK);
+      #ifdef GROUND_RELIEF
+        // The bigger stones stand 2 cm proud.
+        vec3 bp = pebbles(vWorldP.xz, 3.1, 0.02) * reliefFade(1.0 / 3.1, gPx);
+        gGround = mix(gGround, vec3(bp.y, 0.0, bp.z), barK * (1.0 - scrub * 0.6));
+      #endif
     }
   #endif
   // Pull saturation down a touch so ACES does not push grass to neon.
@@ -224,6 +324,13 @@ const SHADE_FRAGMENT = /* glsl */ `
     // Wet sheen only in the rain, faded out with distance.
     gSpecK *= smoothstep(0.1, 0.6, uWet) * (1.0 - smoothstep(250.0, 400.0, length(vWorldP - cameraPosition)));
   #endif
+  #ifdef GROUND_SHEEN
+    // Wet sand just above the waterline shines in any weather: a sheen of
+    // gloss 0.5 and roughness 0.3, blended with whatever the roads set.
+    float wsG = 0.5 * gWetSand * (1.0 - roadA) * (1.0 - smoothstep(250.0, 400.0, length(vWorldP - cameraPosition)));
+    gSpecRough = (gSpecK * gSpecRough + wsG * 0.3) / max(gSpecK + wsG, 1e-4);
+    gSpecK = max(gSpecK, wsG);
+  #endif
   // Wet weather darkens roads more than grass.
   // Wet ground darkens; trodden roads darken most and read as sheened mud.
   col *= 1.0 - uWet * (0.12 + 0.16 * roadA);
@@ -234,6 +341,9 @@ const SHADE_FRAGMENT = /* glsl */ `
       float pud = vnoise(vWorldP.xz * 0.42 + 17.0) * 0.7 + vnoise(vWorldP.xz * 1.3 + 4.0) * 0.3;
       float pk = smoothstep(0.66 - 0.12 * uWet, 0.74 - 0.1 * uWet, pud) * max(roadA, 0.18 * (1.0 - rock)) * smoothstep(0.85, 0.97, vUp);
       pk *= smoothstep(0.15, 0.6, uWet) * (1.0 - smoothstep(0.3, 0.7, uSnow));
+      #ifdef GROUND_RELIEF
+        gPud = pk;
+      #endif
       vec3 skyRefl = mix(uSkyHorizon, uSkyZenith, 0.35) * (1.0 - 0.5 * uNight);
       #ifdef SPECULAR
         // Standing water: a smooth mirror (the specular term reflects the
@@ -256,6 +366,11 @@ const SHADE_FRAGMENT = /* glsl */ `
   float cap = smoothstep(snowline - 5.0, snowline + 5.0, vWorldP.y + (m - 0.5) * 12.0);
   snow = max(snow, cap * smoothstep(0.25, 0.55, vUp) * (1.0 - 0.5 * rock));
   col = mix(col, vec3(0.90, 0.92, 0.94), snow * (0.85 + 0.15 * m));
+  #ifdef GROUND_RELIEF
+    // The ground's relief under the roads, the soil's on them; standing
+    // water and snow lie flat.
+    gBumpW += (gGround * (1.0 - roadA) + gSoil) * (1.0 - snow) * (1.0 - gPud);
+  #endif
   #ifdef SPECULAR
     gSpecK *= (1.0 - snow) * step(uOverlay, 0.5);
   #endif
@@ -352,7 +467,7 @@ function makeMaterial(grade, roads, variant) {
       ${grid ? 'vRiverU = groundRiverU(gXZ);' : 'vRiverU = aRiverU;'}
       ${grid ? 'vShore = groundShore(gXZ); vBeach = groundBeach(gXZ);'
         : variant === 'ring' ? 'vShore = aShore.x; vBeach = aShore.y;'
-          : 'vShore = abs(aRiverU) - uWaterHalf; vBeach = 0.0;'}
+          : 'vShore = abs(aRiverU) - uWaterHalf; vBeach = groundBeach(position.xz);'}
     `,
     fragmentHead: 'uniform float uWaterHalf;\nuniform float uRiverEnd;\nuniform float uFloodplain;\n' + (strip ? 'varying vec2 vBankS;\n' : '') + MICRO_HEAD
       + `#ifdef SPECULAR\n${SPEC_HEAD}\n#endif\n` + SHADE_GLSL,
@@ -685,20 +800,26 @@ export function createTerrain({ scene, grade, roads, quality }) {
     // (specular); the far ring draws no roads.
     const micro = q.microDetail ? 1 : 0;
     const spec = q.specular ? 1 : 0;
+    // The ground's own detail (graphics-review P1) rides on both; only A/B
+    // runs and the dev page's &ground=0 turn it off on its own.
+    const noGround = q.groundDetail === false && (micro || spec) ? 1 : 0;
     for (const m of materials) {
       const ring = m.userData.variant === 'ring';
       const wantMicro = ring ? 0 : micro;
       const wantSpec = ring ? 0 : spec;
+      const wantNoGround = ring ? 0 : noGround;
       if (cloud === (m.defines.CLOUD_SHADOW ? 1 : 0) && wantMicro === (m.defines.MICRO_DETAIL ? 1 : 0)
-        && wantSpec === (m.defines.SPECULAR ? 1 : 0)) continue;
+        && wantSpec === (m.defines.SPECULAR ? 1 : 0) && wantNoGround === (m.defines.NO_GROUND_DETAIL ? 1 : 0)) continue;
       if (cloud) m.defines.CLOUD_SHADOW = 1;
       else delete m.defines.CLOUD_SHADOW;
       if (wantMicro) m.defines.MICRO_DETAIL = 1;
       else delete m.defines.MICRO_DETAIL;
       if (wantSpec) m.defines.SPECULAR = 1;
       else delete m.defines.SPECULAR;
+      if (wantNoGround) m.defines.NO_GROUND_DETAIL = 1;
+      else delete m.defines.NO_GROUND_DETAIL;
       // Off keeps the key it had before the specular term existed.
-      const key = `terrain:${m.userData.variant}:${cloud}:${wantMicro}${wantSpec ? ':spec' : ''}`;
+      const key = `terrain:${m.userData.variant}:${cloud}:${wantMicro}${wantSpec ? ':spec' : ''}${wantNoGround ? ':noground' : ''}`;
       m.customProgramCacheKey = () => key;
       m.needsUpdate = true;
     }

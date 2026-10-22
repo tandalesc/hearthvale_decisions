@@ -2,9 +2,12 @@
 // (docs/design/micro-detail.md): one loaded page per view, the MICRO_DETAIL
 // (or, with --feature=spec, SPECULAR) define of the terrain (paving), of the
 // kit materials (roofs, glass) or of both flipped between interleaved blocks
-// of GPU-timed frames, so load and scene state are shared.
+// of GPU-timed frames, so load and scene state are shared. --feature=ground
+// flips only the ground's own detail (grass, soil, sand, rock relief and the
+// wet-sand sheen; graphics-review P1) on the terrain, with micro-detail and
+// specular left on: off is the High terrain from before it.
 //
-//   node scripts/micro-detail-ab.js [--feature micro|spec] [--target terrain|kit|both]
+//   node scripts/micro-detail-ab.js [--feature micro|spec|ground] [--target terrain|kit|both]
 //        [--tier high] [--blocks 8] [--frames 40] [--only bridge,street40]
 //        [--dpr 1.25] [--out DIR] [--shots] [--views spec]
 //
@@ -13,7 +16,7 @@
 // target drawn alone (aloneOff/On/Delta: the terrain, the buildings, or
 // both). Same server and browser setup as fidelity-shots.js. --target=kit
 // defaults to the roof views, --feature=spec to the spec views (rain and low
-// sun) and target both. --shots also saves an off | on screenshot per view
+// sun) and target both, --feature=ground to the ground views. --shots also saves an off | on screenshot per view
 // (DIR/<name>-ab.jpg, needs ffmpeg); --blocks=0 skips the timing.
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
@@ -57,6 +60,22 @@ const ROOF_VIEWS = {
 
 // Specular (--feature=spec): wet paving and roofs in rain, glass at low sun,
 // close and at the default range, and dry views where only glass shines.
+// Ground detail (--feature=ground): grass, trodden soil and trails, sand,
+// shingle and river banks, rock faces; close, at low sun, and the default range.
+const GROUND_VIEWS = {
+  'grass-28': 'fixture=town&yearT=0.3&cx=-30&cz=10&dist=28&elev=40',
+  'grass-dawn': 'fixture=town&yearT=0.02&weather=clear&cx=-30&cz=10&dist=24&elev=22',
+  'trails-20': 'fixture=town&yearT=0.3&cx=-10&cz=0&dist=20&elev=45',
+  // Worst case: near ground fills the screen, seen from above at 16 m.
+  'ground-top': 'fixture=town&yearT=0.3&cx=-30&cz=10&dist=16&elev=70',
+  'beach-sand': 'seed=3&arch=coast&yearT=0.3&weather=clear&cx=-32&cz=-132&dist=24&elev=32',
+  'lake-shingle': 'seed=9&yearT=0.3&weather=clear&cx=8&cz=88&dist=24&elev=32',
+  'river-bank': 'seed=9&yearT=0.3&weather=clear&cx=-8&cz=-20&dist=20&elev=45',
+  'rock-face': 'seed=9&yearT=0.3&weather=clear&cx=-92&cz=-244&dist=35&elev=30',
+  'town-close': VIEWS['town-close'],
+  'city-autumn': VIEWS['city-autumn'],
+};
+
 const SPEC_VIEWS = {
   'rain-street': 'fixture=city&yearT=0.66&weather=rain&cx=5&cz=-28&dist=25&elev=25',
   'rain-bridge': 'fixture=city&yearT=0.45&weather=rain&cx=9&cz=-105&dist=22&elev=28',
@@ -83,8 +102,9 @@ mkdirSync(out, { recursive: true });
 const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--enable-webgl'] });
 const rows = [];
 try {
-  const viewSet = (args.views ?? (feature === 'spec' ? 'spec' : target === 'kit' ? 'roof' : 'paving'));
-  for (const [name, q] of Object.entries(viewSet === 'spec' ? SPEC_VIEWS : viewSet === 'roof' ? ROOF_VIEWS : VIEWS)) {
+  const viewSet = (args.views ?? (feature === 'spec' ? 'spec' : feature === 'ground' ? 'ground' : target === 'kit' ? 'roof' : 'paving'));
+  const views = { spec: SPEC_VIEWS, roof: ROOF_VIEWS, ground: GROUND_VIEWS, paving: VIEWS }[viewSet];
+  for (const [name, q] of Object.entries(views)) {
     if (only && !only.has(name)) continue;
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: dpr });
     const errors = [];
@@ -114,7 +134,7 @@ try {
       // and specular. The feature not under test keeps the tier's setting.
       const high = tierName === 'high';
       const setMicro = (on) => {
-        const q = { name: tierName, cloudShadow: high, microDetail: feature === 'micro' ? on : high, specular: feature === 'spec' ? on : high };
+        const q = { name: tierName, cloudShadow: high, microDetail: feature === 'micro' ? on : high, specular: feature === 'spec' ? on : high, groundDetail: feature === 'ground' ? on : true };
         if (target !== 'kit') terrain.applyQuality(q);
         if (target !== 'terrain') buildings.applyQuality(q);
       };
@@ -193,7 +213,7 @@ try {
       for (const on of [false, true]) {
         await page.evaluate(async ({ on, target, feature }) => {
           const w = window.__world, { terrain, buildings } = w.internals, tierName = w.stats().tier, high = tierName === 'high';
-          const q = { name: tierName, cloudShadow: high, microDetail: feature === 'micro' ? on : high, specular: feature === 'spec' ? on : high };
+          const q = { name: tierName, cloudShadow: high, microDetail: feature === 'micro' ? on : high, specular: feature === 'spec' ? on : high, groundDetail: feature === 'ground' ? on : true };
           if (target !== 'kit') terrain.applyQuality(q);
           if (target !== 'terrain') buildings.applyQuality(q);
           for (let i = 0; i < 8; i++) { w.requestFrame(); await new Promise((r) => requestAnimationFrame(r)); }

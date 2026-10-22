@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { createGround, GROUND_ORIGIN, GROUND_STEP, GROUND_N, GROUND_GLSL, waterLevel } from '../src/render/ground.js';
+import { createGround, GROUND_ORIGIN, GROUND_STEP, GROUND_N, GROUND_GLSL, waterLevel, smoothBeach } from '../src/render/ground.js';
 import { raycastTerrain } from '../src/render/terrain.js';
 import { generateForest } from '../src/render/trees.js';
 import { heightAt, riverX, setTerrainSeed, terrainSeed, WATER_HALF, bankDistance, waterLevelAt } from '../src/terrain.js';
@@ -193,5 +193,23 @@ test('forest follows the terrain seed and keeps off steep faces and high ground'
     assert.notEqual(g, f, 'a new seed regenerates the forest');
   } finally {
     setTerrainSeed(before);
+  }
+});
+
+test('beach widths taper where the nearest water changes kind; marsh is kept', () => {
+  const n = 40;
+  const data = new Float32Array(n * n * 4);
+  // Sea beach (14 m) on the left half, none on the right, marsh in one corner.
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) data[(j * n + i) * 4 + 3] = i < 20 ? 14 : 0;
+  data[3] = -0.5;
+  smoothBeach(data, n);
+  const at = (i, j) => data[(j * n + i) * 4 + 3];
+  assert.equal(at(0, 0), -0.5);
+  assert.ok(Math.abs(at(5, 20) - 14) < 1e-4, 'far from the change: unchanged');
+  assert.ok(Math.abs(at(35, 20)) < 1e-4);
+  // Across the change it falls step by step, never by more than 2 m a sample.
+  for (let i = 1; i < n; i++) {
+    assert.ok(at(i, 20) <= at(i - 1, 20) + 1e-6);
+    assert.ok(at(i - 1, 20) - at(i, 20) < 2);
   }
 });

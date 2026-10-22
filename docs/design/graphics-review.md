@@ -93,6 +93,14 @@ The rock strata were a hard `step()`, which added stair-like bands across the fa
 
 ### P1. Ground surface detail on High: grass, dirt, sand, rock (value high, effort M, risk low)
 
+> **Built** (2026-10-22), High only. See PERFORMANCE.md "Ground detail on High". Changes from the plan below:
+> - Shingle and sand get no pebble noise: thresholded value noise read as glitchy blobs.
+> - The lay uses a fixed prevailing direction, not `uWind`, which changes with the weather and would swing the pattern.
+> - Two all-tier fixes for the hard sand/grass edge: a tapered beach channel, and the river strip reading it.
+>
+> Off (left) and on (right): ![](../media/ground-detail-grass.jpg) ![](../media/ground-detail-beach.jpg) ![](../media/ground-detail-lake.jpg) ![](../media/ground-detail-rock.jpg)
+> The beach edge, before and after the taper: ![](../media/ground-detail-beach-edge.jpg)
+
 **Why.** Up close the ground is flat colour: the grass is one smooth green, sand and shingle are flat, and the rock faces are flat tone. Next to the detailed facades, roofs and paving, that reads as low resolution. The plumbing to fix it already exists, but only cobbles use it:
 - `gBumpW` with `MICRO_NORMAL`, a world-space slope bump with no UVs or tangents (`shaderlib.js`, `docs/design/micro-detail.md`).
 - `gSpecK` and `gSpecRough` for gloss (`SPEC_*`).
