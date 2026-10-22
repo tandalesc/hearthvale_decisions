@@ -46,8 +46,9 @@ const VERTEX_OFFSET = /* glsl */ `
     vCropId = gCrop.id;
   #endif
   #ifdef ROTOR
-    // Windmill sails turn about the hub (local z axis), speed by wind.
-    float ang = uDecoTime * (0.55 + 0.5 * length(uWind)) + iParams.w * 6.283;
+    // Windmill sails turn about the hub (local z axis), speed by wind; a
+    // water wheel at the river's steady pace (ROTOR_SPEED).
+    float ang = uDecoTime * ROTOR_SPEED + iParams.w * 6.283;
     float ca = cos(ang), sa = sin(ang);
     transformed.xy = mat2(ca, sa, -sa, ca) * transformed.xy;
   #endif
@@ -69,7 +70,7 @@ const VERTEX_OFFSET = /* glsl */ `
 
 const VERTEX_NORMAL = /* glsl */ `
   #ifdef ROTOR
-    float angN = uDecoTime * (0.55 + 0.5 * length(uWind)) + iParams.w * 6.283;
+    float angN = uDecoTime * ROTOR_SPEED + iParams.w * 6.283;
     float cn = cos(angN), sn = sin(angN);
     objectNormal.xy = mat2(cn, sn, -sn, cn) * objectNormal.xy;
   #endif
@@ -538,7 +539,10 @@ export function createKitUniforms() {
 /** Create the building material (one variant) and its shadow depth twin. */
 export function createKitMaterials(grade, { variant = '', shared } = {}) {
   const defines = {};
-  if (variant.includes('rotor')) defines.ROTOR = 1;
+  if (variant.includes('rotor')) {
+    defines.ROTOR = 1;
+    defines.ROTOR_SPEED = variant.includes('wheel') ? '0.7' : '(0.55 + 0.5 * length(uWind))';
+  }
   if (variant.includes('crop')) defines.CROP_PIECE = 1;
   if (variant.includes('detail')) defines.DETAIL_PIECE = 1;
 

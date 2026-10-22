@@ -332,6 +332,32 @@ export function sailsPiece() {
 }
 
 /**
+ * Undershot water wheel: two spoked rims and the floats between them, about a
+ * hub on the local z axis (rotated in the shader, like the sails). Radius 0.5
+ * to the float tips, rims at z = +-0.5; the axle runs on to the bearings each side.
+ */
+export function wheelPiece() {
+  const k = new KitBuilder();
+  const n = 12;
+  const P = (a, r, w, z) => [Math.cos(a) * r - Math.sin(a) * w, Math.sin(a) * r + Math.cos(a) * w, z];
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
+    // Rim segments (the material is double sided).
+    for (const z of [-0.5, 0.5]) k.quad(P(a0, 0.34, 0, z), P(a1, 0.34, 0, z), P(a1, 0.42, 0, z), P(a0, 0.42, 0, z), PART.TIMBER);
+    // A float: a board across the wheel's width, standing out past the rims.
+    k.quad(P(a0, 0.3, 0, -0.5), P(a0, 0.5, 0, -0.5), P(a0, 0.5, 0, 0.5), P(a0, 0.3, 0, 0.5), PART.TRIM);
+  }
+  // Six spokes to a rim, between the floats.
+  for (let i = 0; i < 6; i++) {
+    const a = ((i + 0.5) / 6) * Math.PI * 2, w = 0.022;
+    for (const z of [-0.48, 0.48]) k.quad(P(a, 0, -w, z), P(a, 0.38, -w, z), P(a, 0.38, w, z), P(a, 0, w, z), PART.TIMBER);
+  }
+  // Axle and hub.
+  k.box([0, 0, -0.8], [0, 0, 0.8], PART.TIMBER, { mlo: [-0.12, -0.12, 0], mhi: [0.12, 0.12, 0], faces: { ny: true } });
+  return k.build();
+}
+
+/**
  * Crop field: ridged rows along x on a soil bed, both subdivided so the
  * shader can drape them on the ground (y comes from the ground texture).
  */

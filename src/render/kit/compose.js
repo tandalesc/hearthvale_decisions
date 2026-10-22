@@ -12,12 +12,14 @@ import { fieldKind } from './crops.js';
 export const PIECES = [
   'body', 'gable', 'thatch', 'mansard', 'hip', 'flat', 'chimney', 'spire', 'dome',
   'sawtooth', 'stack', 'posts', 'scaffold', 'portico', 'awning', 'sails', 'field', 'banner',
-  'band', 'piles', 'balcony',
+  'band', 'piles', 'balcony', 'wheel',
 ];
 
 const STONE_BASE = new THREE.Color('#8f8a7e');
 const TRIM_DARK_SIGN = [new THREE.Color('#2f4a3a'), new THREE.Color('#5a2c24'), new THREE.Color('#2c3a52')];
 const TIMBER_BASE = new THREE.Color('#6e5338');
+const WHEEL_FLOATS = new THREE.Color('#8a7356');
+const RACE_WATER = new THREE.Color('#4f7f88');
 
 const DEG = Math.PI / 180;
 const GRID9 = [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5], [0, 0], [0, -0.5], [0, 0.5], [-0.5, 0], [0.5, 0]];
@@ -446,6 +448,93 @@ export function composeLot(b, pool, anim = null, selected = false) {
     summary.bodyH = era >= 3 ? 6.5 : 1.5;
   }
 
+  /**
+   * Which way the river lies from the lot, in lot-local axes: the direction
+   * to the nearest point of its centre line, and the way it flows there
+   * (toward -z), both unit vectors.
+   */
+  function riverward() {
+    let best = Infinity, zr = b.z;
+    for (let dz = -40; dz <= 40; dz += 1) {
+      const z = b.z + dz, dx = riverX(z) - b.x;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < best) { best = d2; zr = z; }
+    }
+    const local = (dx, dz) => {
+      const l = Math.hypot(dx, dz) || 1;
+      return [(dx * ca - dz * sa) / l, (dx * sa + dz * ca) / l];
+    };
+    return { to: local(riverX(zr) - b.x, zr - b.z), flow: local(riverX(zr - 1) - riverX(zr + 1), -2) };
+  }
+
+  /**
+   * A water mill (the sim's mill before steam): a mill house with an
+   * undershot wheel in a stone race on the side toward the river (the lot
+   * always touches it). Never on the front, where the door and the street
+   * are: a river ahead puts the wheel on the nearer end. The wheel turns on
+   * the decorative clock, at the river's pace.
+   */
+  function waterMill() {
+    const { to, flow } = riverward();
+    // n: outward normal of the wheel side (lot-local); u runs along n, t along the wall.
+    const [nx, nz] = Math.abs(to[0]) >= Math.abs(to[1]) || to[1] > 0 ? [to[0] < 0 ? -1 : 1, 0] : [0, -1];
+    const Ln = nx ? lw : ld, Lt = nx ? ld : lw;
+    // Across the race, from the river side in: the curb (its band stands
+    // 0.18 m proud), a hand's gap, the wheel, a gap, the house's plinth.
+    const W = 1.0;                               // wheel width
+    const pitOuter = Ln / 2 - 0.3;               // the race's river-side edge
+    const wheelU = pitOuter - 0.48 - W / 2;
+    const wallU = wheelU - W / 2 - 0.28;         // the house wall
+    const pitW = pitOuter - wallU, pitU = (pitOuter + wallU) / 2;
+    const farU = Math.max(-Ln / 2 + 0.5, wallU - Ln * fill);
+    const Hn = wallU - farU, Hu = (wallU + farU) / 2;
+    const Ht = Math.max(3.4, Lt * fill);
+    const Tc = nx ? (Lt - Ht) / 2 * 0.35 : 0;    // a side wheel: the house nudged toward the street
+    const at = (u, t) => (nx ? [nx * u, t] : [t, nz * u]);
+    const [hx, hz] = at(Hu, Tc);
+    const hw = nx ? Hn : Ht, hd = nx ? Ht : Hn;
+    const { top } = house(hx, hz, hw, hd, Math.max(2, storeys), {
+      window: WINDOW.COTTAGE, chimneys: 1, details: era === 0 ? DETAIL.PLANKS : DETAIL.QUOINS,
+    });
+    scaffold(hx, hz, hw, hd, top);
+    if (!detailsIn) return;
+    // The race: a stone channel along the wall, its water held 0.3 m over the
+    // bank, a curb on the river side. The wheel's floats dip into it.
+    const D = Math.min(era === 0 ? 3.8 : 4.4, Ht - 0.6);
+    const pitL = D + 0.8;
+    const along = (u, w, l) => (nx ? [u, w, l] : [l, w, u]);
+    const [px, pz] = at(pitU, Tc);
+    const [pw, , pd] = along(pitW, 0, pitL);
+    const gHi = groundOver(px, pz, pw, pd);
+    const foot = groundUnder(px, pz, pw, pd) - 0.4;
+    const waterY = gHi + 0.3;
+    const stone = era === 0 ? TIMBER_BASE : STONE_BASE;
+    add('band', px, foot, pz, 0, pw, waterY - 0.03 - foot, pd, { wall: stone });
+    const [fw, , fd] = along(pitW - 0.1, 0, pitL + 0.3);
+    add('flat', px, waterY - 0.1, pz, 0, fw, 0.1, fd, { roof: RACE_WATER, roofKind: ROOF.FLAT, trim: stone, lit: 0 });
+    // 2 cm inside the race's own sides and ends: never coplanar with them.
+    const [cx, cz] = at(pitOuter - 0.12, Tc);
+    const [cw, , cd] = along(0.2, 0, pitL - 0.04);
+    add('band', cx, waterY - 0.2, cz, 0, cw, 0.55, cd, { wall: stone });
+    // The wheel turns so its floats run downstream at the bottom: the piece's
+    // +x (where a positive turn moves the bottom) is the way along the wall
+    // the river flows.
+    const [tx, tz] = nx ? [0, 1] : [1, 0];
+    const spin = tx * flow[0] + tz * flow[1] < 0 ? -1 : 1;
+    const [ux, uz] = at(wheelU, Tc);
+    add('wheel', ux, waterY + D / 2 - 0.35, uz, Math.atan2(-tz * spin, tx * spin), D, D, W, { trim: WHEEL_FLOATS, seed: h2 });
+  }
+
+  /** A windmill (the mill variant 'windmill'): tapered tower body, cap and turning sails. */
+  function windmill() {
+    const ts = Math.min(bw, 4.6);
+    const top = body(0, 0, ts, ts, 1, { window: WINDOW.COTTAGE, floorH: 7.5, details: era === 0 ? DETAIL.PLANKS : DETAIL.QUOINS });
+    roofOn('hip', 0, 0, ts, ts, top, { pitch: 48, overhang: 0.35 });
+    if (detailsIn) add('sails', 0, top - 0.6, ts / 2 + 0.45, 0, 10, 10, 10, { trim: new THREE.Color('#ece3c9'), seed: h2 });
+    scaffold(0, 0, ts, ts, top);
+    summary.bodyH = top - lo + 5;
+  }
+
   const storeys = Math.max(1, Math.min(style.maxStoreys + 2, b.storeys ?? 1));
   const fill = style.fill;
   const bw = Math.max(3.4, lw * fill);
@@ -512,14 +601,12 @@ export function composeLot(b, pool, anim = null, selected = false) {
     }
 
     case 'mill': {
-      if (era < 3) {
-        // Windmill: tapered tower body, cap and turning sails.
-        const ts = Math.min(bw, 4.6);
-        const top = body(0, 0, ts, ts, 1, { window: WINDOW.COTTAGE, floorH: 7.5, details: era === 0 ? DETAIL.PLANKS : DETAIL.QUOINS });
-        roofOn('hip', 0, 0, ts, ts, top, { pitch: 48, overhang: 0.35 });
-        if (detailsIn) add('sails', 0, top - 0.6, ts / 2 + 0.45, 0, 10, 10, 10, { trim: new THREE.Color('#ece3c9'), seed: h2 });
-        scaffold(0, 0, ts, ts, top);
-        summary.bodyH = top - lo + 5;
+      // A windmill stands where the wind is; every other mill before steam
+      // is a water mill (it must touch the river).
+      if (b.variant === 'windmill') {
+        windmill();
+      } else if (era < 3) {
+        waterMill();
       } else {
         const { top } = house(0, frontZ, bw, bd, Math.max(3, storeys), { window: WINDOW.INDUSTRIAL, chimneys: 0, form: 'gable', roofOpts: { pitch: 30 } });
         if (detailsIn) {
