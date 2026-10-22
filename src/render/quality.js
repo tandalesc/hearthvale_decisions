@@ -10,6 +10,8 @@
 //                patterns, as shading normals (docs/design/micro-detail.md)
 //   specular     wet sheen on paving and roofs in the rain, glints on window
 //                glass (docs/design/micro-detail.md §6)
+//   lampShadows  at night, lamp posts shade a wedge of their own light pool
+//                and walkers cast short shadows away from the nearest lamp
 
 export const TIERS = {
   low: {
@@ -17,21 +19,21 @@ export const TIERS = {
     water: 'low', reflection: false, cloudShadow: false, post: false,
     particles: 0.25, terrainDetail: 1, maxFps: 60,
     ao: 'baked',
-    groundCover: 'none', woods: 0, yards: false, mist: false, weather: false, microDetail: false, specular: false,
+    groundCover: 'none', woods: 0, yards: false, mist: false, weather: false, microDetail: false, specular: false, lampShadows: false,
   },
   medium: {
     name: 'medium', pixelRatio: 1.75, shadowMapSize: 2048, shadowType: 'pcf', shadowRadius: 1,
     water: 'medium', reflection: false, cloudShadow: false, post: false,
     particles: 0.6, terrainDetail: 1, maxFps: 60,
     ao: 'baked',
-    groundCover: 'grass', woods: 0.3, yards: true, mist: false, weather: true, microDetail: false, specular: false,
+    groundCover: 'grass', woods: 0.3, yards: true, mist: false, weather: true, microDetail: false, specular: false, lampShadows: false,
   },
   high: {
     name: 'high', pixelRatio: 1.75, shadowMapSize: 2048, shadowType: 'pcfsoft', shadowRadius: 3,
     water: 'high', reflection: true, cloudShadow: true, post: true,
     particles: 1, terrainDetail: 1, maxFps: 60,
     ao: 'ssao', // screen-space AO in the post pass (ssao.js); 'baked' = ground field only (occlusion.js)
-    groundCover: 'full', woods: 1, yards: true, mist: true, weather: true, microDetail: true, specular: true,
+    groundCover: 'full', woods: 1, yards: true, mist: true, weather: true, microDetail: true, specular: true, lampShadows: true,
   },
 };
 
