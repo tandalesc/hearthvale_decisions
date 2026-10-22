@@ -197,10 +197,33 @@ function recount(r) {
 
 export function markDirty(r, i) {
   const cx = i % GRID_W, cz = (i - cx) / GRID_W;
+  growBox(activeBoxes.get(r), cx, cz);
   const d = r.dirty;
   if (!d) { r.dirty = { x0: cx, z0: cz, x1: cx, z1: cz }; return; }
   if (cx < d.x0) d.x0 = cx; else if (cx > d.x1) d.x1 = cx;
   if (cz < d.z0) d.z0 = cz; else if (cz > d.z1) d.z1 = cz;
+}
+
+// The box holding every cell with wear or a tier (more, never less): the monthly passes
+// skip cells with neither, so they need scan only the box. Grown wherever wear or a tier
+// can appear (markDirty, which every such write calls, and growActiveBox), shrunk to what
+// decayAndRetier finds. In memory only, worked out afresh for new grids.
+const activeBoxes = new WeakMap();
+function growBox(box, cx, cz) {
+  if (!box) return;
+  if (cx < box.x0) box.x0 = cx;
+  if (cx > box.x1) box.x1 = cx;
+  if (cz < box.z0) box.z0 = cz;
+  if (cz > box.z1) box.z1 = cz;
+}
+export function growActiveBox(r, i) { growBox(activeBoxes.get(r), i % GRID_W, Math.floor(i / GRID_W)); }
+function activeBox(r) {
+  let box = activeBoxes.get(r);
+  if (box && box.wear === r.wear && box.tier === r.tier) return box;
+  box = { wear: r.wear, tier: r.tier, x0: GRID_W, z0: GRID_H, x1: -1, z1: -1 };
+  for (let i = 0; i < CELLS; i++) if (r.wear[i] !== 0 || r.tier[i] !== 0) growBox(box, i % GRID_W, (i - (i % GRID_W)) / GRID_W);
+  activeBoxes.set(r, box);
+  return box;
 }
 
 function markDirtyRect(r, x0, z0, x1, z1) {
@@ -409,6 +432,7 @@ export function footprints(state) {
   });
   list.forEach((b, k) => stampWalls(fp, b, keepOpen, outlines[k]));
   for (const c of keepOpen) unsealWay(fp, c);
+  if (fp.unsealed) fp.wallCells = fp.wallCells.filter((c) => fp.walls[c]);
   noteChangedTiles(fp, footprintCache.get(state));
   footprintCache.set(state, fp);
   return fp;
@@ -479,6 +503,10 @@ function sameList(la, lb) {
 const POCKET = 48, CORRIDOR = 400;
 const pocketMark = new Int32Array(CELLS), pocketQueue = new Int32Array(POCKET + 8);
 let pocketGen = 0;
+// The corridor search: cells reached this search (corridorMark), the cell each came from
+// (-1 for the pocket), in the order reached.
+const corridorMark = new Int32Array(CELLS), corridorFrom = new Int32Array(CELLS), corridorFront = new Int32Array(POCKET + CORRIDOR + 8);
+let corridorGen = 0;
 function unsealWay(fp, start) {
   const { water } = terrainGrid();
   const walls = fp.walls;
@@ -497,32 +525,32 @@ function unsealWay(fp, start) {
       pocketQueue[tail++] = n;
     }
   }
-  // Sealed: out through the drawn pieces (never a lot) to the nearest open ground.
-  const step = (c, f) => {
-    const x = c % GRID_W;
-    if (x > 0) f(c - 1);
-    if (x < GRID_W - 1) f(c + 1);
-    if (c >= GRID_W) f(c - GRID_W);
-    if (c < CELLS - GRID_W) f(c + GRID_W);
-  };
-  const from = new Map();
-  const front = Array.from(pocketQueue.subarray(0, tail));
-  for (const c of front) from.set(c, -1);
-  for (let k = 0; k < front.length && front.length < CORRIDOR; k++) {
+  // Sealed: out through the drawn pieces (never a lot) to the nearest open ground,
+  // trying each cell's neighbours west, east, north, south. The cells opened leave
+  // fp.wallCells when footprints() is done.
+  const cg = ++corridorGen, front = corridorFront, blocked = fp.blocked;
+  let n = 0;
+  for (let k = 0; k < tail; k++) {
+    const c = pocketQueue[k];
+    front[n++] = c;
+    corridorMark[c] = cg;
+    corridorFrom[c] = -1;
+  }
+  for (let k = 0; k < n && n < CORRIDOR; k++) {
+    const c = front[k], x = c % GRID_W;
     let out = -1;
-    step(front[k], (n) => {
-      if (out >= 0 || from.has(n) || water[n]) return;
-      if (!walls[n]) { out = n; from.set(n, front[k]); return; }
-      if (fp.blocked[n]) return;
-      from.set(n, front[k]);
-      front.push(n);
-    });
-    if (out < 0) continue;
-    for (let c = from.get(out); c >= 0 && pocketMark[c] !== gen; c = from.get(c)) {
-      walls[c] = 0;
-      const i = fp.wallCells.indexOf(c);
-      if (i >= 0) fp.wallCells.splice(i, 1);
+    for (let d = 0; d < 4 && out < 0; d++) {
+      const m = d === 0 ? (x > 0 ? c - 1 : -1) : d === 1 ? (x < GRID_W - 1 ? c + 1 : -1) : d === 2 ? (c >= GRID_W ? c - GRID_W : -1) : (c < CELLS - GRID_W ? c + GRID_W : -1);
+      if (m < 0 || corridorMark[m] === cg || water[m]) continue;
+      if (!walls[m]) { out = m; corridorMark[m] = cg; corridorFrom[m] = c; break; }
+      if (blocked[m]) continue;
+      corridorMark[m] = cg;
+      corridorFrom[m] = c;
+      front[n++] = m;
     }
+    if (out < 0) continue;
+    for (let p = corridorFrom[out]; p >= 0 && pocketMark[p] !== gen; p = corridorFrom[p]) walls[p] = 0;
+    fp.unsealed = true;
     return;
   }
 }
@@ -1419,16 +1447,35 @@ export function structuralGrid(state) {
     return grid;
   }
   const prev = grid;
-  const cost = new Float32Array(CELLS);
-  const wcode = new Uint8Array(CELLS);
   const ctx = structuralContext(state);
-  let comp = structuralComponents(prev);
-  for (let i = 0; i < CELLS; i++) {
-    structuralCell(ctx, i, cost, wcode);
-    if (comp && (cost[i] < Infinity) !== (prev.cost[i] < Infinity)) comp = undefined;
+  let cost, wcode, comp = structuralComponents(prev);
+  if (prev && prev.roads === r && prev.navRev === r.navRev && prev.fp && prev.fords === ctx.fords) {
+    // Only the footprints changed (same roads, works and bridges): every cell's cost is a
+    // function of its own inputs, so only the cells whose lot layer changed, and those beside
+    // a tier changed since, can differ from a full build. The rest keep their values.
+    cost = prev.cost.slice();
+    wcode = prev.water.slice();
+    const redo = (i) => {
+      structuralCell(ctx, i, cost, wcode);
+      if (comp && (cost[i] < Infinity) !== (prev.cost[i] < Infinity)) comp = undefined;
+    };
+    const ob = prev.fp.blocked, nb = ctx.fp.blocked, of = prev.fp.field, nf = ctx.fp.field;
+    for (let i = 0; i < CELLS; i++) if (!ob[i] !== !nb[i] || of[i] !== nf[i]) redo(i);
+    for (const i of structuralDirty.get(r) ?? []) {
+      const cx = i % GRID_W, cz = (i - cx) / GRID_W;
+      for (let z = Math.max(0, cz - 1); z <= Math.min(GRID_H - 1, cz + 1); z++)
+        for (let x = Math.max(0, cx - 1); x <= Math.min(GRID_W - 1, cx + 1); x++) redo(z * GRID_W + x);
+    }
+  } else {
+    cost = new Float32Array(CELLS);
+    wcode = new Uint8Array(CELLS);
+    for (let i = 0; i < CELLS; i++) {
+      structuralCell(ctx, i, cost, wcode);
+      if (comp && (cost[i] < Infinity) !== (prev.cost[i] < Infinity)) comp = undefined;
+    }
   }
   const nodes = nodesFor(r, prev, structuralNodeDirty);
-  grid = owned({ key: `${base}:${r.version}`, bucket: base, base, roads: r, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height, ...nodes, comp }, r);
+  grid = owned({ key: `${base}:${r.version}`, bucket: base, base, roads: r, navRev: r.navRev, fp: ctx.fp, fords: ctx.fords, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height, ...nodes, comp }, r);
   structuralCache.set(state, grid);
   structuralDirty.set(r, new Set());
   return grid;
@@ -1560,8 +1607,10 @@ function decayAndRetier(state) {
   const { water, slope } = terrainGrid();
   const { blocked, field } = footprints(state);
   const era = state.era ?? 0;
+  const box = activeBox(r);
   let x0 = GRID_W, z0 = GRID_H, x1 = -1, z1 = -1;
-  for (let i = 0; i < CELLS; i++) {
+  for (let bz = box.z0, bz1 = box.z1, bx0 = box.x0, bx1 = box.x1; bz <= bz1; bz++)
+  for (let i = bz * GRID_W + bx0, end = bz * GRID_W + bx1; i <= end; i++) {
     let w = wear[i];
     const t = tier[i];
     if (w === 0 && t === 0) continue;
@@ -1585,6 +1634,8 @@ function decayAndRetier(state) {
       low[i] = 0;
     }
   }
+  // Every cell with wear or a tier was in the box and is now in [x0, x1] x [z0, z1].
+  Object.assign(box, { x0, z0, x1, z1 });
   if (x1 >= 0) markDirtyRect(r, x0, z0, x1, z1);
 }
 
@@ -1611,7 +1662,9 @@ function consolidateWear(state) {
   if (!flankScratch) flankScratch = { to: new Int32Array(CELLS), list: [] };
   const { to, list } = flankScratch;
   list.length = 0;
-  for (let i = 0; i < CELLS; i++) {
+  const box = activeBox(r);
+  for (let bz = box.z0; bz <= box.z1; bz++)
+  for (let i = bz * GRID_W + box.x0, end = bz * GRID_W + box.x1; i <= end; i++) {
     const w = wear[i];
     if (w < 5 || tier[i] > 2 || (planned[i] & FLAG.PLANNED) || water[i] || blocked[i]) continue;
     const cx = i % GRID_W, cz = (i - cx) / GRID_W;
@@ -1655,9 +1708,12 @@ function bridgeGaps(state) {
   const minWear = GAP_WEAR * UPGRADE_AT[1];
   const W = GRID_W;
   const fill = [];
-  // Two cells in from the edge, so every neighbour index below is in range.
-  for (let z = 2; z < GRID_H - 2; z++) {
-    for (let x = 2, i = z * W + 2; x < W - 2; x++, i++) {
+  // Two cells in from the edge, so every neighbour index below is in range; cells
+  // outside the box have no wear.
+  const box = activeBox(r);
+  const xa = Math.max(2, box.x0), xb = Math.min(W - 3, box.x1);
+  for (let z = Math.max(2, box.z0); z <= Math.min(GRID_H - 3, box.z1); z++) {
+    for (let x = xa, i = z * W + xa; x <= xb; x++, i++) {
       const t = tier[i];
       if (t >= 3 || wear[i] < minWear || water[i] || blocked[i] || field[i] === FIELD.CROP) continue;
       let want = 0;
@@ -2168,3 +2224,4 @@ function freshNavCells(state) {
 }
 
 export const __test = { consolidateWear, bridgeGaps, decayAndRetier, seedReclaimedPaths, freshNavCells };
+

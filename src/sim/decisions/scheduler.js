@@ -1104,14 +1104,14 @@ function fillWith(state, rt, bus, room) {
   // person is asked again only when their question would differ (a need
   // crossed a band, they moved or changed trade) or a month has passed.
   const people = state.people ?? [];
-  const hh = new Map(state.households.map((h) => [h.id, h]));
+  let hh = null;   // households by id, made only when someone is looked at
   const variant = ['morning', 'midday', 'evening'][Math.floor(state.time.tick / 17) % 3];
   rt.fresh ??= new Map();
   if (rt.fresh.size > people.length * 3 + 256) rt.fresh.clear();
   let i = 0;
   for (; i < Math.min(people.length, FILL_SCAN) && room > 0; i++) {
     const p = people[(rt.personCursor + i) % people.length];
-    const h = hh.get(p.householdId);
+    const h = (hh ??= new Map(state.households.map((x) => [x.id, x]))).get(p.householdId);
     if (!h) continue;
     const m0 = memberships(state, h);
     const context = {district: m0.district, lifeStage: m0.lifeStage, trade: m0.trade, timeOfDay: variant,
@@ -1126,7 +1126,9 @@ function fillWith(state, rt, bus, room) {
   }
   if (people.length) rt.personCursor = (rt.personCursor + i) % people.length;
   if (room > 0) {
-    const skip = new Set(Object.keys(gov.individual.household_home ?? {}).filter((k) => m - gov.individual.household_home[k].month < 12).map(Number));
+    // Households asked within the year are skipped: looked up as needed, not collected each tick.
+    const asked = gov.individual.household_home ?? {};
+    const skip = {has: (id) => Object.hasOwn(asked, id) && m - asked[id].month < 12};
     for (const q of homeQuestions(state, Math.min(room, 64), skip)) {
       askExtra(state, rt, bus, 'household_home', q.subject.householdId, q.context, q.snapshot, null, PRIORITY.individual);
       room--;
