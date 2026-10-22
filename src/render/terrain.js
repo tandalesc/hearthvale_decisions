@@ -193,7 +193,7 @@ vec3 terrainAlbedo(vec3 p, float up, float e, float beach, out float rock, out f
     #ifdef GROUND_RELIEF
       // Wind ripples on sand; shingle stays smooth.
       float sandK = smoothstep(4.0, 10.0, bw);
-      vec3 rip = ripples(p.xz, n, 0.008) * sandK;
+      vec3 rip = ripples(p.xz, n, 0.0035) * sandK;
       shore *= 1.0 + 0.04 * rip.x;
     #endif
     c = mix(c, shore, (1.0 - smoothstep(edge, edge + 2.5, e)) * (1.0 - rock * 0.7));
@@ -220,7 +220,7 @@ vec3 terrainAlbedo(vec3 p, float up, float e, float beach, out float rock, out f
   if (e < 3.0) {
     vec3 sand = ${lin('#d5c48f')};
     #ifdef GROUND_RELIEF
-      vec3 rip = ripples(p.xz, n, 0.005);
+      vec3 rip = ripples(p.xz, n, 0.0025);
       sand *= 1.0 + 0.04 * rip.x;
     #endif
     vec3 bank = mix(${lin('#a39a6c')}, sand, smoothstep(-0.8, 0.4, e));

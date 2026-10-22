@@ -21,7 +21,10 @@ async function loadView() {
       // ?seed=N starts a fresh town on that terrain seed (hilly / floodplain
       // comparisons); otherwise load the named fixture.
       // &arch=coast forces a valley archetype (src/waters.js); &years=N grows the town first.
-      const state = params.has('seed')
+      // &save=/path/to/save.json opens an exported save (Settings -> Game).
+      const state = params.has('save')
+        ? sim.restore(await (await fetch(params.get('save'))).text())
+        : params.has('seed')
         ? sim.createState(Number(params.get('seed')), params.has('arch') ? { archetype: params.get('arch') } : {})
         : sim.loadFixture ? await sim.loadFixture(fixture) : sim.fixtureState(fixture);
       if (params.has('seed') && Number(params.get('years')) > 0) sim.fastForward(state, Number(params.get('years')));

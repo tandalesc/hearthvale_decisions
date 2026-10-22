@@ -1,9 +1,11 @@
-// Centre name labels (design-centres §6), owner-tuned to be minimal: small
-// caps, letter-spaced, 11-12 px ink at ~70 % with a soft paper halo; no pill,
-// icon or numbers. They belong to the overview only: hidden while the camera
-// is close, fading in (300 ms) once it is well zoomed out, the main centre
-// first. Overlaps keep the higher rank; labels never sit over the UI's
-// insets and fade toward the edges of the free area.
+// Centre name labels (design-centres §6), lettered like an atlas: the
+// display serif in warm white over a soft dark shadow, names as written, no
+// pill, icon or numbers. The main centre is set upright and larger, the
+// lesser centres in italic, as a map sets a town and its quarters. They
+// belong to the overview only: hidden while the camera is close, fading in
+// (300 ms) once it is well zoomed out, the main centre first. Overlaps keep
+// the higher rank; labels never sit over the UI's insets and fade toward the
+// edges of the free area.
 //
 // Reads view.centres = [{id, name, x, z, rank}] (the lowest rank is the main centre).
 // DOM text over the canvas: crisp at any pixel ratio, no textures.
@@ -13,13 +15,17 @@ const CSS = `
 .hv-centre-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .hv-centre-label {
   position: absolute; left: 0; top: 0; white-space: nowrap;
-  font: 600 11px/1 "DM Sans", system-ui, sans-serif;
-  font-variant: small-caps; text-transform: lowercase; letter-spacing: 0.16em;
-  color: rgba(47, 63, 47, 0.7);
-  text-shadow: 0 0 3px #fafbf2, 0 0 6px rgba(250, 251, 242, 0.9), 0 0 10px rgba(250, 251, 242, 0.6);
+  font: italic 500 14px/1 "Fraunces", "Iowan Old Style", Georgia, serif;
+  font-variation-settings: "opsz" 36, "SOFT" 30;
+  letter-spacing: 0.03em;
+  color: #fbf7ec;
+  text-shadow: 0 1px 1px rgba(24, 28, 20, 0.7), 0 0 4px rgba(24, 28, 20, 0.55), 0 0 12px rgba(24, 28, 20, 0.35);
   opacity: 0; transition: opacity 300ms ease; will-change: transform, opacity;
 }
-.hv-centre-label.rank0 { font-size: 12px; }
+.hv-centre-label.rank0 {
+  font-style: normal; font-weight: 600; font-size: 18px; letter-spacing: 0.02em;
+  font-variation-settings: "opsz" 72, "SOFT" 30;
+}
 `;
 
 const EDGE = 60; // px over which labels fade at the free area's edges
