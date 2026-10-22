@@ -16,7 +16,7 @@ async function openMenu(page) {
   return errors;
 }
 
-const booted = (page) => page.waitForFunction(() => window.hearthvale?.app && !document.querySelector('.mm'));
+const booted = (page) => page.waitForFunction(() => window.hearthvale?.app && !document.querySelector('.mm') && !document.getElementById('boot'), null, {timeout: 30000});
 
 test('a first visit shows the menu without Continue, and founds a named town in the chosen valley', async ({page}) => {
   test.setTimeout(90000);

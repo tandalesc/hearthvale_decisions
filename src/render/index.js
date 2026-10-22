@@ -173,6 +173,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
   let warmPending = true; // compile every material once the town is built
   let warmUntil = -1;     // renderer time until which the first draw waits for that compile
   let drawnOnce = false;
+  let firstFrame = []; // onFirstFrame callbacks, until the first frame is drawn (then null)
   const WARM_WAIT_S = 4;
   let footVersion = -1; // buildings.version() last rasterised into the road mask
   const homePoint = { x: -20, z: 4 };
@@ -411,6 +412,11 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
       renderer.render(scene, camera);
     }
     lap('render');
+    if (firstFrame) {
+      const fns = firstFrame;
+      firstFrame = null;
+      for (const fn of fns) fn();
+    }
 
     const ms = performance.now() - t0;
     statsState.frameMs = statsState.frameMs * 0.9 + ms * 0.1;
@@ -447,6 +453,14 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
      * sim step and view sync (update then returns early).
      */
     frameDue: decide,
+    /**
+     * cb() once, right after the first real frame is drawn: the town built and its
+     * materials compiled (the loading screen waits for it). At once if already drawn.
+     */
+    onFirstFrame(cb) {
+      if (firstFrame) firstFrame.push(cb);
+      else queueMicrotask(cb);
+    },
     setQuality,
     quality: () => tierName,
     setDayCycle(mode) {

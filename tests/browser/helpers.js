@@ -25,6 +25,8 @@ export async function open(page, {fixture, paused = true, renderer = 'stub', stu
   params.set('play', '1');
   await page.goto(`/?${params}${query}`);
   await page.waitForFunction(() => window.hearthvale?.app);
+  // The loading screen covers the town until its first frame, then fades out.
+  await page.waitForFunction(() => !document.getElementById('boot'), null, {timeout: 20000}).catch(() => {});
   await settle(page);
   return errors;
 }
