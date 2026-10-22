@@ -7,9 +7,7 @@ const SEEN_KEY = 'hearthvale-ui-seen';
 export const DEFAULT_PREFS = {
   quality: 'auto',          // auto | low | medium | high
   batterySaver: 'off',      // off | battery (when unplugged) | always
-  dayCycle: 'seasonal',     // seasonal | slow | off
-  peopleShadows: 'blob',    // blob: soft sun-aware blobs | full: walkers also cast real shadows
-  treeShadows: 'soft',      // soft: sun-aware ground shadows | detailed: trees in the shadow map (Low: blobs)
+  shadows: 'simple',        // simple: soft sun-aware shadows for people and trees | detailed: everything casts true shadows
   motion: 'full',           // full | reduced
   theme: 'auto',            // auto | light | night
   textSize: 'normal',       // normal | large
@@ -35,7 +33,13 @@ function write(key, value) {
 }
 
 export function createPrefs() {
-  const values = {...DEFAULT_PREFS, ...read(KEY, {})};
+  const stored = read(KEY, {});
+  const values = {...DEFAULT_PREFS, ...stored};
+  // One shadows setting replaced separate ones for people and trees: either
+  // set to its detailed form carries over as Detailed.
+  if (!('shadows' in stored) && (stored.peopleShadows === 'full' || stored.treeShadows === 'detailed')) values.shadows = 'detailed';
+  delete values.peopleShadows;
+  delete values.treeShadows;
   const seen = new Set(read(SEEN_KEY, []));
   const listeners = new Set();
   return {

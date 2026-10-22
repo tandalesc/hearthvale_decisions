@@ -11,7 +11,7 @@ export function createWorld(canvas, {quality = 'auto', batterySaver = 'off'} = {
   const ctx = canvas.getContext('2d');
   let view = null, insets = {top: 0, right: 0, bottom: 0, left: 0};
   let cam = {x: -18, z: 4, scale: 0}, target = null, tier = quality === 'auto' ? 'medium' : quality;
-  let overlay = 'none', dayCycle = 'seasonal', pickCb = null, saver = batterySaver;
+  let overlay = 'none', dayCycle = 'slow', pickCb = null, saver = batterySaver;
   let lastDraw = 0, frames = 0, fps = 60, fpsAt = 0;
   const dpr = Math.min(2, globalThis.devicePixelRatio || 1);
 

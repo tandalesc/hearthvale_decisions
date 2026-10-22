@@ -758,9 +758,13 @@ export function createApp(host) {
     if (!key || key === 'theme') applyTheme();
     if (!key || key === 'quality') world?.setQuality?.(prefs.get('quality'));
     if (!key || key === 'batterySaver') world?.setBatterySaver?.(prefs.get('batterySaver'));
-    if (!key || key === 'dayCycle') world?.setDayCycle?.(prefs.get('dayCycle'));
-    if (!key || key === 'peopleShadows') world?.setPeopleShadows?.(prefs.get('peopleShadows'));
-    if (!key || key === 'treeShadows') world?.setTreeShadows?.(prefs.get('treeShadows'));
+    // Day and night: always the slow cycle, a full day each minute.
+    if (!key) world?.setDayCycle?.('slow');
+    if (!key || key === 'shadows') {
+      const detailed = prefs.get('shadows') === 'detailed';
+      world?.setPeopleShadows?.(detailed ? 'full' : 'blob');
+      world?.setTreeShadows?.(detailed ? 'detailed' : 'soft');
+    }
     if (key === 'muted') refresh(true);
   }
   prefs.onChange(applyPrefs);
@@ -885,7 +889,7 @@ export function createApp(host) {
     updateViews(snap);
     inspector.refresh();
     const uNight = world?.internals?.grade?.uniforms?.uNight?.value;
-    nightBeat = prefs.get('dayCycle') !== 'off' && (Number.isFinite(uNight) ? uNight > 0.5 : (frameView?.time?.yearT ?? 0) > 0.965);
+    nightBeat = (Number.isFinite(uNight) ? uNight > 0.5 : (frameView?.time?.yearT ?? 0) > 0.965);
     applyTheme();
     updateInsets();
     syncLabels();
