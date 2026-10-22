@@ -17,7 +17,22 @@
 > - 6,279 regional footprint builds, compared field for field.
 >
 > The full test suite passes, apart from one wall-clock budget, measured while the machine's
-> load average was about 87. Clean timings are still to do. Items 7 and 9–11 remain proposals.
+> load average was about 87. Clean timings are still to do.
+>
+> **Second pass** (branch `claude/data-locality-2`): items 7, 9, 10 and 11.
+> - Item 7: the first question layer's option-row work is memoized. 0.87× the student's time;
+>   0 of 18,040 replayed answers differ.
+> - Item 9: `validateState` keeps the clean copy per snapshot object and schema, and
+>   `stateKey` keys each clean copy once. Keys are memoized only for copies `validateState`
+>   made itself.
+> - Item 10: the mirror compares wear only inside the active box (`roads.js activeWearBox`)
+>   joined with its own copy's box, and byte grids four cells to a word.
+> - Item 11: `riverX` keeps a 1,024-slot cache keyed by the bits of z, cleared in
+>   `setTerrainSeed`.
+>
+> The same decade hashes for seeds 66, 7 and 12 over 150 years. `npm test` passes. Its
+> 60 s budget for 150 headless years failed only while it ran alongside three town runs;
+> alone it takes 19.2 s. The sim-worker and save-store browser specs pass.
 
 **Question.** Would better memory layout or cache behaviour make headless student towns
 (`scripts/distill-collect.js`) and the game's sim worker faster, while keeping every

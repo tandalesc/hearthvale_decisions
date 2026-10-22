@@ -1,3 +1,15 @@
+# Data locality, second pass: option rows, snapshot keys, the mirror, the river (2026-10-22)
+
+**What changed.** These are items 7, 9, 10 and 11 of `docs/design/data-locality.md`.
+- **Student.** The first question layer's norm1 and self-attention queries, keys and values for the option rows are memoized per (kind, options), next to the option tokens. Only the question rows are projected for each question.
+- **Snapshots.** `validateState` keeps the clean copy per snapshot object and schema, and `stateKey` keys each clean copy once. This works because the scheduler's snapshots are never changed once made.
+- **Render mirror.** Wear is compared only inside the sim's active box joined with the copy's box, and `tier`, `planned` and `low` are compared four cells to a 32-bit word. This runs in the browser sim worker only.
+- **River.** `riverX` keeps a cache keyed by the bits of z, cleared whenever the river changes.
+
+**Result.** Towns are bit-identical: `scripts/town-hash.js` gives the same hash at every decade for seeds 66, 7 and 12 over 150 years. On a 40-year replay of 18,040 student questions, every answer is identical. The option-row memo alone takes 0.87× the student's time. With the snapshot keys as well, the student took 0.43× (3.0 s → 1.3 s), because with the answer cache in place most of its time had gone into re-keying snapshots. That comparison ran under varying load, so treat it as approximate. Whole-run timings are still to be measured on a quiet machine.
+
+---
+
 # Data locality: dirty regions and dead rows (2026-10-22)
 
 **What changed.** These are items 2–6 and 8 of `docs/design/data-locality.md`.
