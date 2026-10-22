@@ -176,16 +176,27 @@ async function runChild() {
         while (next < requests.length) {
           const groups = requests[next++];
           let answers = {};
-          try {
-            let n = 0;
-            const wire = groups.map((g) => ({state: g[0].cleanState, questions: g.map((p) => ({...p.question, id: `q${n++}`}))}));
-            ({answers} = await requestDecisions(config, wire));
-          } catch { /* fallbacks below */ }
+          let w = 0;
+          const wire = groups.map((g) => ({state: g[0].cleanState, questions: g.map((p) => ({...p.question, id: `q${w++}`}))}));
+          // A failed request is retried with growing waits (about two minutes in
+          // all) before its questions fall back; every fallback is counted, so
+          // a run that lost the teacher says so instead of passing for a teacher run.
+          for (let attempt = 0; ; attempt++) {
+            try {
+              ({answers} = await requestDecisions(config, wire));
+              break;
+            } catch (err) {
+              if (attempt >= 6) { process.stderr.write(`seed ${seed}/${salt}: teacher request failed after ${attempt + 1} tries (${err.message}); using fallbacks\n`); break; }
+              await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+            }
+          }
           let n = 0;
           for (const g of groups) {
             for (const p of g) {
               let a = answers[`q${n++}`] ?? null;
+              teacherAsked++;
               if (!a) {
+                teacherFailed++;
                 const probabilities = fallbackFor(p.question.kind, p.question.context, p.snapshot, state, p.question.allowed ?? undefined);
                 const choice = Object.keys(probabilities).reduce((x, y) => (probabilities[y] > probabilities[x] ? y : x));
                 a = {kind: p.question.kind, choice, confidence: probabilities[choice], probabilities};
@@ -198,6 +209,7 @@ async function runChild() {
       };
       await Promise.all([work(), work(), work(), work()]);
     }
+    let teacherAsked = 0, teacherFailed = 0;
 
     const t0 = performance.now();
     let lastYear = state.time.year;
@@ -230,7 +242,7 @@ async function runChild() {
       burstStats = {ticks: ticks.length, msMean: ms.reduce((a, b) => a + b, 0) / ms.length, msP99: q(ms, 0.99), msMax: ms.at(-1),
         answersP99: q(n, 0.99), answersMax: n.at(-1), worst: [...ticks].sort((a, b) => b[3] - a[3]).slice(0, 5)};
     }
-    process.send({seed, salt, archetype, style, player: council.engagement ?? null, pop: state.indicators.pop, era: state.era, questions: questions.size, states: states.size, kinds,
+    process.send({seed, salt, archetype, style, player: council.engagement ?? null, teacher: config ? {asked: teacherAsked, failed: teacherFailed} : null, pop: state.indicators.pop, era: state.era, questions: questions.size, states: states.size, kinds,
       seconds: Math.round((performance.now() - t0) / 1000), town, shares, burst: burstStats});
   });
 }
@@ -299,7 +311,7 @@ async function runParent() {
   rmSync(parts, {recursive: true, force: true});
 
   writeFileSync(join(dir, 'towns.json'), JSON.stringify({answer, student, hybrid, teacherKinds, years,
-    player, towns: results.map(({seed, salt, archetype, style, player: engagement, town, shares, burst: b, seconds}) => ({seed, salt, archetype, style, player: engagement, town, shares, burst: b, seconds}))}));
+    player, towns: results.map(({seed, salt, archetype, style, player: engagement, teacher, town, shares, burst: b, seconds}) => ({seed, salt, archetype, style, player: engagement, teacher, town, shares, burst: b, seconds}))}));
   for (const r of results.filter((x) => x.burst)) {
     console.log(`burst seed ${r.seed}/${r.salt}: ${r.burst.ticks} ticks with student work; per tick mean ${r.burst.msMean.toFixed(2)} ms, ` +
       `p99 ${r.burst.msP99.toFixed(2)} ms, max ${r.burst.msMax.toFixed(1)} ms; answers per tick p99 ${r.burst.answersP99}, max ${r.burst.answersMax}`);
@@ -360,7 +372,8 @@ function pool(jobs, size) {
       child.on('message', (r) => {
         results.push(r);
         child.kill();
-        process.stderr.write(`seed ${r.seed}${r.salt ? `/${r.salt}` : ''} (${r.archetype}, ${r.style}): ${r.pop} people, era ${r.era}, ${r.questions} questions, ${r.states} states, ${r.seconds} s\n`);
+        process.stderr.write(`seed ${r.seed}${r.salt ? `/${r.salt}` : ''} (${r.archetype}, ${r.style}): ${r.pop} people, era ${r.era}, ${r.questions} questions, ${r.states} states, ${r.seconds} s` +
+          (r.teacher ? `, teacher answered ${r.teacher.asked - r.teacher.failed} of ${r.teacher.asked}${r.teacher.failed ? ' (FALLBACKS USED)' : ''}` : '') + '\n');
         if (results.length === jobs.length) resolve(results);
         else launch();
       });
