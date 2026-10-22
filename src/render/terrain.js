@@ -125,7 +125,9 @@ vec3 terrainAlbedo(vec3 p, float up, float e, float beach, out float rock, out f
   rock = smoothstep(0.22, 0.32, slope + (n - 0.5) * 0.1);
   float scree = smoothstep(0.1, 0.2, slope + (n - 0.5) * 0.08) * (1.0 - rock) * smoothstep(4.0, 14.0, alt);
   // Strata: faint horizontal layers, like stacked card on a model.
-  float strata = 0.9 + 0.12 * step(0.5, fract(p.y * 0.18 + n * 0.4));
+  // Soft-edged (a triangle wave through a smoothstep): a hard step drew a
+  // stair of bright and dark bands across the far hills' facets.
+  float strata = 0.9 + 0.12 * smoothstep(0.3, 0.7, abs(fract(p.y * 0.18 + n * 0.4) - 0.5) * 2.0);
   vec3 c = mix(g, ${lin('#a69d8c')} * (0.9 + 0.2 * n), scree * 0.75);
   c = mix(c, uRockColor * strata * (0.85 + 0.25 * n), rock);
   // Beaches: pale sand above the sea's waterline, grey-gold shingle on lake
@@ -317,8 +319,14 @@ const STRIP_BEGIN = /* glsl */ `
   transformed.y = stripY;
 `;
 
+// Far ring: smooth node normals with a trace of the facet, so the hills
+// keep their cut-paper look without each facet lighting up on its own.
+const RING_FACET_GLSL = /* glsl */ `
+  normal = normalize(mix(normal, normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition))), 0.3));
+`;
+
 function makeMaterial(grade, roads, variant) {
-  const material = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: variant === 'ring' });
+  const material = new THREE.MeshLambertMaterial({ color: 0xffffff });
   material.defines = {};
   const defines = variant === 'grid' ? { GRID: 1 } : variant === 'ring' ? { RING: 1 } : { STRIP: 1 };
   const uniforms = {
@@ -349,7 +357,7 @@ function makeMaterial(grade, roads, variant) {
     fragmentHead: 'uniform float uWaterHalf;\nuniform float uRiverEnd;\nuniform float uFloodplain;\n' + (strip ? 'varying vec2 vBankS;\n' : '') + MICRO_HEAD
       + `#ifdef SPECULAR\n${SPEC_HEAD}\n#endif\n` + SHADE_GLSL,
     fragmentColor: SHADE_FRAGMENT,
-    fragmentNormal: `#ifdef MICRO_DETAIL\n${MICRO_NORMAL}\n#endif\n#ifdef SPECULAR\n${SPEC_NORMAL}\n#endif\n`,
+    fragmentNormal: `${variant === 'ring' ? RING_FACET_GLSL : ''}#ifdef MICRO_DETAIL\n${MICRO_NORMAL}\n#endif\n#ifdef SPECULAR\n${SPEC_NORMAL}\n#endif\n`,
     fragmentPars: `#ifdef SPECULAR\n${SPEC_PARS}\n#endif\n`,
     fragmentLights: `#ifdef SPECULAR\n${SPEC_END}\n#endif\n`,
   });
@@ -538,6 +546,11 @@ function buildRing() {
   // Each grid node once: height, river offset, shore distance and character.
   const N = Math.ceil(n) + 1;
   const node = new Float32Array(N * N * 4);
+  // Heights everywhere (the edge nodes' normals read their inner neighbours).
+  const hgt = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) hgt[j * N + i] = T.heightAt(-RING_EXTENT + i * RING_STEP, -RING_EXTENT + j * RING_STEP);
+  }
   for (let j = 0; j < N; j++) {
     for (let i = 0; i < N; i++) {
       const x = -RING_EXTENT + i * RING_STEP, z = -RING_EXTENT + j * RING_STEP;
@@ -546,13 +559,29 @@ function buildRing() {
       if (inner) continue;
       const k = (j * N + i) * 4;
       const shore = T.bankDistance(x, z);
-      node[k] = T.heightAt(x, z);
+      node[k] = hgt[j * N + i];
       node[k + 1] = x - T.riverX(z);
       node[k + 2] = Math.max(-200, Math.min(200, shore));
       node[k + 3] = shoreCharacter(x, z, shore);
     }
   }
+  // Smooth node normals from central differences: shared by every facet at
+  // a node, so light and the slope bands (rock, scree, snow) run smoothly
+  // across the facets instead of switching at each edge. The fragment shader
+  // keeps a trace of the facet (RING_FACET_GLSL).
+  const nrm = new Float32Array(N * N * 3);
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const i0 = Math.max(0, i - 1), i1 = Math.min(N - 1, i + 1);
+      const j0 = Math.max(0, j - 1), j1 = Math.min(N - 1, j + 1);
+      const dx = (hgt[j * N + i1] - hgt[j * N + i0]) / ((i1 - i0) * RING_STEP);
+      const dz = (hgt[j1 * N + i] - hgt[j0 * N + i]) / ((j1 - j0) * RING_STEP);
+      const l = Math.hypot(dx, 1, dz);
+      nrm.set([-dx / l, 1 / l, -dz / l], (j * N + i) * 3);
+    }
+  }
   const pos = [];
+  const normal = [];
   const riverU = [];
   const shoreA = [];
   for (let j = 0; j < n; j++) {
@@ -568,6 +597,8 @@ function buildRing() {
         for (const [vi, vj] of tri) {
           const k = (vj * N + vi) * 4;
           pos.push(-RING_EXTENT + vi * RING_STEP, node[k], -RING_EXTENT + vj * RING_STEP);
+          const kn = (vj * N + vi) * 3;
+          normal.push(nrm[kn], nrm[kn + 1], nrm[kn + 2]);
           riverU.push(node[k + 1]);
           shoreA.push(node[k + 2], node[k + 3]);
         }
@@ -578,7 +609,7 @@ function buildRing() {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('aRiverU', new THREE.Float32BufferAttribute(riverU, 1));
   g.setAttribute('aShore', new THREE.Float32BufferAttribute(shoreA, 2));
-  g.computeVertexNormals(); // non-indexed: one normal per facet
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
   g.computeBoundingSphere();
   return g;
 }
