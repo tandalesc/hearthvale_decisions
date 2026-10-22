@@ -26,7 +26,7 @@ import {pay} from './economy.js';
 import {floodPoint, fireBlock, floodRisk} from './sites.js';
 import {eventResponseRequested} from './decisions/scheduler.js';
 import {findHook} from './hooks.js';
-import {subjectOpen} from './subjects.js';
+import {subjectOpen, subjectInFlight} from './subjects.js';
 import {bridgeCollapseRisk} from './bridges.js';
 
 const SPRING = ['lte', 'month', 2];
@@ -329,7 +329,8 @@ export const EVENTS = {
     lapse: 'ferry',
     when: ['gt', 'C.bridgeRisk', 0],
     // Worn and overloaded bridges fall: sim-world's yearly risk, taken monthly.
-    chance: (s) => 1 - (1 - Math.min(0.95, bridgeRisk(s))) ** (1 / 12), cooldown: 10,
+    // Not while bridge works are under way: the town is already at it.
+    chance: (s) => (subjectInFlight(s, 'work:bridge-upgrade') ? 0 : 1 - (1 - Math.min(0.95, bridgeRisk(s))) ** (1 / 12)), cooldown: 10,
     why: 'The old timber bridge gave way this morning. The river cuts the town in two.',
     effects: [{fallen: true}, {tag: 'bridge-collapse'}, {deltas: {riverTrade: -0.03, unrest: 0.02}},
       {crowd: {kind: 'protest', at: 'river', radius: 10, months: 1, strength: 0.5}}],
