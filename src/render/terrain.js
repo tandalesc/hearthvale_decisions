@@ -285,6 +285,8 @@ const SHADE_FRAGMENT = /* glsl */ `
     grassy *= mix(1.0, 0.9 + 0.2 * tuft, nearK);
     grassy = mix(grassy, grassy * vec3(1.1, 1.04, 0.82), smoothstep(0.62, 0.8, tuft) * 0.35 * nearK);
   }
+  // The sward a little less saturated than the rest: lit tufts read as neon otherwise.
+  grassy = mix(vec3(dot(grassy, vec3(0.3, 0.55, 0.15))), grassy, 0.86) * 0.97;
   ground = mix(grassy, ground, rock);
   #ifdef STRIP
     // Gravel bars: pale water-sorted shingle, darker and cooler where wet.
