@@ -254,11 +254,14 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
   };
 }
 
-// Which student version answers, per design §7: a new town starts on the latest
-// published version; a save keeps the version it started with (pinned in its
-// governance state), so a town never changes temper mid-game. `base` is the
-// students directory, holding manifest.json {latest, versions: {n: file}}.
-export function createStudentVersions({answerer, base, fetcher = (...a) => globalThis.fetch(...a)}) {
+// Which student version answers: every town, new or saved, takes the latest
+// published version when it opens, and records it in its governance state. A
+// version changes only between sessions, never while a town runs, and each one
+// passed the loop's gates against its predecessor, so a saved town moves on in
+// small steps. `pinned` (the ?student=N URL parameter) holds every town on
+// version N while it is published, for testing. `base` is the students
+// directory, holding manifest.json {latest, versions: {n: file}}.
+export function createStudentVersions({answerer, base, pinned = null, fetcher = (...a) => globalThis.fetch(...a)}) {
   let manifest = null, current = null;
   const urlOf = (v) => new URL(manifest.versions[v], base).href;
   async function switchTo(v) {
@@ -280,17 +283,16 @@ export function createStudentVersions({answerer, base, fetcher = (...a) => globa
       await switchTo(String(manifest.latest));
       return current;
     },
-    // Called when a town opens: new towns take the latest version, saves their own.
-    async pin(state, isNew) {
+    // Called when a town opens, new or saved: the latest version (or the pinned one).
+    async pin(state) {
       if (!manifest) return null;
       const gov = (state.governance ??= {});
-      const want = isNew || gov.studentVersion == null ? String(manifest.latest) : String(gov.studentVersion);
-      if (!manifest.versions[want]) {
-        console.warn(`[hearthvale] decision student v${want} is no longer published; using v${manifest.latest}`);
-        await switchTo(String(manifest.latest));
-      } else {
-        await switchTo(want);
+      let want = String(manifest.latest);
+      if (pinned != null) {
+        if (manifest.versions[pinned]) want = String(pinned);
+        else console.warn(`[hearthvale] decision student v${pinned} is not published; using v${manifest.latest}`);
       }
+      await switchTo(want);
       gov.studentVersion = current;
       return current;
     },

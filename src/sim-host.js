@@ -96,7 +96,7 @@ const PROBE_MS = 5000;
 const LONG_OPS = new Set(['setup', 'init', 'save', 'check', 'dev', 'inSim', 'snapshot', 'serialize']);
 
 // The worker host. opts go to the worker's setup: {pace, budgetMs, rowFloats, model,
-// decisionSettings, routes: {worker, fixedClock}, decisions, prose, student}.
+// decisionSettings, routes: {worker, fixedClock}, decisions, prose, student, studentPin}.
 export function createWorkerHost(opts = {}) {
   const mirror = createRenderMirror({rowFloats: opts.rowFloats ?? 20});
   const pending = new Map();
@@ -153,9 +153,9 @@ export function createWorkerHost(opts = {}) {
     if (started) for (const fn of listeners.fail) fn(dead);
   }
 
-  const {routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats, student} = opts;
+  const {routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats, student, studentPin} = opts;
   const ready = Promise.race([
-    call('setup', [{routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats, student}]),
+    call('setup', [{routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats, student, studentPin}]),
     new Promise((_, reject) => setTimeout(() => reject(new Error('The sim worker took too long to start.')), START_MS)),
   ]).then(() => { started = true; }, (err) => { fail(err.message); throw err; });
 

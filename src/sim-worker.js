@@ -34,7 +34,8 @@ const ops = {
 
   // opts: {pace, budgetMs, rowFloats, model, decisionSettings, decisions (false: none),
   //        prose (false: none), routes: {worker (false: cooperative), fixedClock},
-  //        student (the decision students directory URL: its kinds answer locally)}
+  //        student (the decision students directory URL: its kinds answer locally),
+  //        studentPin (hold every town on that version)}
   async setup(opts = {}) {
     let routes = null;
     try {
@@ -52,7 +53,7 @@ const ops = {
     let students = null;
     if (decisions && opts.student) {
       decisions = createLocalAnswerer({client: decisions, report: {}});
-      students = createStudentVersions({answerer: decisions, base: opts.student});
+      students = createStudentVersions({answerer: decisions, base: opts.student, pinned: opts.studentPin ?? null});
       await students.start();
     }
     session = createSimSession({

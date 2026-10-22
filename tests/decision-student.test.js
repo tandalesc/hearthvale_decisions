@@ -208,10 +208,10 @@ test('novel teacher labels flagged questions once, keeps only the expected teach
   assert.equal(t.stats().dropped, 1);
 });
 
-test('student versions: new towns take the latest, saves keep the version they started with', async () => {
+test('student versions: every town opens on the latest version; ?student=N pins one', async () => {
   const {createLocalAnswerer, createStudentVersions} = await import('../src/decision-local.js');
   const bundles = {'v1.json': {...randomBundle('mlp'), version: 1}, 'v2.json': {...randomBundle('mlp'), version: 2}};
-  let manifest = {latest: 2, versions: {1: 'v1.json', 2: 'v2.json'}};
+  const manifest = {latest: 2, versions: {1: 'v1.json', 2: 'v2.json'}};
   const fetcher = async (url) => {
     const name = url.split('/').pop();
     const body = name === 'manifest.json' ? manifest : bundles[name];
@@ -222,14 +222,17 @@ test('student versions: new towns take the latest, saves keep the version they s
   const versions = createStudentVersions({answerer: bus, base: 'https://game.test/students/', fetcher});
   assert.equal(await versions.start(), '2');
   const town = {}, save = {governance: {studentVersion: 1}};
-  assert.equal(await versions.pin(town, true), '2');
+  assert.equal(await versions.pin(town), '2');
   assert.equal(town.governance.studentVersion, '2');
-  assert.equal(await versions.pin(save, false), '1', 'an old save keeps its version');
+  assert.equal(await versions.pin(save), '2', 'an old save moves to the latest version when it opens');
+  assert.equal(save.governance.studentVersion, '2', 'and records it');
+  const pinned = createStudentVersions({answerer: bus, base: 'https://game.test/students/', pinned: '1', fetcher});
+  await pinned.start();
+  assert.equal(await pinned.pin({}), '1', '?student=1 holds a town on version 1');
   assert.equal((await bus.ask('resident_routine', 'a', walker, {state: district})).model, 'student:resident_routine@v1');
-  manifest = {...manifest, versions: {2: 'v2.json'}};
-  const versions2 = createStudentVersions({answerer: bus, base: 'https://game.test/students/', fetcher});
-  await versions2.start();
-  assert.equal(await versions2.pin({governance: {studentVersion: 1}}, false), '2', 'a version no longer published falls back to the latest');
+  const missing = createStudentVersions({answerer: bus, base: 'https://game.test/students/', pinned: '7', fetcher});
+  await missing.start();
+  assert.equal(await missing.pin({}), '2', 'a pinned version that is not published falls back to the latest');
 });
 
 test('live teacher: the least sure 10% go to the teacher, tapering to 50 a second, capped by a token bucket', async () => {

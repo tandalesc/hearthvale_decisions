@@ -10,7 +10,7 @@ import {metaFromSave} from './save-meta.js';
 // narrator:  {facts, peekNote, keepNote, touchNote} for inspector bundles and notes, or null
 // routes:    the route planner (or null)
 // decisions: the decision client (or null: actors use local rules)
-// students:  decision-student versions (src/decision-local.js createStudentVersions), pinned per town
+// students:  decision-student versions (src/decision-local.js createStudentVersions): each town takes the latest when it opens
 // startProse: narrator-client's startProseKeeper, run while the model is on
 // budgetMs:  real time a step may take before no new tick starts (Infinity: none)
 export function createSimSession({sim, narrator = null, routes = null, decisions: client = null, startProse = null, budgetMs = 10, pace = 1, rowFloats = 20, lib = null,
@@ -82,7 +82,7 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
       }
       state = s;
       // Decision students: new towns take the latest version, saves keep theirs.
-      await students?.pin(state, choice.kind === 'new');
+      await students?.pin(state);
       view = sim.createRenderView ? sim.createRenderView(state, {rowFloats}) : null;
       syncProse();
       return {info: info()};

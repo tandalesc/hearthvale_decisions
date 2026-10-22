@@ -8,6 +8,7 @@
 //   ?simWorker=0                run the sim on the main thread (as before the worker)
 //   ?student=0                  turn off the decision students (public/students/), which
 //                               otherwise answer the kinds they know in the browser
+//   ?student=N                  hold every town on decision student version N (testing)
 import {createDecisionClient} from './decision-client.js';
 import {createLocalAnswerer, createStudentVersions} from './decision-local.js';
 import {loadNarrator, loadRenderer, loadSim} from './ui/bridge.js';
@@ -97,6 +98,7 @@ async function boot() {
   let sim, renderer;
   // Decision students answer the kinds they know in the browser unless ?student=0.
   const student = params.get('student') !== '0' ? new URL('students/', document.baseURI).href : null;
+  const studentPin = /^[1-9]\d*$/.test(params.get('student') ?? '') ? params.get('student') : null;
   const pace = (s) => (Number(params.get('pace')) > 0 ? Number(params.get('pace')) : s.pace ?? 1);
   async function inlineHost() {
     let routes = null;
@@ -109,7 +111,7 @@ async function boot() {
     let client = createDecisionClient({now: () => performance.now()}), students = null;
     if (student) {
       client = createLocalAnswerer({client, report: {}});
-      students = createStudentVersions({answerer: client, base: student});
+      students = createStudentVersions({answerer: client, base: student, pinned: studentPin});
       await students.start();
     }
     const h = createInlineHost({sim, routes, decisions: client, students, pace: pace(sim), budgetMs: SIM_BUDGET_MS, rowFloats: ROW_FLOATS});
@@ -122,7 +124,7 @@ async function boot() {
     [sim, renderer] = await loading;
     if (sim.kind === 'real' && params.get('simWorker') !== '0' && typeof Worker !== 'undefined') {
       try {
-        const h = createWorkerHost({pace: pace(sim), budgetMs: WORKER_BUDGET_MS, rowFloats: ROW_FLOATS, model: modelEnabled, decisionSettings, student});
+        const h = createWorkerHost({pace: pace(sim), budgetMs: WORKER_BUDGET_MS, rowFloats: ROW_FLOATS, model: modelEnabled, decisionSettings, student, studentPin});
         await h.ready;
         return (host = h);
       } catch (err) {
