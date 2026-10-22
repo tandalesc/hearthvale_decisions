@@ -44,14 +44,13 @@
       #boot[data-mode="off"] { display: none; }
       #boot[data-mode="load"][data-entering] { animation: boot-in 220ms cubic-bezier(.2, .8, .2, 1); }
       .boot-card { display: flex; flex-direction: column; align-items: center; width: min(100%, 420px); }
-      .boot-leaf { width: 44px; height: 44px; margin-bottom: 8px; }
+      .boot-leaf { width: 44px; height: 44px; margin-bottom: 14px; }
       .boot-leaf .l { fill: var(--leaf); }
       .boot-leaf .s { stroke: var(--green); }
       .boot-eyebrow {
-        margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
-        visibility: hidden;
+        display: none; margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
       }
-      #boot[data-named="1"] .boot-eyebrow { visibility: visible; }
+      #boot[data-named="1"] .boot-eyebrow { display: block; }
       .boot-name {
         margin: 0; max-width: 100%; overflow-wrap: anywhere;
         font-family: 'Fraunces', 'Iowan Old Style', Georgia, serif; font-weight: 600;
