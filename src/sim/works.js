@@ -9,7 +9,7 @@ import {
   structuralGrid, cellOf, setTier, crossRiverShare, crossRiverTies, zBand, nearestOpen,
 } from './roads.js';
 import { ERA_COST, createProject, registerProjectKind, demolish, costOf, placeBuilding } from './buildings.js';
-import { buildingBins, nearestDistrictId, proposeSites } from './sites.js';
+import { buildingBins, nearestDistrictId, proposeSites, lotGrid } from './sites.js';
 import { settleFoundations } from './buildings.js';
 import { liveCentres, centreRef } from './centres.js';
 import { crossingAt, bridgeGeometry, deckCells, deckYFor, BRIDGE_WIDTH, DECK_TIER, bridgeLoad, bridgeCapacity, settleDesignTraffic } from './bridges.js';
@@ -215,6 +215,20 @@ function basicBridgeCandidates(state) {
   return [];
 }
 
+// Town ground for a cart bridge's reach over the flood meadow: a lot within
+// a few metres of its line, the houses that would line a causeway (bridges.js
+// crossingAt lands on the bank rather than run on through them).
+const TOWN_REACH = 5;
+function townGround(state) {
+  const lots = lotGrid(state).cells;
+  const lotAt = (x, z) => { const i = cellOf(x, z); return i >= 0 && lots[i] > 0; };
+  return (x, z) => {
+    for (let dz = -TOWN_REACH; dz <= TOWN_REACH; dz += 2.5)
+      for (let dx = -TOWN_REACH; dx <= TOWN_REACH; dx += 2.5) if (lotAt(x + dx, z + dz)) return true;
+    return false;
+  };
+}
+
 // The best crossing in a band: the shortest span perpendicular to the river
 // (ends on dry ground), near the middle of the band. Fords are preferred when
 // asked (a basic bridge goes where the river is shallow).
@@ -222,10 +236,11 @@ export function bridgeSpan(state, band, { preferFord = false } = {}) {
   const { water } = terrainGrid();
   const z0 = ORIGIN_Z + band * BAND_CELLS * CELL;
   let best = null;
+  const built = townGround(state);
   for (let k = 0; k < BAND_CELLS * 2; k++) {
     const z = z0 + (k + 0.5) * CELL / 2;
     if (!riverOpenAt(z)) continue;   // never across a lake or out to sea
-    const crossing = crossingAt(z);
+    const crossing = crossingAt(z, 'timber', { built });
     const centre = cellOf(crossing.centre.x, z);
     const ford = centre >= 0 && water[centre] === 2;
     const score = crossing.length + Math.abs(z - (z0 + BAND_CELLS * CELL / 2)) * 0.05 - (preferFord && ford ? 6 : 0);
@@ -597,7 +612,7 @@ function startCellWork(state, work, cells, cost, payer, after, paid) {
 
 function startBridge(state, work, style, payer, after, paid, { width = null, replaces = null } = {}) {
   // A footbridge takes the short crossing; cart bridges the one clear of floods.
-  const crossing = (style !== 'footbridge' && work.crossing) || crossingAt(work.z, style);
+  const crossing = (style !== 'footbridge' && work.crossing) || crossingAt(work.z, style, { built: townGround(state) });
   const geo = bridgeGeometry(crossing, style, { width });
   const { cells, ...fields } = geo;
   retireFootbridgesNear(state, geo.z, geo.x, replaces);
@@ -754,9 +769,10 @@ export function rebuildOldBridges(state) {
   let n = 0;
   for (const b of state.buildings ?? []) {
     if (b.type !== 'bridge') continue;
+    if (b.a && relayThroughTown(state, b)) { n++; continue; }
     if (b.a) {
       // Older records: deck heights by style (footbridges low, cart bridges high).
-      const deckY = Math.round(deckYFor(b.a, b.b, b.z, BRIDGE_WIDTH[b.variant] ? b.variant : 'timber') * 100) / 100;
+      const deckY = Math.round(deckYFor(b.a, b.b, b.z, BRIDGE_WIDTH[b.variant] ? b.variant : 'timber', { cut: !!b.cut }) * 100) / 100;
       if (deckY !== b.deckY) { b.deckY = deckY; touchBuilding(state, b); }
       // Saves from before every deck cell carried the bridge flag.
       if ((b.built ?? 1) >= 1) for (const i of deckCells(b.a, b.b, b.width)) r.planned[i] |= FLAG.BRIDGE;
@@ -790,6 +806,43 @@ export function rebuildOldBridges(state) {
   }
   if (n) bumpNav(state);
   return n;
+}
+
+// Saves from before cart bridges stopped at the town's edge: a deck carried
+// on over a flood meadow the town has since built on is re-laid from bank to
+// bank. Its old deck cells over land keep their road; over water they go back
+// to river.
+function relayThroughTown(state, b) {
+  const style = BRIDGE_WIDTH[b.variant] ? b.variant : 'timber';
+  if (style === 'footbridge' || b.cut || terrainVersion() < 2 || b.collapsed) return false;
+  // The crossing's own z: where the a -> b line meets the river's centre line.
+  let z0 = b.z, gap = Infinity;
+  for (let t = 0; t <= 1; t += 0.005) {
+    const x = b.a.x + (b.b.x - b.a.x) * t, z = b.a.z + (b.b.z - b.a.z) * t;
+    const d = Math.abs(x - riverX(z));
+    if (d < gap) { gap = d; z0 = z; }
+  }
+  const crossing = crossingAt(z0, style, { built: townGround(state) });
+  if (!crossing.cut || crossing.length > Math.hypot(b.b.x - b.a.x, b.b.z - b.a.z) - 2) return false;
+  const r = state.roads;
+  const { water } = terrainGrid();
+  const cleared = new Set();
+  for (const i of deckCells(b.a, b.b, b.width)) {
+    if (i < 0 || !(r.planned[i] & FLAG.BRIDGE)) continue;
+    r.planned[i] &= ~FLAG.BRIDGE;
+    if (!water[i]) continue;
+    setTier(state, i, 0);
+    cleared.add(i);
+  }
+  const { cells, ...geo } = bridgeGeometry(crossing, style, { width: b.width });
+  Object.assign(b, geo);
+  if ((b.built ?? 1) >= 1) for (const i of cells) setPlannedTier(state, i, DECK_TIER[style], FLAG.BRIDGE, { uncapped: true });
+  const p = (state.projects ?? []).find(q => q.buildingId === b.id);
+  if (p) p.cells = cells;
+  const deck = new Set(cells);
+  stepOffCells(state, new Set([...cleared].filter(i => !deck.has(i) || (b.built ?? 1) < 1)));
+  touchBuilding(state, b);
+  return true;
 }
 
 // Lays cells as progress advances, so paving visibly creeps along the road.

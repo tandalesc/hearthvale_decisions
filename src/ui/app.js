@@ -196,8 +196,6 @@ export function createApp(host) {
     renderStats: () => safe(() => world?.stats?.(), null),
     power: () => safe(() => world?.power?.(), null),
     simMs: () => host.simMs(),
-    getIndividualCap: () => data.individualCap ?? 2000,
-    setIndividualCap: (v) => host.setIndividualCap(v),
     save: (manual) => host.save(manual),
     exportSave: () => host.exportSave(),
     importSave: (file) => host.importSave(file),

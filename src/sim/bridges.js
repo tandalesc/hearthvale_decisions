@@ -29,12 +29,18 @@ export function acrossAt(z) {
 // flood meadow to ground a great flood leaves dry, so its road never floods:
 // up to FLOOD_SPAN out from the river, else the first dry bank. A footbridge
 // is the cheap crossing a flood may take: it stays short and low.
+//
+// Where the town already stands on the meadow (built(x, z) says so for a lot),
+// a causeway would run on through its streets, so the bridge lands on the
+// first dry bank instead; such a crossing is `cut`, and its deck need not
+// clear the great flood (the town beside it floods anyway).
 const FLOOD_SPAN = 60;
 const FLOOD_CLEAR = 0.05;
-export function crossingAt(z, style = 'timber') {
+export function crossingAt(z, style = 'timber', { built = null } = {}) {
   const c = { x: riverX(z), z };
   const n = acrossAt(z);
   const overFlood = style !== 'footbridge' && terrainVersion() >= 2;
+  let cut = false;
   const end = dir => {
     let bank = null;
     for (let t = 2; t < (overFlood ? FLOOD_SPAN : 40); t += 0.5) {
@@ -42,11 +48,12 @@ export function crossingAt(z, style = 'timber') {
       if (waterAt(p.x, p.z) || bankDistance(p.x, p.z) < DRY) continue;
       bank ??= p;
       if (!overFlood || floodDepthAt(p.x, p.z) <= FLOOD_CLEAR) return p;
+      if (built?.(p.x, p.z)) { cut = true; return bank; }
     }
     return bank ?? { x: c.x + dir * n.x * 40, z: c.z + dir * n.z * 40 };
   };
   const a = end(-1), b = end(1);
-  return { a, b, centre: c, length: Math.hypot(b.x - a.x, b.z - a.z) };
+  return { a, b, centre: c, length: Math.hypot(b.x - a.x, b.z - a.z), ...(cut ? { cut } : {}) };
 }
 
 // Deck cells: a supercover walk of the a -> b centre line (so the deck is
@@ -83,10 +90,11 @@ function bridgeCorner(prev, next, seen, out) {
   if (corner >= 0 && !seen.has(corner)) { seen.add(corner); out.push(corner); }
 }
 
-export function deckYFor(a, b, z, style = 'timber') {
+export function deckYFor(a, b, z, style = 'timber', { cut = false } = {}) {
   let water = waterLevelAt(z) + (DECK_CLEARANCE[style] ?? 1.4);
-  // A cart deck over a floodplain clears the great flood too.
-  if (style !== 'footbridge' && terrainVersion() >= 2) water = Math.max(water, waterLevelAt(z) + FLOOD_RISE[KIND.RIVER] + 0.4);
+  // A cart deck over a floodplain clears the great flood too (not one cut
+  // short at the town's edge).
+  if (style !== 'footbridge' && terrainVersion() >= 2 && !cut) water = Math.max(water, waterLevelAt(z) + FLOOD_RISE[KIND.RIVER] + 0.4);
   // A footbridge keeps low even where the banks are high; cart decks never dip below the banks.
   return style === 'footbridge' ? water : Math.max(heightAt(a.x, a.z), heightAt(b.x, b.z), water);
 }
@@ -96,7 +104,8 @@ export function bridgeGeometry(crossing, style, { width: wide = null } = {}) {
   const width = wide ?? BRIDGE_WIDTH[style] ?? 4;
   const { a, b, centre, length } = crossing;
   return {
-    a, b, width, style, deckY: Math.round(deckYFor(a, b, centre.z, style) * 100) / 100,
+    a, b, width, style, deckY: Math.round(deckYFor(a, b, centre.z, style, { cut: !!crossing.cut }) * 100) / 100,
+    ...(crossing.cut ? { cut: true } : {}),
     x: (a.x + b.x) / 2, z: (a.z + b.z) / 2, w: length, d: width, rot: 1,
     cells: deckCells(a, b, width),
   };
