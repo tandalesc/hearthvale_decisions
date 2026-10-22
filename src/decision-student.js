@@ -228,16 +228,28 @@ export function loadStudent(bundle) {
 
   const head = cfg.arch === 'set' && bundle.confidence && W['err_head.net.0.weight'] ? bundle.confidence : null;
 
+  // An answer depends only on the question, so identical questions (a town
+  // asks most of them two or three times) are answered once and served from a
+  // bounded cache; callers get a copy, and sampling happens after, in the game.
+  const answers = new Map();
+  const ANSWER_CACHE = 20000;
   function answer(kind, snapshot, context, allowed) {
-    const options = decisionOptions(kind, allowed);
-    // The memory depends only on the snapshot's triples, which are the same for
-    // every kind sharing a snapshot type: one encode serves them all.
-    const p = softmax(logits(kind, decisionTriples(kind, snapshot, context), options, `${KIND_BY_ID[kind]?.share ?? kind}|${stateKey(snapshot ?? {})}`));
-    const probabilities = Object.fromEntries(options.map((o, i) => [o, p[i]]));
-    const choice = options.reduce((best, o) => (probabilities[o] > probabilities[best] ? o : best));
-    const answer = {kind, choice, confidence: probabilities[choice], probabilities, model, unknown: last?.unk ?? 0};
-    if (head) answer.expectedKL = expectedKL(p);
-    return answer;
+    const sKey = stateKey(snapshot ?? {});
+    const key = `${kind}|${sKey}|${JSON.stringify(context ?? null)}|${allowed ? JSON.stringify(allowed) : ''}`;
+    let hit = answers.get(key);
+    if (!hit) {
+      const options = decisionOptions(kind, allowed);
+      // The memory depends only on the snapshot's triples, which are the same for
+      // every kind sharing a snapshot type: one encode serves them all.
+      const p = softmax(logits(kind, decisionTriples(kind, snapshot, context), options, `${KIND_BY_ID[kind]?.share ?? kind}|${sKey}`));
+      const probabilities = Object.fromEntries(options.map((o, i) => [o, p[i]]));
+      const choice = options.reduce((best, o) => (probabilities[o] > probabilities[best] ? o : best));
+      hit = {kind, choice, confidence: probabilities[choice], probabilities, model, unknown: last?.unk ?? 0};
+      if (head) hit.expectedKL = expectedKL(p);
+      if (answers.size >= ANSWER_CACHE) answers.delete(answers.keys().next().value);
+      answers.set(key, hit);
+    }
+    return {...hit, probabilities: {...hit.probabilities}};
   }
 
   // For the parity check against the trainer: probabilities straight from
