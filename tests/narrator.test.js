@@ -22,7 +22,7 @@ const baseFacts = () => ({
   story: [{year: 42, kind: 'strike'}],
 });
 
-const config = {key: 'test-key', endpoint: 'http://rrh-llm-1:4000/v1/decisions'};
+const config = {key: 'test-key', endpoint: 'http://gpu-box:4000/v1/decisions', models: ['example/Reasoning-AI', 'example/Multimodal-AI']};
 
 // An upstream reply streamed as OpenAI-style SSE.
 function sseResponse(parts, {status = 200, hold = null} = {}) {
@@ -117,7 +117,7 @@ test('the prompt holds only the given facts', () => {
   assert.deepEqual(other.messages.slice(0, -1), prompt.messages.slice(0, -1));
   assert.doesNotMatch(other.messages.at(-1).content, /Edda Marsh|wage floor/);
   // The request turns thinking off and streams.
-  const body = completionBody('ramblerun/Reasoning-AI', prompt.messages);
+  const body = completionBody('example/Reasoning-AI', prompt.messages);
   assert.equal(body.stream, true);
   assert.deepEqual(body.chat_template_kwargs, {enable_thinking: false});
 });
@@ -166,7 +166,7 @@ test('streams a note, then serves identical facts from the cache', async () => {
   assert.equal(first.meta.cached, false);
   assert.ok(first.tokens.length >= 2, 'streams in pieces');
   assert.equal(first.text, NOTE.join('').trim());
-  assert.equal(seen[0].url, 'http://rrh-llm-1:4000/v1/chat/completions');
+  assert.equal(seen[0].url, 'http://gpu-box:4000/v1/chat/completions');
   assert.equal(seen[0].init.headers['x-litellm-api-key'], 'test-key');
 
   const second = recorder();
@@ -181,13 +181,13 @@ test('falls back to the second model when the first is missing', async () => {
   const fetcher = async (url, init) => {
     const {model} = JSON.parse(init.body);
     models.push(model);
-    return model === 'ramblerun/Reasoning-AI' ? new Response('no', {status: 404}) : sseResponse(NOTE);
+    return model === 'example/Reasoning-AI' ? new Response('no', {status: 404}) : sseResponse(NOTE);
   };
   const narrator = createNarrator({loadConfig: async () => config, fetcher});
   const r = recorder();
   await narrator.handle({facts: baseFacts()}, r.sink);
-  assert.deepEqual(models, ['ramblerun/Reasoning-AI', 'ramblerun/Multimodal-AI']);
-  assert.equal(r.meta.model, 'ramblerun/Multimodal-AI');
+  assert.deepEqual(models, ['example/Reasoning-AI', 'example/Multimodal-AI']);
+  assert.equal(r.meta.model, 'example/Multimodal-AI');
   assert.ok(r.text);
 });
 

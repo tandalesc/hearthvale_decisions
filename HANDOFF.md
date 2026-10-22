@@ -21,9 +21,9 @@ The player is the town's deliberative leadership ("System 2"). They never place 
 - **Growth.** Lots follow worn paths, homes upgrade in place across era style packs, there's bid-rent pressure, and there can be several centres.
 - **Language.** All player-facing text follows the house voice (`src/sim/text/voice.js` lints it).
 
-## Decision model (rrh-llm-1, Liquid AI d1-3B behind LiteLLM)
+## Decision model (Liquid AI d1-3B behind LiteLLM, on a LAN GPU box)
 
-- `server/system1.js` proxies `POST /api/decisions` to `http://rrh-llm-1:4000/v1/decisions` and `/v1/decisions/batch`. The key comes from `local.env`, is sent server-side only as `x-litellm-api-key`, and never reaches the browser.
+- `server/system1.js` proxies `POST /api/decisions` to `DECISIONS_URL` from `local.env` (a LAN name or loopback, `/v1/decisions` and `/v1/decisions/batch`). The key comes from `local.env`, is sent server-side only as `x-litellm-api-key`, and never reaches the browser.
 - Request shape: `{groups:[{state, questions:[{kind,id,context,allowed?}]}]}`. Kinds are registered in `src/decision-kinds.js`; the game kinds live in `src/sim/decisions/kinds.js`.
 - **Service facts:**
   - Always send a `state`, at least `{}`. Without one the service answers 413.
@@ -65,7 +65,7 @@ Measured headless with a mock 100 ms service (real sim and client). The scratch 
 
 ## LLM prose (narrator)
 
-`server/narrator.js` streams from `ramblerun/Reasoning-AI` with `enable_thinking: false`. It writes inspector notes, card prose, year-end chronicle lines and the end page. Replies are validated and fall back to template text. Notes are cached by a material-facts key and saved with the game. A note never changes under the reader; a refresh lights up when the facts change.
+`server/narrator.js` streams from the models in `NARRATOR_MODELS` (`local.env`, tried in order) with `enable_thinking: false`. It writes inspector notes, card prose, year-end chronicle lines and the end page. Replies are validated and fall back to template text. Notes are cached by a material-facts key and saved with the game. A note never changes under the reader; a refresh lights up when the facts change.
 
 - The narrator's injection filter blocks words like "forget". Game text must avoid them: the card line "They will not forget" was being rejected and is now "They will remember this".
 
@@ -195,7 +195,7 @@ npx playwright test              # 51 browser tests (starts its own server)
 node scripts/boot-check.js       # loads the game and fails on any renderer error
 node scripts/balance.js --seeds 6 --years 120 --styles frugal,balanced,generous
 node scripts/render-check.js --url http://127.0.0.1:PORT   # screenshots + stats (default port 5199)
-node scripts/benchmark-decisions.js   # live decision throughput (LAN access to rrh-llm-1)
+node scripts/benchmark-decisions.js   # live decision throughput (LAN access to the decision service)
 ```
 
 The two wall-clock tests ("150 headless years" and the 3,000-walker p95) fail when the machine is busy, for example with agents or browsers running. Rerun them quiet.
@@ -236,8 +236,6 @@ The two wall-clock tests ("150 headless years" and the 3,000-walker p95) fail wh
 
 ## Tools and artifacts from this session
 
-Scratch scripts and outputs are in `/private/tmp/claude-501/-Users-shishirtandale-Development-relayer-test-game-20261014/3389b8a2-b3ed-484e-8a28-8ee2c27a0c03/scratchpad/` (temporary; copy anything worth keeping into `scripts/`). Before/after screenshots and audio clips are in its `agents/{paths,nature,livedin,porches,popularity,audio,hud}/` folders.
-
 **Decision-model studies**
 
 | Script | What it does |
@@ -259,7 +257,7 @@ Scratch scripts and outputs are in `/private/tmp/claude-501/-Users-shishirtandal
 
 ## Before making the repo public
 
-1. **Infrastructure names.** The code and docs name `rrh-llm-1:4000` and the `ramblerun/*` models. Make the host configurable-only and scrub the names, or confirm the service is reachable only on the LAN; it answered requests without a key during testing.
+1. **Infrastructure names.** Scrubbed: the decision host and narrator models come only from `local.env` (`DECISIONS_URL`, `NARRATOR_MODELS`), and the preview hosts from `PREVIEW_ALLOWED_HOSTS`. The service is LAN-only and needs a key for everything but the owner's laptop. Older commits still hold the names, so publish from rewritten or squashed history.
 2. **A license.** There isn't one yet.
 3. **Secrets.** The API key has never been in any commit (checked across all history).
 

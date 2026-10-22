@@ -4,7 +4,7 @@
 //
 // Runs the browser decision client in Node, wired straight to the server
 // module's request handler (no browser, no Vite), against the real service
-// configured in local.env. Requires LAN access to rrh-llm-1. The API key is
+// configured in local.env. Requires LAN access to that service. The API key is
 // loaded server-side and never printed.
 //
 // Workloads (every question is new; only states repeat):

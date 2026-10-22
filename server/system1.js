@@ -4,17 +4,27 @@ import { parseEnv } from 'node:util';
 import { join } from 'node:path';
 
 // Node-only. Never import this module into the browser bundle.
+
+// Loopback, or a name only the LAN resolves: one label ("gpu-box") or a
+// local-only suffix. Public names and IP literals are refused.
+const LOCAL_SUFFIXES = ['.localdomain', '.local', '.lan', '.home.arpa', '.internal'];
+function isLocalHost(hostname) {
+  if (['localhost', '127.0.0.1', '[::1]'].includes(hostname)) return true;
+  if (/^[\d.]+$/.test(hostname) || hostname.startsWith('[')) return false;
+  return !hostname.includes('.') || LOCAL_SUFFIXES.some(suffix => hostname.endsWith(suffix));
+}
 export async function loadLocalConfig(root, overrides = process.env) {
   let values = {};
   try { values = parseEnv(await readFile(join(root, 'local.env'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('Unable to read local.env'); }
   const key = overrides.API_KEY || values.API_KEY || '';
-  const endpoint = overrides.RRH_DECISIONS_URL || values.RRH_DECISIONS_URL || 'http://rrh-llm-1:4000/v1/decisions';
+  const endpoint = overrides.DECISIONS_URL || values.DECISIONS_URL || 'http://127.0.0.1:4000/v1/decisions';
+  const models = String(overrides.NARRATOR_MODELS || values.NARRATOR_MODELS || '').split(',').map(m => m.trim()).filter(Boolean);
   const url = new URL(endpoint);
-  if (url.protocol !== 'http:' || !['rrh-llm-1', 'rrh-llm-1.localdomain', 'localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || url.username || url.password || url.search || url.hash || url.pathname !== '/v1/decisions') {
-    throw new Error('Use the named local rrh-llm-1 service or loopback HTTP /v1/decisions endpoint');
+  if (url.protocol !== 'http:' || !isLocalHost(url.hostname) || url.username || url.password || url.search || url.hash || url.pathname !== '/v1/decisions') {
+    throw new Error('Use a LAN service name or loopback HTTP /v1/decisions endpoint');
   }
-  return { key, endpoint: url.href };
+  return { key, endpoint: url.href, models };
 }
 export async function checkConnection(config, fetcher = fetch) {
   const base = { keyConfigured: Boolean(config.key), endpoint: config.endpoint, engine: 'local-rules', modelConnected: false, contractAvailable: true };
