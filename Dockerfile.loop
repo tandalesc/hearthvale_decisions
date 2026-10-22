@@ -1,0 +1,26 @@
+# The decision-student learning loop (scripts/distill-loop.js) as a container:
+# Node for the game's scripts, Python and CPU-only PyTorch for the trainer.
+# The student is small (about 125k parameters); a cycle trains in minutes on
+# four cores. Code and data are bind-mounted under /work, not copied in:
+#
+#   /work/hearthvale        this repository, with data/distill and data/loop
+#   /work/hearthvale/data/novel   the proxy's novel-question log (read-only)
+#   /work/twm               the Triple World Model trainer (src, scripts) and its results
+#   /work/students          the published bundles and manifest.json, also mounted
+#                           into the game server at /app/dist/students
+#   /work/env/local.env     the decision service settings (labels come from the teacher)
+#
+#   docker build -f Dockerfile.loop -t hearthvale-loop .
+#   docker run -d --name hearthvale-loop --restart unless-stopped --network host --cpus 4 --memory 13g \
+#     -v LOOP_DIR:/work -v NOVEL_DIR:/work/hearthvale/data/novel:ro -v STUDENTS_DIR:/work/students \
+#     hearthvale-loop node scripts/distill-loop-watch.js --every 60 -- --publish
+#
+# The loop's state (data/loop/state.json) points at these paths: "twm": "/work/twm",
+# "python": "/usr/local/bin/python", "envRoot": "/work/env", "config": {"publishDir": "/work/students"}.
+FROM node:22-slim AS node
+FROM python:3.11-slim
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir numpy scikit-learn matplotlib tokenizers
+ENV PYTHONPATH=/work/twm/src OMP_NUM_THREADS=4 PYTHONUNBUFFERED=1
+WORKDIR /work/hearthvale
