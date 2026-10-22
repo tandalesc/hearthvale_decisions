@@ -6,6 +6,7 @@ import { styleFor } from './kit/styles.js';
 import { stageOf } from '../sim/landscape.js';
 import { benchesOf, GATHER } from '../sim/seats.js';
 import { createCattle } from './cattle.js';
+import { quayBeside } from './rivermap.js';
 
 // Lived-in decor (design-visual §7): the small things a town gathers as it
 // matures, all instanced and placed from sim state, never from game rules.
@@ -694,7 +695,7 @@ export function createDecor(ctx) {
   }
 
   // --- Parks ---------------------------------------------------------------
-  function park(b, era, season, level) {
+  function park(b, era, season, level, embankments) {
     const id = b.id | 0;
     // A park the town stops keeping goes back to meadow and scrub.
     const neglect = Math.max(0, -level);
@@ -703,19 +704,29 @@ export function createDecor(ctx) {
     const at = (lx, lz) => [b.x + lx, b.z + lz];
     // Which side faces the water (beaches): the bank side.
     const toRiver = Math.sign(riverX(b.z) - b.x) || 1;
-    const beach = !!b.flags?.beach;
+    // Against a quay wall a beach park is a plain waterside park.
+    const beach = !!b.flags?.beach && !quayBeside(riverX, waterHalf(), b.x, b.z, b.d, toRiver, embankments);
     // A low rail (or a post-and-rail fence) round it, gates on two sides.
     const rail = era >= 3 ? 'rail' : 'picket';
     const pseudo = { wild: neglect, id };
     for (const [x0, z0, x1, z1, k] of [[-hw, -hd, hw, -hd, 0], [-hw, hd, hw, hd, 1], [-hw, -hd, -hw, hd, 2], [hw, -hd, hw, hd, 3]]) {
-      // Leave the water side open on a beach.
-      if (beach && ((k === 2 && toRiver < 0) || (k === 3 && toRiver > 0))) continue;
+      // Leave the water side open (a beach, or a lawn down to a quay).
+      if (b.flags?.beach && ((k === 2 && toRiver < 0) || (k === 3 && toRiver > 0))) continue;
       const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
       const alongX = z0 === z1;
       const g = 0.9;
       if (alongX) {
-        boundary(frame, x0, z0, mx - g, z0, rail, pseudo, id * 8 + k * 2);
-        boundary(frame, mx + g, z0, x1, z1, rail, pseudo, id * 8 + k * 2 + 1);
+        // Toward the water the side fences stop a metre short of the edge,
+        // never running on over a quay wall or down the bank.
+        let lo = x0, hi = x1;
+        if (b.flags?.beach) {
+          let lim = toRiver * hw;
+          while (Math.abs(lim) > 0.5 && bankDistance(b.x + lim, b.z + z0) < 1) lim -= toRiver * 0.25;
+          if (toRiver > 0) hi = lim; else lo = lim;
+        }
+        for (const [a, c, n] of [[lo, Math.min(hi, mx - g), 0], [Math.max(lo, mx + g), hi, 1]]) {
+          if (c - a > 0.4) boundary(frame, a, z0, c, z0, rail, pseudo, id * 8 + k * 2 + n);
+        }
       } else {
         boundary(frame, x0, z0, x0, mz - g, rail, pseudo, id * 8 + k * 2);
         boundary(frame, x0, mz + g, x1, z1, rail, pseudo, id * 8 + k * 2 + 1);
@@ -1064,7 +1075,7 @@ export function createDecor(ctx) {
     const dry = dryDay(view);
     for (const b of near) {
       if ((b.built ?? 1) < 1) continue;
-      if (b.type === 'park') { park(b, era, season, view.landscape ? landAt(view, b.x, b.z) : 0.5); continue; }
+      if (b.type === 'park') { park(b, era, season, view.landscape ? landAt(view, b.x, b.z) : 0.5, view.embankments); continue; }
       if (!NO_GARDEN.has(b.type)) garden(b, era);
       if (yards) yard(b, era, dry, season, yardFree);
       if (SIGNED.has(b.type) && b.occupied !== false && !b.flags?.derelict && era >= 1) shopSign(b, era);

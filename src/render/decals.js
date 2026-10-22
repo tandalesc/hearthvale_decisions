@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { patchMaterial, hashId, NOISE } from './shaderlib.js';
 import { GROUND_GLSL } from './ground.js';
 import * as Terrain from '../terrain.js';
+import { quayBeside } from './rivermap.js';
 import { GROUND_AO, GROUND_AO_GLSL, bakeOcclusionSteps, setGroundField, aoDayFactor, bakedWeights } from './occlusion.js';
 
 // Ground decals (design-visual §3.3, §6): what sells "sitting on the table".
@@ -426,6 +427,7 @@ export function createDecals(ctx) {
   colorGeo.instanceCount = 0;
 
   let lastVersion = -1;
+  let lastEmbank = null;
   let lastSig = 0;
   let lastCheck = -1;
   let blobsBuilt = false;
@@ -465,7 +467,7 @@ export function createDecals(ctx) {
     return out;
   }
 
-  function rebuildLots() {
+  function rebuildLots(embankments) {
     const lots = ctx.buildings.lots;
     lotSet.ensure(lots.size * 2 + 1);
     colorSet.ensure(lots.size * 2 + 1);
@@ -495,8 +497,9 @@ export function createDecals(ctx) {
       // A park by the river is a beach: sand from inside its water side to
       // the river, drawn over the lawn (same draw, later instance). It is
       // ground like the lawn, so it shows at every distance.
-      if (kind === KIND.PARK && lot.record?.flags?.beach) {
-        const toRiver = Math.sign(Terrain.riverX(s.z) - s.x) || 1;
+      // (Against a quay wall there is no beach: the park is a waterside lawn.)
+      const toRiver = Math.sign(Terrain.riverX(s.z) - s.x) || 1;
+      if (kind === KIND.PARK && lot.record?.flags?.beach && !quayBeside(Terrain.riverX, Terrain.WATER_HALF, s.x, s.z, s.d, toRiver, embankments)) {
         const inner = s.x + toRiver * (s.w / 2 - 2.5);
         const water = Terrain.riverX(s.z) - toRiver * (Terrain.WATER_HALF - 1.5);
         cc[c * 3] = (inner + water) / 2; cc[c * 3 + 1] = 0; cc[c * 3 + 2] = s.z;
@@ -621,10 +624,15 @@ export function createDecals(ctx) {
       dirty = sig !== lastSig;
       lastSig = sig;
     }
+    // A new quay wall can take a beach park's sand away.
+    if (view?.embankments !== lastEmbank) {
+      lastEmbank = view?.embankments;
+      dirty = true;
+    }
     if (dirty) {
       lastVersion = v;
       lastSig = signature();
-      rebuildLots();
+      rebuildLots(view?.embankments);
     }
     if (!blobsBuilt) buildBlobs();
     else if (ctx.forest && ctx.forest.chopVersion !== lastChop) syncChops();
