@@ -120,6 +120,7 @@ function compare(cand, metric) {
 
 const report = {seeds, ref: ref.name, runs: {}, metrics: {}};
 for (const g of [R, ...C, ...E]) report.runs[g.name] = Object.fromEntries(seeds.map((s) => [s, (g.bySeed.get(s) ?? []).map((t) => ({salt: t.salt,
+  pop50: t.town.find((r) => r.year === 50)?.pop ?? null, pop100: t.town.find((r) => r.year === 100)?.pop ?? null,
   pop150: t.town.find((r) => r.year === 150)?.pop ?? null, work: share(t, 'morning', 'work')}))]));
 console.log(`${seeds.length} seeds; reference ${ref.name}: ${seeds.map((s) => R.bySeed.get(s).length).join('/')} runs per seed; ` +
   C.map((c) => `${c.name}: ${seeds.map((s) => c.bySeed.get(s).length).join('/')}`).join('; '));
