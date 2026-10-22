@@ -116,6 +116,23 @@ export function loadStudent(bundle) {
     return out;
   }
 
+  // The first question layer's work on the option rows: those rows are the option tokens
+  // themselves, so their norm1 and their self-attention queries, keys and values are the
+  // same for every question offering them, and are kept with them.
+  const firstMemo = new Map();
+  function firstOptions(kind, options) {
+    const key = `${kind}|${options.join(',')}`;
+    let F = firstMemo.get(key);
+    if (!F) {
+      const p = 'question.layers.0.self_attn';
+      const h = lnFlat(optionsFlat(kind, options), options.length, d, W, 'question.layers.0.norm1');
+      const {k, v} = projectFlat(W, p, h, options.length, d);
+      F = {k, v, q: linFlat(h, options.length, d, W[`${p}.in_proj_weight`].data, W[`${p}.in_proj_bias`].data, d, 0)};
+      firstMemo.set(key, F);
+    }
+    return F;
+  }
+
   // Snapshot tokens -> each question layer's keys and values over the memory.
   function stateMemory(x, n) {
     for (let l = 0; l < cfg.state_layers; l++) {
@@ -180,9 +197,24 @@ export function loadStudent(bundle) {
     x.set(qx, 0);
     x.set(opts, qn * d);
     const L = cfg.question_layers, k = options.length;
+    // The first layer's self-attention: the question rows' norm1, keys and values worked
+    // out, the option rows' taken from firstOptions. Rows are independent, so these are
+    // the same numbers a pass over all rows gives.
+    let F = null, kv0 = null, hq = null;
+    if (L > 0) {
+      F = firstOptions(kind, options);
+      hq = lnFlat(qx, qn, d, W, 'question.layers.0.norm1');
+      const own = projectFlat(W, 'question.layers.0.self_attn', hq, qn, d);
+      kv0 = {k: cat(own.k, F.k), v: cat(own.v, F.v), m: n};
+    }
     for (let l = 0; l < L - 1; l++) {
       const p = `question.layers.${l}`;
-      addInto(x, attendFlat(W, `${p}.self_attn`, lnFlat(x, n, d, W, `${p}.norm1`), n, d, null, cfg.n_heads));
+      if (l === 0) {
+        const w = W[`${p}.self_attn.in_proj_weight`].data, b = W[`${p}.self_attn.in_proj_bias`].data;
+        addInto(x, attendQ(W, `${p}.self_attn`, cat(linFlat(hq, qn, d, w, b, d, 0), F.q), n, d, kv0, cfg.n_heads));
+      } else {
+        addInto(x, attendFlat(W, `${p}.self_attn`, lnFlat(x, n, d, W, `${p}.norm1`), n, d, null, cfg.n_heads));
+      }
       addInto(x, attendFlat(W, `${p}.multihead_attn`, lnFlat(x, n, d, W, `${p}.norm2`), n, d, mem[l], cfg.n_heads));
       addInto(x, ffnFlat(W, p, lnFlat(x, n, d, W, `${p}.norm3`), n, d));
     }
@@ -191,9 +223,13 @@ export function loadStudent(bundle) {
     // a kept row's arithmetic, and the answer, is exactly what the full pass gives.
     if (L > 0) {
       const p = `question.layers.${L - 1}`;
-      const h = lnFlat(x, n, d, W, `${p}.norm1`);
       const xo = x.subarray(qn * d);
-      addInto(xo, attendFlat(W, `${p}.self_attn`, h.subarray(qn * d), k, d, projectFlat(W, `${p}.self_attn`, h, n, d), cfg.n_heads));
+      if (L === 1) {
+        addInto(xo, attendQ(W, `${p}.self_attn`, F.q, k, d, kv0, cfg.n_heads));
+      } else {
+        const h = lnFlat(x, n, d, W, `${p}.norm1`);
+        addInto(xo, attendFlat(W, `${p}.self_attn`, h.subarray(qn * d), k, d, projectFlat(W, `${p}.self_attn`, h, n, d), cfg.n_heads));
+      }
       addInto(xo, attendFlat(W, `${p}.multihead_attn`, lnFlat(xo, k, d, W, `${p}.norm2`), k, d, mem[L - 1], cfg.n_heads));
       addInto(xo, ffnFlat(W, p, lnFlat(xo, k, d, W, `${p}.norm3`), k, d));
     }
@@ -307,6 +343,14 @@ function dot(a, b) {
   return s;
 }
 
+// Rows of a, then rows of b, in one flat array.
+function cat(a, b) {
+  const out = new Float32Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
 function addInto(a, b) {
   for (let i = 0; i < a.length; i++) a[i] += b[i];
 }
@@ -391,8 +435,12 @@ function projectFlat(W, p, x, n, d) {
 // nn.MultiheadAttention then out_proj; without `kv`, x attends to itself.
 function attendFlat(W, p, x, n, d, kv, heads) {
   const w = W[`${p}.in_proj_weight`].data, b = W[`${p}.in_proj_bias`].data;
-  const {k, v, m} = kv ?? projectFlat(W, p, x, n, d);
-  const q = linFlat(x, n, d, w, b, d, 0);
+  kv ??= projectFlat(W, p, x, n, d);
+  return attendQ(W, p, linFlat(x, n, d, w, b, d, 0), n, d, kv, heads);
+}
+
+// The same from the queries q (n rows), already projected.
+function attendQ(W, p, q, n, d, {k, v, m}, heads) {
   const dh = d / heads, scale = 1 / Math.sqrt(dh);
   const out = new Float32Array(n * d), scores = new Float32Array(m);
   for (let r = 0; r < n; r++) {

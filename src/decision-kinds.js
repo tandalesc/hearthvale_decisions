@@ -196,11 +196,26 @@ export function validateQuestion(question) {
 }
 
 // A kind's shared state: validated against its schema; {} when it has none.
+// The scheduler hands out the same snapshot objects many times (the town's per quarter,
+// each district's, slices.js), and snapshots are never changed once made. So the clean
+// copy is kept per snapshot object and schema, and its key per clean copy (stateKey).
+// Callers only read the clean copy.
+const cleanStates = new WeakMap();   // snapshot -> Map(kind state schema -> clean copy)
+const cleanKeys = new WeakMap();     // clean copy -> stateKey
 export function validateState(kindId, state) {
   const kind = kinds.get(kindId);
   if (!kind) throw new Error('Unknown decision kind');
-  const clean = checkFields(kind.state, state ?? {}, 'state');
+  const raw = state ?? {};
+  const byShape = raw && typeof raw === 'object' ? cleanStates.get(raw) : undefined;
+  const hit = byShape?.get(kind.state);
+  if (hit) return hit;
+  const clean = checkFields(kind.state, raw, 'state');
   if (JSON.stringify(clean).length > MAX_STATE_BYTES) throw new Error('State too large');
+  if (raw && typeof raw === 'object') {
+    if (byShape) byShape.set(kind.state, clean);
+    else cleanStates.set(raw, new Map([[kind.state, clean]]));
+    cleanKeys.set(clean, null);
+  }
   return clean;
 }
 
@@ -213,8 +228,17 @@ export function canonicalJson(value) {
   return JSON.stringify(value);
 }
 
-// Short stable id for a state, for grouping and diagnostics.
+// Short stable id for a state, for grouping and diagnostics. Worked out once for a
+// clean copy made by validateState; any other object afresh.
 export function stateKey(state) {
+  const known = cleanKeys.get(state);
+  if (known) return known;
+  const key = keyOf(state);
+  if (known === null) cleanKeys.set(state, key);
+  return key;
+}
+
+function keyOf(state) {
   const text = canonicalJson(state ?? {});
   let a = 2166136261, b = 5381;
   for (let i = 0; i < text.length; i++) {

@@ -9,16 +9,18 @@ import {fixtureState, stepTick, createRenderView, PACE, TICKS_PER_YEAR} from '..
 import {addBuildingRecord, removeBuildingRecord, touchBuilding} from '../src/sim/state.js';
 import {createMirrorSource, createRenderMirror} from '../src/sim/render-mirror.js';
 import {createRoutePlanner} from '../src/route-planner.js';
+import {activeWearBox} from '../src/sim/roads.js';
 
 const plain = (b) => Object.fromEntries(Object.entries(b).filter(([k]) => k[0] !== '_'));
 
-function run({frames, speed = 20, before, pre, each}) {
+// As the worker makes it: wear compared only inside the active box (roads.js activeWearBox).
+function run({frames, speed = 20, before, pre, each, wearBox = activeWearBox}) {
   const state = fixtureState('town');
   before?.(state);
   const routes = createRoutePlanner({worker: false, clock: () => 0});
   const services = {decisions: null, routes, now: 0};
   const view = createRenderView(state, {rowFloats: 20});
-  const source = createMirrorSource();
+  const source = createMirrorSource({wearBox});
   const mirror = createRenderMirror({rowFloats: 20});
   for (let f = 0; f < frames; f++) {
     const now = (f + 1) / 60;
