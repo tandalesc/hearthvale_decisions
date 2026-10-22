@@ -538,28 +538,35 @@ function rentContext(e) {
 
 const clampN = (x) => Math.max(-1e9, Math.min(1e9, x));
 
+const homeOf = (state, h) => (h.homeId != null ? byId(state, 'buildings', h.homeId) : null);
+const homeSavings = (h) => Math.max(0, Math.round(h.savings ?? 0));
+// What the next home tier up costs (homeContext's nextCost).
+const nextHomeCost = (state, home) => Math.round([500, 1100, 2200, 4200, 9000][Math.min(4, home?.tier ?? 1)] * (1 + 0.6 * (state.era ?? 0)));
+
 function homeContext(state, h) {
-  const home = h.homeId != null ? byId(state, 'buildings', h.homeId) : null;
+  const home = homeOf(state, h);
   const tier = home?.tier ?? 1;
-  const nextCost = [500, 1100, 2200, 4200, 9000][Math.min(4, tier)] * (1 + 0.6 * (state.era ?? 0));
   const eraMax = [1, 2, 3, 4, 5, 5][state.era ?? 0];
   return {
-    savings: Math.max(0, Math.round(h.savings ?? 0)), income: clampN(Math.round(h.income ?? 0)), rent: Math.max(0, Math.round(h.rent ?? 0)),
+    savings: homeSavings(h), income: clampN(Math.round(h.income ?? 0)), rent: Math.max(0, Math.round(h.rent ?? 0)),
     homeTier: Math.max(1, Math.min(5, tier)), condition: round2(home?.condition ?? 1), canExtend: (home?.storeys ?? 1) < [1, 2, 3, 4, 6, 9][state.era ?? 0] ? 'yes' : 'no',
-    neighboursTier: Math.max(1, Math.min(5, state.indicators.avgHomeTier ?? 1)), eraMaxTier: eraMax, nextCost: Math.round(nextCost),
+    neighboursTier: Math.max(1, Math.min(5, state.indicators.avgHomeTier ?? 1)), eraMaxTier: eraMax, nextCost: nextHomeCost(state, home),
   };
 }
 
 // Individual home questions for the households closest to affording an upgrade.
+// Asked every tick there is room: the savings test comes first, so only the few
+// households that pass it get a whole context (docs/design/data-locality.md).
 function homeQuestions(state, limit, skip = new Set()) {
   const m = monthIndex(state.time);
-  const ranked = state.households
-    .filter((h) => h.homeId != null && !skip.has(h.id))
-    .map((h) => ({h, c: homeContext(state, h)}))
-    .filter(({c}) => c.savings >= 0.4 * c.nextCost)
-    .sort((a, b) => b.c.savings / b.c.nextCost - a.c.savings / a.c.nextCost || a.h.id - b.h.id)
-    .slice(0, limit);
-  return ranked.map(({h, c}) => ({key: qkey('household_home', m, `h${h.id}`), subject: {householdId: h.id}, context: c,
+  const ranked = [];
+  for (const h of state.households) {
+    if (h.homeId == null || skip.has(h.id)) continue;
+    if (!(homeSavings(h) >= 0.4 * nextHomeCost(state, homeOf(state, h)))) continue;
+    ranked.push({h, c: homeContext(state, h)});
+  }
+  ranked.sort((a, b) => b.c.savings / b.c.nextCost - a.c.savings / a.c.nextCost || a.h.id - b.h.id);
+  return ranked.slice(0, limit).map(({h, c}) => ({key: qkey('household_home', m, `h${h.id}`), subject: {householdId: h.id}, context: c,
     snapshot: townSnapshot(state), allowed: null, priority: PRIORITY.individual}));
 }
 

@@ -1,3 +1,11 @@
+# Scheduler: home questions filter first (2026-10-22)
+
+**What changed.** `homeQuestions` (`src/sim/decisions/scheduler.js`) runs on every tick with room for questions. It used to build a whole context for every household with a home, then keep the few within 40 % of affording an upgrade. Now it runs the savings test first and builds contexts only for the households that pass. This came out of the data-locality investigation (`docs/design/data-locality.md`), which ranks the further proposals.
+
+**Result.** In a 150-year headless student town (seed 66, `scripts/town-hash.js`), `homeQuestions` fell from 4.8 % to 1.1 % of the CPU profile, about 2.9 s of a 71–83 s run. Towns are bit-identical: the same `serialize()` hash at all 15 decade checkpoints for seeds 66, 7 and 12 against `914f6aa`.
+
+---
+
 # Micro-detail: lapped roof courses (2026-10-21)
 
 **What changed.** On High only, tile, slate and shingle roofs tilt the shading normal by the slope of lapped courses (a step up at each course line) and grooved joints, from the same analytic pattern the roof already draws (`src/render/kit/material.js`). The derivatives of `vLocal` and the view position are taken at the top of the colour hook, and Mikkelsen's 2010 formula (`microPerturb`, `MICRO_ARB` in `shaderlib.js`) turns the gradient into a normal: no new attributes. Gated by `MICRO_DETAIL` on the kit materials (`setKitMicroDetail`, from `buildings.js` `applyQuality`); Low and Medium compile what they did before. It fades with `roofSharp`, so it shows when zoomed in, not at the default overview. Design: `docs/design/micro-detail.md` §4b.
