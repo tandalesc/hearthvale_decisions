@@ -182,7 +182,7 @@ test('local answerer: unknown values go to the live teacher when it is up, else 
 test('novel teacher labels flagged questions once, keeps only the expected teacher, waits for idle', async () => {
   const {createNovelTeacher} = await import('../server/system1.js');
   const timers = [], out = [];
-  let idle = false, model = 'ramblerun/Decision-AI', calls = 0;
+  let idle = false, model = 'example/Decision-AI', calls = 0;
   const request = async (config, groups) => {
     calls++;
     const answers = {};
@@ -190,7 +190,7 @@ test('novel teacher labels flagged questions once, keeps only the expected teach
     return {answers, model};
   };
   const t = createNovelTeacher({loadConfig: async () => ({key: 'k'}), appendLabel: async (text) => out.push(...text.trim().split('\n').map((l) => JSON.parse(l))),
-    idle: () => idle, request, timer: (fn) => timers.push(fn)});
+    idle: () => idle, request, teacher: 'example/Decision-AI', timer: (fn) => timers.push(fn)});
   const item = (k) => ({key: `k${k}`, kind: 'resident_routine', context: {timeOfDay: 'morning'}, state: town});
   t.enqueue([item(1), item(2), item(1)]);
   await timers.shift()();
@@ -201,7 +201,7 @@ test('novel teacher labels flagged questions once, keeps only the expected teach
   assert.deepEqual(out.map((l) => l.key), ['k1', 'k2']);
   t.enqueue([item(1)]);
   assert.equal(t.stats().queued, 0, 'already labelled keys are not queued again');
-  model = 'fallback/multimodal';
+  model = 'example/fallback';
   t.enqueue([item(3)]);
   while (timers.length) await timers.shift()();
   assert.equal(out.length, 2, 'an answer from another model is never a label');

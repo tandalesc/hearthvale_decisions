@@ -379,10 +379,11 @@ export function createNovelLog({append, salt, perMinute = 240, remember = 200000
 
 // Labels flagged questions with the decision model as soon as the proxy is idle
 // (design §7: the teacher labels them; nothing a client sends is a label). Each
-// key is labelled once; an answer counts only with full probabilities from the
-// expected teacher model, so a fallback route never becomes training data.
+// key is labelled once; an answer counts only with full probabilities and, when
+// `teacher` names the model (DECISIONS_TEACHER_MODEL), only from that model, so a
+// fallback route never becomes training data.
 // Labels append to `appendLabel` as {key, kind, probabilities, choice, confidence, model, at}.
-export function createNovelTeacher({loadConfig, appendLabel, labelled = new Set(), idle = () => true, teacher = 'ramblerun/Decision-AI',
+export function createNovelTeacher({loadConfig, appendLabel, labelled = new Set(), idle = () => true, teacher = null,
   fetcher = fetch, request = requestDecisions, retryMs = 2000, now = () => Date.now(), timer = (fn, ms) => setTimeout(fn, ms)}) {
   const queue = new Map();     // key -> {kind, context, allowed, state}
   let running = false;
@@ -411,7 +412,7 @@ export function createNovelTeacher({loadConfig, appendLabel, labelled = new Set(
         const a = answers[id], q = queue.get(key);
         queue.delete(key);
         labelled.add(key);
-        if (!a?.probabilities || model !== teacher) { counts.dropped++; continue; }
+        if (!a?.probabilities || (teacher && model !== teacher)) { counts.dropped++; continue; }
         lines.push(JSON.stringify({key, kind: q.kind, probabilities: a.probabilities, choice: a.choice, confidence: a.confidence, model, at: new Date(now()).toISOString()}));
       }
       if (lines.length) { await appendLabel(lines.join('\n') + '\n'); counts.labelled += lines.length; }
@@ -458,7 +459,7 @@ export function system1Plugin({concurrency = 4, maxQueue = 8} = {}) {
     const env = {...file, ...process.env};
     // Flagged questions are labelled by the teacher as soon as the proxy is idle (DECISIONS_LIVE_LABEL=0 turns it off).
     const teacher = env.DECISIONS_LIVE_LABEL === '0' ? null : {loadConfig: () => loadLocalConfig(root),
-      idle: () => { const h = service.health(); return h.inFlight === 0 && h.queued === 0; }, teacher: env.DECISIONS_TEACHER_MODEL || 'ramblerun/Decision-AI'};
+      idle: () => { const h = service.health(); return h.inFlight === 0 && h.queued === 0; }, teacher: env.DECISIONS_TEACHER_MODEL || null};
     novel = await fileNovelLog(env.DECISIONS_NOVEL_LOG || join(root, 'data', 'novel', 'novel.jsonl'), {teacher});
   };
   const attach = async server => {

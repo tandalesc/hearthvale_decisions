@@ -13,7 +13,8 @@
 //      simulated town showed is "unseen". An ordinary state has 0-2 (rare but
 //      real combinations); an impossible one many. A question with more than
 //      `maxUnseenPairs` needs `quarantineClients` reports before it is used. Labels count only from the
-//      teacher model (`teacher`), with a full distribution.
+//      teacher model (`teacher` in the state's config; any model the service
+//      reports when unset), with a full distribution.
 //   3. Questions still without a label are sent to the teacher now, at `qps`.
 //   4. The next version warm-starts from the current one (train_decision_student.py
 //      --init-from: new vocabulary rows, no rebuild) on everything trained so far
@@ -55,7 +56,7 @@ const statePath = resolve(ROOT, flag('state', 'data/loop/state.json'));
 if (!existsSync(statePath)) throw new Error(`No loop state at ${statePath}; the header of scripts/distill-loop.js shows its shape`);
 const S = JSON.parse(readFileSync(statePath, 'utf8'));
 const cfg = {
-  novel: 'data/novel/novel.jsonl', teacher: 'ramblerun/Decision-AI', minClients: 2, quarantineClients: 3, maxUnseenPairs: 2, minRows: 50, qps: 40,
+  novel: 'data/novel/novel.jsonl', teacher: null, minClients: 2, quarantineClients: 3, maxUnseenPairs: 2, minRows: 50, qps: 40,
   epochs: 6, lr: 1e-3, maxBundleKB: 450, maxCachedUs: 400, tolerance: 0.03, kindTolerance: 0.2, maxBias: 0.05, tail: [0.67, 1.5],
   workShareDelta: 3, canary: {seeds: 4, start: 65, years: 40}, publishDir: 'public/students', excludeKinds: [],
   ...S.config,
@@ -143,7 +144,8 @@ save();
 if (dry) { log(`--dry: stopping after the input gates (report in ${out})`); process.exit(0); }
 
 // ---------------------------------------------------------------- 3. labels
-const goodLabel = (l) => l && l.model === cfg.teacher && l.probabilities;
+// With `teacher` set, only that model's answers count (one teacher only).
+const goodLabel = (l) => l && l.probabilities && l.model && (!cfg.teacher || l.model === cfg.teacher);
 const missing = accepted.filter((a) => !goodLabel(labels.get(a.key)));
 if (missing.length) {
   log(`labelling ${missing.length} questions with the teacher at ${cfg.qps} q/s`);
