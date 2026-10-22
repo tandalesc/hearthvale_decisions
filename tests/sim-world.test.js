@@ -8,11 +8,12 @@ import {
   doorPoint, footprints, UPGRADE_AT, countTier, frontCell, buildingCells as buildingCellsOf, ORIGIN_X,
 } from '../src/sim/roads.js';
 import { findRoute, components, pathCost } from '../src/navigation.js';
-import { proposeSites, lotSize, landValueAt, riverClear, setbackAt, footprintBank, WATERFRONT, validateFootprint, pathCover, siteText, claimSite, lotSlope, maxSlopeFor, lotForBuilding } from '../src/sim/sites.js';
+import { proposeSites, lotSize, landValueAt, riverClear, setbackAt, footprintBank, WATERFRONT, validateFootprint, pathCover, siteText, claimSite, lotSlope, lotForBuilding, SLOPE_CEILING, WIND_MIN } from '../src/sim/sites.js';
 import {
   placeBuilding, workAtSite, canUpgrade, startUpgrade, noteRebuildWish, mergeCandidates, mergeIntoTerrace,
   projectById, eraMaxStoreys, buildersWanted, growHomes, requestBuilding, settleFoundations, freeSealedDoors, placeStartingHamlet, farmsGiveWay,
 } from '../src/sim/buildings.js';
+import { windExposureAt } from '../src/wind.js';
 import { updateDistricts } from '../src/sim/districts.js';
 import { bridgeCandidates, paveCandidates, gridCandidates, executeWork, candidateWorks, squareCandidate, startWork, embankmentCandidates, embankmentViews, embankmentCrossings, bridgeViews } from '../src/sim/works.js';
 import { riverX, bankDistance, WATER_HALF, setTerrainSeed, FORDS, terrainSeed, heightAt, slopeAt, terrainInfo } from '../src/terrain.js';
@@ -176,15 +177,36 @@ test('sites line worn paths and avoid water and steep ground', () => {
   for (const f of farms) assert.ok(f.terms.slope <= 0.08 / 0.25 + 1e-9, 'farms need flat ground');
 });
 
-test('mills need the river', () => {
+test('water mills need the river; windmills need the wind', () => {
   const s = blank(1);
   const z = -60;
   addBuildingRecord(s, { type: 'home', x: riverX(z) - 20, z, w: 4, d: 4 });
   const [cx0, cz] = cellXZ(cellOf(riverX(z) - 40, z + 6));
   for (const i of rowCells(cx0, cx0 + 16, cz)) { s.roads.wear[i] = 400; setTier(s, i, 2); }
-  const mills = proposeSites(s, { type: 'mill' });
-  assert.ok(mills.length > 0);
-  for (const m of mills) assert.equal(m.bands.river, 'yes');
+  const water = proposeSites(s, { type: 'mill', variant: 'water-mill' });
+  assert.ok(water.length > 0);
+  for (const m of water) assert.equal(m.bands.river, 'yes');
+  // An open search scores every lot as both and keeps the better of the two.
+  const any = proposeSites(s, { type: 'mill' });
+  assert.ok(any.length > 0);
+  for (const m of any) {
+    if (m.variant === 'windmill') assert.ok(m.terms.wind >= WIND_MIN, `windmill at exposure ${m.terms.wind}`);
+    else assert.equal(m.bands.river, 'yes');
+  }
+});
+
+test('wind exposure: hilltops and open water are windy, the valley floor and the woods are not', () => {
+  setTerrainSeed(16, 2);
+  const samples = [];
+  for (let x = -200; x <= 200; x += 20)
+    for (let z = -200; z <= 200; z += 20) if (bankDistance(x, z) > 4) samples.push({ x, z, h: heightAt(x, z), e: windExposureAt(x, z) });
+  for (const p of samples) assert.ok(p.e >= 0 && p.e <= 1);
+  samples.sort((a, b) => a.h - b.h);
+  const mean = list => list.reduce((n, p) => n + p.e, 0) / list.length;
+  const tenth = Math.floor(samples.length / 10);
+  assert.ok(mean(samples.slice(-tenth)) > mean(samples.slice(0, tenth)) + 0.15, 'the highest ground is windier than the lowest');
+  assert.equal(windExposureAt(37, -91), windExposureAt(37, -91), 'pure');
+  setTerrainSeed(null);
 });
 
 test('home upgrades respect era limits on tier and storeys', () => {
@@ -727,7 +749,7 @@ test('sixty years on: banks kept, doors open, no building on a path or a cliff',
       }
     if (b.lotId != null && b.type !== 'quarry') {
       const lot = s.lots.find(l => l.id === b.lotId);
-      if (lot) assert.ok(lotSlope(lot) <= maxSlopeFor(b.type, 5, true) + 1e-9, `${b.type} ${b.id} is not on a cliff`);
+      if (lot) assert.ok(lotSlope(lot) <= SLOPE_CEILING + 1e-9, `${b.type} ${b.id} is not on a cliff`);
     }
   }
   assert.deepEqual(sealed, [], 'no sealed doors');

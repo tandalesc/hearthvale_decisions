@@ -5,6 +5,7 @@ import { decide } from './hooks.js';
 import { policyModifiers } from './policies.js';
 import { riverX, bankDistance, bankSide, heightAt, FORDS, WATER_HALF, nearestWaterKind, waterKindAt, KIND, riverOpenAt, floodDepthAt, hasRiver } from '../terrain.js';
 import { centrePeakValue, nearestCentre, centreBias, corePull } from './centres.js';
+import { windExposure } from '../wind.js';
 import {
   CELL, GRID_W, GRID_H, CELLS, ROT_DIR, ORIGIN_X, ORIGIN_Z,
   cellIndex, cellXZ, cellCenter, cellOf, terrainGrid, footprints, wearNorm, buildingCells, frontCell, NAV_MAX_SLOPE, NAV_MAX_HEIGHT,
@@ -43,13 +44,40 @@ const FLAT_TYPES = { farm: 0.08, market: 0.12, park: 0.15 };
 // Pits and quarries go where the rock shows: on slopes and hills.
 export const HILL_WORKS = new Set(['coal-pit', 'clay-pit', 'kiln', 'quarry']);
 
-// Steepest lot allowed (height change per unit across the lot). Early
-// builders keep to gentle ground; from the Town era terraced rows step up
-// moderate slopes; pits and quarries take rough ground in any era.
+// A windmill is a mill that needs the wind, not the river: it is sited and
+// founded like any dry-land building. siteKind is the key the water, bank and
+// flood rules look up (type 'mill', variant 'windmill' -> 'windmill').
+export const WINDMILL = 'windmill';
+export function siteKind(type, variant) { return type === 'mill' && variant === WINDMILL ? WINDMILL : type; }
+// Below this exposure (wind.js) a windmill would stand idle half the year.
+export const WIND_MIN = 0.4;
+
+// Steepest lot allowed (height change per unit across the lot). Fields,
+// markets and greens need level ground; everything else may climb up to the
+// ceiling when the land pays for the foundations (foundationCost, below).
+export const SLOPE_CEILING = 0.6;
 export function maxSlopeFor(type, era, hillWork = false) {
-  if (hillWork) return 0.6;
+  if (hillWork) return SLOPE_CEILING;
   if (FLAT_TYPES[type] != null) return FLAT_TYPES[type];
-  return era >= 2 ? 0.4 : 0.2;
+  return SLOPE_CEILING;
+}
+
+// Building on a slope means raising a level base: past FREE_DROP (the plinth
+// any building has) every metre of drop under every footprint cell costs
+// FOUNDATION_COIN era-0 coin in retaining walls, stilts and steps. Builders
+// get better at hillsides (stone terraces from the Town era, steel later), so
+// the era factor falls; buildings.js scales the charge by ERA_COST like any cost.
+// A steep lot is worth building only where its land is worth that much:
+// LAND_COIN per cell at full land value (landValueNorm 1).
+export const FREE_DROP = 0.5;
+export const FOUNDATION_COIN = 80;
+export const FOUNDATION_ERA = [1.2, 1.1, 1.0, 0.85, 0.75, 0.65];
+export const LAND_COIN = 150;
+const FOUNDATION_WEIGHT = 3.5;
+
+export function foundationCost(drop, cells, era = 0) {
+  const e = FOUNDATION_ERA[Math.max(0, Math.min(5, era | 0))];
+  return FOUNDATION_COIN * Math.max(0, drop - FREE_DROP) * cells * e;
 }
 
 // How far a point stands above the ground 20 units around it, 0..1 (8 units
@@ -108,9 +136,12 @@ export function relocationSites(state, enterprise, { count = 4 } = {}) {
   return proposeSites(state, { type, tier: b?.tier ?? 1, count, relocate: true, from: b ? { x: b.x, z: b.z } : null });
 }
 
-function hillBias(type, hillWork, slope, prominence) {
+function hillBias(type, hillWork, slope, prominence, wind = 0) {
   if (hillWork) return 1.0 * Math.min(1, slope / 0.3) + 0.5 * prominence;
   if (type === 'chapel') return 0.8 * prominence;
+  // Windmills want the wind: exposure 0.5 is neutral, a bare hilltop or a
+  // lake shore (0.8+) is worth more than a river frontage to a water mill.
+  if (type === WINDMILL) return 3.5 * (wind - 0.5);
   return 0;
 }
 const SMOKY = new Set(['mill', 'factory', 'workshop']);
@@ -679,9 +710,9 @@ export function validateFootprint(state, b, { ignoreId = null } = {}) {
       if (j < 0) return { ok: false, reason: 'water' };
       const owner = fp.blocked[j] - 1;
       if (owner >= 0 && owner !== ignoreId) return { ok: false, reason: 'overlap' };
-      if (water[j] && !WATERFRONT.has(b.type)) return { ok: false, reason: 'water' };
+      if (water[j] && !WATERFRONT.has(siteKind(b.type, b.variant))) return { ok: false, reason: 'water' };
     }
-  if (!riverClear(state, b, b.type)) return { ok: false, reason: 'bank' };
+  if (!riverClear(state, b, siteKind(b.type, b.variant))) return { ok: false, reason: 'bank' };
   if (open) return { ok: true };
   const fronts = frontCells(state);
   for (let z = cz0; z <= cz1; z++)
@@ -831,7 +862,7 @@ function pollutionNear(state, cx, cz) {
   const { x, z } = cellCenter(cellIndex(cx, cz));
   let p = 0;
   for (const b of buildingsNear(state, cx, cz, 10)) {
-    if (!SMOKY.has(b.type) && !(b.smoke > 0)) continue;
+    if ((!SMOKY.has(b.type) || b.variant === WINDMILL) && !(b.smoke > 0)) continue;
     const d = Math.hypot(b.x - x, b.z - z) / CELL;
     p += Math.max(b.smoke ?? 0.3, 0.3) * Math.max(0, 1 - d / 10);
   }
@@ -851,23 +882,37 @@ function archetypeBias(state, type, lot, density) {
   if (arch === 'garden') bias += 0.4 * (1 - density);
   if (arch === 'port' && RIVER_LIKES.has(type)) bias += 1.0 * river;
   if (type === 'mill') bias += 1.5 * (riverAdjacent(lot, 3, true) ? 1 : 0) * (state.policies?.['mill-rights'] ? 1 : 0.5);
+  if (type === WINDMILL) bias += 0.5 * (state.policies?.['mill-rights'] ? 1 : 0.5);
   if ((type === 'warehouse' || type === 'quay') && arch !== 'port') bias += 0.5 * river;
   return bias;
 }
 
+// How much a great flood counts against a lot, 0..1. Any wet ground counts for at
+// least half: with hillsides dear, the flat flood meadow must not be the cheap way out.
+const WET_FLOOR = 0.5;
+function wetness(depth) { return depth > 0 ? Math.max(WET_FLOOR, Math.min(1, depth / FLOOD_BAR)) : 0; }
+
 // Scores one lot. Returns null when the lot is unusable for this need.
 export function scoreLot(state, lot, need, ctx) {
   const type = need.type;
+  const kind = siteKind(type, need.variant);
   if (lotProblem(state, lot, type, ctx, 1)) return null;
   if (!OPEN_TYPES.has(type) && !doorClear(state, lot, ctx)) return null;
-  if (!riverClear(state, footprintFor(lot, type), type)) return null;
-  const slope = WATERFRONT.has(type) ? 0 : lotSlope(lot);
+  if (!riverClear(state, footprintFor(lot, type), kind)) return null;
+  const slope = WATERFRONT.has(kind) ? 0 : lotSlope(lot);
   const hillWork = HILL_WORKS.has(need.variant) || type === 'quarry';
-  if (slope > maxSlopeFor(type, state.era ?? 0, hillWork)) return null;
+  const era = state.era ?? 0;
+  if (slope > maxSlopeFor(type, era, hillWork)) return null;
   const river = riverAdjacent(lot);
-  if (WATER_TYPES.has(type) && !(river && riverAdjacent(lot, 3, true))) return null;
+  if (WATER_TYPES.has(kind) && !(river && riverAdjacent(lot, 3, true))) return null;
   const [fx, fz] = cellXZ(lot.front);
   const mx = lot.cx + (lot.w >> 1), mz = lot.cz + (lot.h >> 1);
+  const landValue = landValueNorm(state, mx, mz);
+  // On a slope the land has to pay for the foundations (fields drape on the
+  // ground and pits dig into it, so they pay nothing).
+  const cells = lot.w * lot.h;
+  const foundation = OPEN_TYPES.has(type) || hillWork ? 0 : foundationCost(slope * Math.max(lot.w, lot.h) * CELL, cells, era);
+  if (foundation > landValue * LAND_COIN * cells) return null;
   const tierNear = maxTierNear(state, fx, fz, 2);
   const frontPt = cellCenter(lot.front);
   const farSide = ctx.farPull > 0 && bankSide(frontPt.x, frontPt.z) !== ctx.homeBank;
@@ -875,14 +920,17 @@ export function scoreLot(state, lot, need, ctx) {
   const density = localDensity(state, mx, mz);
   const terms = {
     access,
-    landValue: landValueNorm(state, mx, mz),
+    landValue,
     sameType: sameTypeNear(state, mx, mz, type),
     pollution: type === 'home' || type === 'school' || type === 'infirmary' ? pollutionNear(state, mx, mz) : 0,
     slope: Math.min(1, slope / 0.25),
     density,
     river: river ? 1 : 0,
-    flood: Math.min(1, floodAt(state, frontPt.x, frontPt.z) / FLOOD_BAR),
+    flood: wetness(floodAt(state, frontPt.x, frontPt.z)),
+    foundation: foundation > 0 ? foundation / (landValue * LAND_COIN * cells) : 0,
   };
+  const mid = cellCenter(cellIndex(mx, mz));
+  if (kind === WINDMILL && (terms.wind = windExposure(mid.x, mid.z)) < WIND_MIN) return null;
   const cover = pathCover(state, lot);
   terms.path = cover.share;
   terms.pathTier = cover.worst;
@@ -896,16 +944,17 @@ export function scoreLot(state, lot, need, ctx) {
   const target = Math.min(1, ctx.target * (0.7 + 0.5 * corePull(state, frontPt.x, frontPt.z)));
   let score = 2.0 * terms.access + 1.2 * terms.landValue + 0.8 * terms.sameType
     - 1.0 * terms.pollution - 0.6 * terms.slope - 0.5 * (density - target) ** 2
-    + archetypeBias(state, type, lot, density)
+    - FOUNDATION_WEIGHT * terms.foundation
+    + archetypeBias(state, kind, lot, density)
     - PATH_PENALTY * Math.min(4, cover.share)
     - BUSY_PENALTY * terms.busyPath
     + 0.3 * terms.setback - (anchorTier >= 2 && !lot.setback ? 0.2 : 0)
     - (coversJunction(state, lot) ? 1.0 : 0)
-    + hillBias(type, hillWork, slope, terms.prominence = prominenceAt(cellCenter(cellIndex(mx, mz))))
+    + hillBias(kind, hillWork, slope, terms.prominence = prominenceAt(mid), terms.wind)
     + (type === 'farm' ? farmEdgeBias(state, terms, mx, mz) : 0)
     + centreBias(state, type, frontPt.x, frontPt.z)
     // Flood meadows: good grazing and hay, a poor place for a house.
-    + (FLOOD_TOLERANT.has(type) ? (type === 'farm' ? 0.4 : 0) : -3) * terms.flood
+    + (FLOOD_TOLERANT.has(kind) ? (type === 'farm' ? 0.4 : 0) : -3) * terms.flood
     + (need.relocate ? relocationBias(state, need, terms, frontPt) : 0)
     + vacatedBias(state, lot)
     // Across the river land is cheap and open; the pull grows as the near bank fills.
@@ -929,6 +978,9 @@ export function proposeSites(state, need) {
     farPull: farBankPull(state), homeBank: homeBank(state),
   };
   const anchors = sampleAnchors(state, cachedFrontier(state, need), (need.count ?? 4) <= 1 ? ONE_OFF_ANCHORS : MAX_ANCHORS);
+  // A new mill is a water mill on the river or a windmill where the wind is:
+  // each lot is scored as both and keeps the better.
+  const windNeed = need.type === 'mill' && tier === 1 && need.variant == null ? { ...need, variant: WINDMILL } : null;
   const scored = [];
   const tried = new Set();
   for (const anchor of anchors) {
@@ -939,7 +991,11 @@ export function proposeSites(state, need) {
         const key = `${lot.cx},${lot.cz},${lot.w},${lot.rot}`;
         if (tried.has(key)) continue;
         tried.add(key);
-        const s = scoreLot(state, lot, need, ctx);
+        let s = scoreLot(state, lot, need, ctx);
+        if (windNeed) {
+          const w = scoreLot(state, lot, windNeed, ctx);
+          if (w && (!s || w.score > s.score)) s = { ...w, variant: WINDMILL };
+        }
         if (s) scored.push({ ...lot, ...s });
       }
   }
@@ -1053,6 +1109,7 @@ function describe(state, c, need) {
       path: c.terms.pathTier >= 3 ? 'road' : c.terms.pathTier === 2 ? 'lane' : c.terms.pathTier === 1 ? 'footpath' : 'none',
     },
     districtId: nearestDistrictId(state, x, z),
+    ...(c.variant ? { variant: c.variant } : {}),
   };
 }
 

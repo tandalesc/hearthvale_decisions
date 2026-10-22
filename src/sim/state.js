@@ -345,9 +345,12 @@ export const ENTERPRISE_TYPES = {
   'union-hall': {sector: 'public', trade: 'clerical', jobs: 1, upkeep: 1, public: true},
 };
 
-// Jobs grow with the building's tier.
-export function jobsFor(type, tier = 1) {
+// Jobs grow with the building's tier. A windmill needs a miller and a few hands,
+// not a water mill's crew (economy.js gives each of them more output in a good wind).
+export const WINDMILL_JOBS = 4;
+export function jobsFor(type, tier = 1, variant = null) {
   if (type === 'moot') return 1 + 2 * (tier - 1);   // a clerk from the start, more as the hall grows
+  if (type === 'mill' && variant === 'windmill') return WINDMILL_JOBS;
   const def = ENTERPRISE_TYPES[type];
   return def ? Math.round(def.jobs * (1 + 0.6 * (tier - 1))) : 0;
 }
@@ -363,7 +366,7 @@ export function makeEnterprise(state, building, fields = {}) {
     sector: def.sector,
     trade: def.trade,
     public: !!def.public,
-    jobs: jobsFor(building.type, building.tier ?? 1),
+    jobs: jobsFor(building.type, building.tier ?? 1, building.variant),
     upkeep: def.upkeep,
     filled: 0,
     cash: 0,

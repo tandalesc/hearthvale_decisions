@@ -420,7 +420,7 @@ function produce(state) {
     if (ent.type === 'farm') f = ent.filled * food;
     else if (ent.sector === 'goods') {
       const boost = ent.automated ? 1.4 : 1;
-      g = ent.filled * goods * boost * (ent.type === 'mill' ? mod(state, 'millOutput') * 1.3 : 1);
+      g = ent.filled * goods * boost * (ent.type === 'mill' ? mod(state, 'millOutput') * 1.3 * windFactor(state, ent) : 1);
     }
     ent.output = f + g;
     ent.foodMade = f;
@@ -436,6 +436,14 @@ function produce(state) {
 }
 
 const ecologyFactor = (state) => 0.75 + 0.3 * state.pressures.ecology;
+
+// A windmill's few hands each grind more than a water mill's crew, and more in a
+// good wind (b.wind, the site's exposure 0..1, set when it was placed): at
+// exposure 0.7 its four hands make about four-fifths of what a water mill's ten do.
+function windFactor(state, ent) {
+  const b = byId(state, 'buildings', ent.buildingId);
+  return b?.variant === 'windmill' ? 1.2 + 1.2 * (b.wind ?? 0.5) : 1;
+}
 
 // Enterprises pay what they can; wages flow into per-trade pools and from there to the
 // households whose workers filled those jobs.

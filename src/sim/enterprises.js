@@ -26,7 +26,7 @@ export function enterprisesMonthly(state) {
   for (const ent of state.enterprises) {
     const b = byId(state, 'buildings', ent.buildingId);
     if (!b) continue;
-    const want = jobsFor(ent.type, b.tier ?? 1);
+    const want = jobsFor(ent.type, b.tier ?? 1, b.variant);
     if (!ent.automated && want !== ent.jobs && !ent.expanded) ent.jobs = want;
     ent.centreId = b.centreId ?? ent.centreId ?? null;
     syncBuildingHooks(state, ent, b);
@@ -57,7 +57,8 @@ function attachToBuildings(state) {
 function syncBuildingHooks(state, ent, b) {
   const share = ent.jobs > 0 ? clamp(ent.filled / ent.jobs, 0, 1) : ent.public ? 1 : 0;
   const open = share > 0.05 || ent.public;
-  const smoke = SMOKY.has(ent.type) ? Math.round(share * (ent.type === 'workshop' ? 4 : 10)) / 10 : 0;
+  // Windmills grind without fire.
+  const smoke = SMOKY.has(ent.type) && b.variant !== 'windmill' ? Math.round(share * (ent.type === 'workshop' ? 4 : 10)) / 10 : 0;
   if (b.open !== open || b.occupied !== open || Math.abs((b.smoke ?? 0) - smoke) >= 0.1) {
     b.open = open;
     b.occupied = open;

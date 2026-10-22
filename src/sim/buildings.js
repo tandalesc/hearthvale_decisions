@@ -14,12 +14,14 @@ import {
   lotSize, claimSite, releaseLot, resizeLot, deepenLot, footprintFor, localDensity, targetDensity, lotForBuilding, proposeSites, chooseSite, densityTarget, siteText, siteStillFree, siteContext, districtValueRank, pathCover, frontCells, lotSlope, landValueNorm, landValueAt, worldToCell, buildingBins,
   recordVacated, relocationSites,
   footprintBank, setbackAt, isEmbanked, WATERFRONT, lotGrid, hamletLayout,
+  siteKind, foundationCost, HILL_WORKS, WINDMILL,
 } from './sites.js';
 import {
   bumpWorld, cellCenter, frontCell, footprints, terrainGrid, navGrid, lotNavGrid, pieceCells, doorPoint, cellIndex, buildingCells, setTier, markDirty, bumpNav, doorCell, setTowpath,
   ORIGIN_X, ORIGIN_Z, CELL, GRID_W, CELLS,
 } from './roads.js';
 import { bankDistance } from '../terrain.js';
+import { windExposure } from '../wind.js';
 import { delta } from './pressures.js';
 import { components } from '../navigation.js';
 import { buildingOutline } from './outline.js';
@@ -274,16 +276,20 @@ export function placeBuilding(state, site, spec) {
   const era = state.era ?? 0;
   // From the Town era, homes on a slope are built as stepped hill terraces.
   const hillside = type === 'home' && era >= 2 && lotSlope(lot) > 0.2;
+  // The site search may have picked a windmill for a mill (sites.js proposeSites).
+  const variant = spec.variant ?? site.variant ?? (hillside ? 'terrace-hill' : variantFor(type, tier, state, lot.id));
+  const kind = siteKind(type, variant);
   const b = addBuildingRecord(state, {
     type, tier, lotId: lot.id, ...fp,
-    variant: spec.variant ?? (hillside ? 'terrace-hill' : variantFor(type, tier, state, lot.id)),
+    variant,
     storeys: storeysFor(type, tier, era),
     styleEra: era, archetype: state.archetype, material: materialFor(era, type),
     wealth: spec.wealth ?? 0.3, condition: 1, age: 0, built: 0,
     districtId: lot.districtId, ownerHouseholdId: spec.ownerHouseholdId ?? null,
-    chimney: !!TYPES[type]?.chimney, flags: { scaffold: 1 },
+    chimney: kind !== WINDMILL && !!TYPES[type]?.chimney, flags: { scaffold: 1 },
   });
   lot.buildingId = b.id;
+  if (kind === WINDMILL) b.wind = Math.round(windExposure(b.x, b.z) * 100) / 100;
   b.origin = {
     year: state.time?.year ?? 0, month: state.time?.month ?? 0, reason: spec.reason ?? null, payer: spec.payer ?? null,
     site: site.bands ? siteText(site).slice(0, 60) : null, card: spec.card ?? null, frontage: lot.frontageTier,
@@ -297,18 +303,30 @@ export function placeBuilding(state, site, spec) {
   const surcharge = cover && cover.share > 0
     ? { organic: Math.round(base * cover.organic), planned: Math.round(base * cover.planned), districtId: lot.districtId }
     : null;
-  const cost = base + (surcharge ? surcharge.organic + surcharge.planned : 0) + (lot.landSale?.amount ?? 0);
+  // A raised base on a slope (retaining walls, stilts, steps) is paid to the
+  // builders with the rest; project.foundation tells the UI "raised foundation +N".
+  const foundation = foundationCharge(b, lot, era);
+  const cost = base + (surcharge ? surcharge.organic + surcharge.planned : 0) + foundation + (lot.landSale?.amount ?? 0);
   const project = createProject(state, {
     kind: 'build', buildingId: b.id, x: b.x, z: b.z, w: b.w, d: b.d, cost, payer: spec.payer, paid: spec.paid,
     data: { reason: spec.reason ?? null },
   });
   if (surcharge) project.surcharge = surcharge;
-  if (WATERFRONT.has(type)) layApron(state, b);
+  if (foundation > 0) project.foundation = { cost: foundation, drop: b.foundationDrop };
+  if (WATERFRONT.has(kind)) layApron(state, b);
   // Built on sold farmland: the farmer is paid out of the build cost
   // (project.cost includes it; the economy pays landSale.amount to landSale.to).
   if (lot.landSale) project.landSale = lot.landSale;
   if (cover?.worst) closePathsUnder(state, b, cover.worst, lot.districtId);
   return { building: b, lot, project };
+}
+
+// What the raised base of a new building costs (coin of its era): plinths on
+// dry land only. Fields drape on the ground, pits dig into it, and piles and
+// quays at the water are part of what a waterfront building is.
+export function foundationCharge(b, lot, era) {
+  if (b.foundation !== 'plinth' || OPEN_BUILD.has(b.type) || b.type === 'quarry' || HILL_WORKS.has(b.variant)) return 0;
+  return Math.round(foundationCost(b.foundationDrop ?? 0, lot.w * lot.h, era) * ERA_COST[clampEra(era)]);
 }
 
 // docket.js / events.js interface: the town builds what the player ruled on.
@@ -957,11 +975,12 @@ export function foundationFor(state, b) {
   }
   // Waterfront buildings at the water (behind their apron) always stand on
   // piles or a stone quay.
-  const waterside = WATERFRONT.has(b.type) && fb.minBankCore <= 5.5;
+  const front = WATERFRONT.has(siteKind(b.type, b.variant));
+  const waterside = front && fb.minBankCore <= 5.5;
   const near = waterside || fb.minBank < setbackAt(state, fb.nearest.x, fb.nearest.z);
   const embanked = isEmbanked(state, fb.nearest.x, fb.nearest.z);
   let foundation = 'plinth';
-  if (near && WATERFRONT.has(b.type)) foundation = embanked || (b.styleEra ?? state.era ?? 0) >= 2 ? 'quay' : 'piles';
+  if (near && front) foundation = embanked || (b.styleEra ?? state.era ?? 0) >= 2 ? 'quay' : 'piles';
   else if (near) foundation = embanked ? 'quay' : 'piles';
   const ground = Math.max(fb.maxH, foundation === 'plinth' ? -Infinity : 0.25);
   return {
@@ -983,7 +1002,7 @@ function bankOf(b) {
   return b._fb.bank;
 }
 
-function foundationKey(state, b) { return `${b.x},${b.z},${b.w},${b.d},${b.type},${state.roads?.embankRev ?? 0}`; }
+function foundationKey(state, b) { return `${b.x},${b.z},${b.w},${b.d},${siteKind(b.type, b.variant)},${state.roads?.embankRev ?? 0}`; }
 
 // Sets the foundation fields; returns true if anything changed.
 export function setFoundation(state, b) {
@@ -1018,7 +1037,7 @@ export function settleFoundationsSpan(state, from, count) {
     const wasRaised = b.flags?.raised;
     if (!setFoundation(state, b)) continue;
     bumpWorld(state);   // a new plinth, skirt or piles: walkers' walls (roads.js) follow
-    if (b.foundation !== 'plinth' && !WATERFRONT.has(b.type) && !wasRaised) {
+    if (b.foundation !== 'plinth' && !WATERFRONT.has(siteKind(b.type, b.variant)) && !wasRaised) {
       b.flags.raised = 1;
       addBuildingStory(state, b, 'raised', { text: 'set on posts above the river' });
       raised++;
@@ -1255,6 +1274,7 @@ export function monthlyBuildings(state) {
 const PUBLIC = new Set(['chapel', 'moot', 'school', 'market', 'park', 'monument', 'infirmary', 'watch', 'library', 'bathhouse', 'union-hall', 'bridge', 'quay']);
 
 function smokeFor(b) {
+  if (b.variant === WINDMILL) return 0;
   const s = TYPES[b.type]?.smoke;
   return s ? s[Math.min(b.tier, s.length) - 1] : 0;
 }
