@@ -197,10 +197,33 @@ function recount(r) {
 
 export function markDirty(r, i) {
   const cx = i % GRID_W, cz = (i - cx) / GRID_W;
+  growBox(activeBoxes.get(r), cx, cz);
   const d = r.dirty;
   if (!d) { r.dirty = { x0: cx, z0: cz, x1: cx, z1: cz }; return; }
   if (cx < d.x0) d.x0 = cx; else if (cx > d.x1) d.x1 = cx;
   if (cz < d.z0) d.z0 = cz; else if (cz > d.z1) d.z1 = cz;
+}
+
+// The box holding every cell with wear or a tier (more, never less): the monthly passes
+// skip cells with neither, so they need scan only the box. Grown wherever wear or a tier
+// can appear (markDirty, which every such write calls, and growActiveBox), shrunk to what
+// decayAndRetier finds. In memory only, worked out afresh for new grids.
+const activeBoxes = new WeakMap();
+function growBox(box, cx, cz) {
+  if (!box) return;
+  if (cx < box.x0) box.x0 = cx;
+  if (cx > box.x1) box.x1 = cx;
+  if (cz < box.z0) box.z0 = cz;
+  if (cz > box.z1) box.z1 = cz;
+}
+export function growActiveBox(r, i) { growBox(activeBoxes.get(r), i % GRID_W, Math.floor(i / GRID_W)); }
+function activeBox(r) {
+  let box = activeBoxes.get(r);
+  if (box && box.wear === r.wear && box.tier === r.tier) return box;
+  box = { wear: r.wear, tier: r.tier, x0: GRID_W, z0: GRID_H, x1: -1, z1: -1 };
+  for (let i = 0; i < CELLS; i++) if (r.wear[i] !== 0 || r.tier[i] !== 0) growBox(box, i % GRID_W, (i - (i % GRID_W)) / GRID_W);
+  activeBoxes.set(r, box);
+  return box;
 }
 
 function markDirtyRect(r, x0, z0, x1, z1) {
@@ -390,27 +413,188 @@ export function footprintKey(state) {
 
 export function footprints(state) {
   const wv = state.worldVersion ?? 0, len = state.buildings?.length ?? 0;
-  let fp = footprintCache.get(state);
-  if (fp && fp.wv === wv && fp.len === len) return fp;
-  const key = `${wv}:${len}`;
-  fp = { key, wv, len, blocked: new Int32Array(CELLS), field: new Uint8Array(CELLS), walls: null, door: new Uint8Array(CELLS), nearAt: new Int32Array(CELLS), near: [], wayIn: new Map(), doorsteps: new Map() };
-  for (const b of state.buildings ?? []) stampBuilding(fp, b);
+  const prev = footprintCache.get(state);
+  if (prev && prev.wv === wv && prev.len === len) return prev;
+  const list = state.buildings ?? [];
+  const sigs = list.map((b) => buildingSig(b, prev));
+  const fp = (prev && regionalFootprints(prev, list, sigs, wv, len)) || fullFootprints(prev, list, sigs, wv, len);
+  footprintCache.set(state, fp);
+  return fp;
+}
+
+// What a building's stamps are made from, and the box of cells they can touch (inf:
+// [x0, z0, x1, z1], or null): its lot, field, door and front cells, doorstep and the
+// walls reach of its drawn pieces. The last build's record is handed back while those
+// inputs are the same (buildingOutline hands back the same pieces for the same shape),
+// so an unchanged building keeps the identical record.
+function buildingSig(b, prev) {
+  const rects = b.type === 'bridge' || b.type === 'park' ? null : buildingOutline(b);
+  const k = prev?.sigAt?.get(b.id), p = k === undefined ? null : prev.sigs[k];
+  if (p && p.type === b.type && p.x === b.x && p.z === b.z && p.w === b.w && p.d === b.d && p.rot === b.rot && p.rects === rects) return p;
+  const step = rects ? doorstepCell(b, rects) : -1;
+  return { b, id: b.id, type: b.type, x: b.x, z: b.z, w: b.w, d: b.d, rot: b.rot, rects, step, front: frontCell(b), inf: influenceOf(b, rects, step) };
+}
+
+function influenceOf(b, rects, step) {
+  if (b.type === 'bridge') return null;
+  const box = [GRID_W, GRID_H, -1, -1];
+  const add = (x0, z0, x1, z1) => {
+    box[0] = Math.min(box[0], x0); box[1] = Math.min(box[1], z0);
+    box[2] = Math.max(box[2], x1); box[3] = Math.max(box[3], z1);
+  };
+  const cell = (c) => { if (c >= 0) { const x = c % GRID_W, z = (c - x) / GRID_W; add(x, z, x, z); } };
+  if (b.type === 'farm' || b.type === 'park') {
+    const { cx0, cz0, cx1, cz1 } = buildingCells(b);
+    add(cx0, cz0, cx1, cz1);
+  } else add(...stampRect(b));
+  cell(doorCell(b));
+  cell(frontCell(b));
+  cell(step);
+  for (const r of rects ?? []) add(...reachCells(r));
+  box[0] = Math.max(0, box[0]); box[1] = Math.max(0, box[1]);
+  box[2] = Math.min(GRID_W - 1, box[2]); box[3] = Math.min(GRID_H - 1, box[3]);
+  return box[0] > box[2] || box[1] > box[3] ? null : box;
+}
+
+// The way in a building keeps open (wayIn's rule, from its record).
+function wayInOf(s, blocked) {
+  if (!s.rects) return -1;
+  if (s.type === 'farm') return s.step;
+  return s.step !== s.front && s.step >= 0 && blocked[s.step] ? s.front : s.step;
+}
+
+const ALL = { x0: 0, z0: 0, x1: GRID_W - 1, z1: GRID_H - 1 };
+const inBox = (R, c) => { const x = c % GRID_W, z = (c - x) / GRID_W; return x >= R.x0 && x <= R.x1 && z >= R.z0 && z <= R.z1; };
+
+// Every building stamped in list order: the lot layer, the ways in kept open, the walls
+// (fp.walls0: before pockets are unsealed), near lists and doors.
+function fullFootprints(prev, list, sigs, wv, len) {
+  const fp = { key: `${wv}:${len}`, wv, len, blocked: new Int32Array(CELLS), field: new Uint8Array(CELLS), walls: null, door: new Uint8Array(CELLS), nearAt: new Int32Array(CELLS), near: [], wayIn: new Map(), doorsteps: new Map(), liveNear: 0, deadNear: 0 };
+  for (const b of list) stampBuilding(fp, b);
   fp.walls = fp.blocked.slice();
   fp.wallCells = [];
   fp.doorCells = [];
   // Every way in stays open: a wing or lean-to drawn over a neighbour's doorstep
   // does not seal that door (walkers' finer checks still go round what is drawn).
-  const list = state.buildings ?? [];
-  const outlines = list.map((b) => (b.type === 'bridge' || b.type === 'park' ? null : buildingOutline(b)));
   const keepOpen = new Set();
-  list.forEach((b, k) => {
-    const c = wayIn(fp, b, outlines[k]);
-    if (c >= 0) { keepOpen.add(c); fp.wayIn.set(b.id, c); }
+  for (const s of sigs) {
+    const c = wayInOf(s, fp.blocked);
+    if (c >= 0) { keepOpen.add(c); fp.wayIn.set(s.id, c); }
+  }
+  list.forEach((b, k) => stampWalls(fp, b, keepOpen, sigs[k].rects));
+  return finishFootprints(fp, prev, sigs, keepOpen, null);
+}
+
+// A world bump usually changes a building or two. The cells their old and new records
+// can touch (R) are cleared and stamped again by every building that reaches them, in
+// list order, onto copies of the last build's arrays; outside R every stamp is as it was.
+// Each cell's result depends only on the buildings that reach it, in list order, so this
+// is the full build's result. R grows to take in any cell whose keep-open state changed
+// (a way in moved to the street cell). Falls back to the full build when the order of the
+// buildings changed, R is large or stale near lists have piled up.
+const REGION_MAX = CELLS / 8;
+function regionalFootprints(prev, list, sigs, wv, len) {
+  if (!prev.sigs || prev.terrain !== terrainKey() || prev.sigAt.size !== prev.sigs.length || prev.deadNear > prev.liveNear + 4096) return null;
+  const R = { x0: GRID_W, z0: GRID_H, x1: -1, z1: -1 };
+  const grow = (x0, z0, x1, z1) => {
+    R.x0 = Math.min(R.x0, x0); R.z0 = Math.min(R.z0, z0);
+    R.x1 = Math.max(R.x1, x1); R.z1 = Math.max(R.z1, z1);
+  };
+  const growInf = (inf) => { if (inf) grow(...inf); };
+  const at = new Map(), redo = new Set(), removed = [];
+  let last = -1;
+  for (let k = 0; k < sigs.length; k++) {
+    const s = sigs[k];
+    if (at.has(s.id)) return null;
+    at.set(s.id, k);
+    const p = prev.sigAt.get(s.id);
+    if (p === undefined) { growInf(s.inf); redo.add(k); continue; }
+    if (p < last) return null;
+    last = p;
+    if (prev.sigs[p] !== s) { growInf(prev.sigs[p].inf); growInf(s.inf); redo.add(k); }
+  }
+  for (const ps of prev.sigs) if (!at.has(ps.id)) { growInf(ps.inf); removed.push(ps.id); }
+  const hits = (inf) => !!inf && inf[0] <= R.x1 && inf[2] >= R.x0 && inf[1] <= R.z1 && inf[3] >= R.z0;
+  const eachCell = (f) => {
+    for (let z = R.z0; z <= R.z1; z++) for (let c = z * GRID_W + R.x0, end = z * GRID_W + R.x1; c <= end; c++) f(c);
+  };
+  const fp = { key: `${wv}:${len}`, wv, len, blocked: prev.blocked.slice(), field: prev.field.slice(), walls: null, door: prev.door.slice(), nearAt: prev.nearAt.slice(), near: null, wayIn: new Map(), doorsteps: new Map(), liveNear: prev.liveNear, deadNear: prev.deadNear, wallCells: null, doorCells: null };
+  const keptBefore = prev.keptCount ??= countCells(prev.wayIn);
+  let way;
+  for (;;) {
+    if (R.x1 >= R.x0 && (R.x1 - R.x0 + 1) * (R.z1 - R.z0 + 1) > REGION_MAX) return null;
+    eachCell((c) => { fp.blocked[c] = 0; fp.field[c] = 0; });
+    for (let k = 0; k < sigs.length; k++) if (hits(sigs[k].inf)) stampBuilding(fp, list[k], R);
+    way = new Map(prev.wayIn);
+    for (const id of removed) way.delete(id);
+    const again = [...removed];
+    for (let k = 0; k < sigs.length; k++) {
+      const s = sigs[k];
+      if (!redo.has(k) && !hits(s.inf)) continue;
+      const c = wayInOf(s, fp.blocked);
+      if (c >= 0) way.set(s.id, c); else way.delete(s.id);
+      again.push(s.id);
+    }
+    const kept = countCells(way);
+    let grew = false;
+    for (const id of again) {
+      for (const c of [prev.wayIn.get(id), way.get(id)]) {
+        if (c === undefined || inBox(R, c) || !keptBefore.get(c) === !kept.get(c)) continue;
+        const x = c % GRID_W, z = (c - x) / GRID_W;
+        grow(x, z, x, z);
+        grew = true;
+      }
+    }
+    if (!grew) break;
+  }
+  const keepOpen = new Set();
+  for (const s of sigs) {
+    const c = way.get(s.id);
+    if (c !== undefined) { keepOpen.add(c); fp.wayIn.set(s.id, c); }
+  }
+  // Walls (before unsealing), doors and near lists inside R; the near lists of R's cells
+  // are made anew, the old ones left unused in fp.near.
+  fp.walls = prev.walls0.slice();
+  fp.near = prev.near.slice();
+  eachCell((c) => {
+    fp.walls[c] = fp.blocked[c];
+    fp.door[c] = 0;
+    if (fp.nearAt[c]) { fp.nearAt[c] = 0; fp.liveNear--; fp.deadNear++; }
   });
-  list.forEach((b, k) => stampWalls(fp, b, keepOpen, outlines[k]));
+  for (let k = 0; k < sigs.length; k++) if (hits(sigs[k].inf)) stampWalls(fp, list[k], keepOpen, sigs[k].rects, R);
+  // The cell lists, as sets: a wall cell is one drawn pieces took (walls but no lot), a
+  // door cell one marked door.
+  fp.wallCells = R.x1 < R.x0 ? prev.wallCells0.slice() : prev.wallCells0.filter((c) => !inBox(R, c));
+  fp.doorCells = R.x1 < R.x0 ? prev.doorCells.slice() : prev.doorCells.filter((c) => !inBox(R, c));
+  eachCell((c) => {
+    if (fp.walls[c] && !fp.blocked[c]) fp.wallCells.push(c);
+    if (fp.door[c]) fp.doorCells.push(c);
+  });
+  return finishFootprints(fp, prev, sigs, keepOpen, R);
+}
+
+function countCells(way) {
+  const n = new Map();
+  for (const c of way.values()) n.set(c, (n.get(c) ?? 0) + 1);
+  return n;
+}
+
+// Unseals pockets (every way in, in order, as the full build does), and notes the tiles
+// that changed: all cells after a full build, R and the cells unsealed in either build
+// after a regional one (outside R, walls differ only there and the near lists are the
+// same lists).
+function finishFootprints(fp, prev, sigs, keepOpen, region) {
+  fp.walls0 = fp.walls;
+  fp.wallCells0 = fp.wallCells;
+  fp.walls = fp.walls0.slice();
+  fp.opened = [];
   for (const c of keepOpen) unsealWay(fp, c);
-  noteChangedTiles(fp, footprintCache.get(state));
-  footprintCache.set(state, fp);
+  if (fp.opened.length) fp.wallCells = fp.wallCells0.filter((c) => fp.walls[c]);
+  if (!fp.liveNear) { fp.near = []; fp.deadNear = 0; }
+  fp.sigs = sigs;
+  fp.sigAt = new Map(sigs.map((s, k) => [s.id, k]));
+  fp.terrain = terrainKey();
+  noteChangedTiles(fp, prev, region);
   return fp;
 }
 
@@ -424,7 +608,7 @@ export function footprints(state) {
 const NEAR_TILE = 8;
 const TILES_W = Math.ceil(GRID_W / NEAR_TILE), TILES_H = Math.ceil(GRID_H / NEAR_TILE);
 const TILE_LOG = 8;
-function noteChangedTiles(fp, prev) {
+function noteChangedTiles(fp, prev, region = null) {
   if (!prev?.tileGen) {
     fp.gen = 1;
     fp.tileGen = new Int32Array(TILES_W * TILES_H).fill(1);
@@ -436,19 +620,28 @@ function noteChangedTiles(fp, prev) {
   const entry = { gen, near: [], wall: [] };
   (fp.log = prev.log)[gen % TILE_LOG] = entry;
   const wa = prev.walls, wb = fp.walls, na = prev.nearAt, nb = fp.nearAt;
-  for (let c = 0; c < CELLS; c++) {
+  const note = (c) => {
     const a = na[c], b = nb[c];
     const wall = !wa[c] !== !wb[c];
-    if (!wall && !a && !b) continue;
+    if (!wall && !a && !b) return;
     const x = c % GRID_W, z = (c - x) / GRID_W;
     const t = Math.floor(z / NEAR_TILE) * TILES_W + Math.floor(x / NEAR_TILE);
     if (wall && wallGen[t] !== gen) { wallGen[t] = gen; entry.wall.push(t); }
     // A tile already marked in this build needs no more comparing.
-    if (tileGen[t] === gen || (!a && !b)) continue;
-    if (a && b && sameList(prev.near[a - 1], fp.near[b - 1])) continue;
+    if (tileGen[t] === gen || (!a && !b)) return;
+    if (a && b && sameList(prev.near[a - 1], fp.near[b - 1])) return;
     tileGen[t] = gen;
     entry.near.push(t);
+  };
+  if (!region || !prev.opened) {
+    for (let c = 0; c < CELLS; c++) note(c);
+    return;
   }
+  // The tiles and log entries are only ever read as sets, so the order cells are seen in
+  // does not matter.
+  for (let z = region.z0; z <= region.z1; z++) for (let c = z * GRID_W + region.x0, end = z * GRID_W + region.x1; c <= end; c++) note(c);
+  for (const c of prev.opened) note(c);
+  for (const c of fp.opened) note(c);
 }
 
 // Could a tile the memo covers have been stamped (in the 'near' or 'wall' log) since
@@ -479,6 +672,10 @@ function sameList(la, lb) {
 const POCKET = 48, CORRIDOR = 400;
 const pocketMark = new Int32Array(CELLS), pocketQueue = new Int32Array(POCKET + 8);
 let pocketGen = 0;
+// The corridor search: cells reached this search (corridorMark), the cell each came from
+// (-1 for the pocket), in the order reached.
+const corridorMark = new Int32Array(CELLS), corridorFrom = new Int32Array(CELLS), corridorFront = new Int32Array(POCKET + CORRIDOR + 8);
+let corridorGen = 0;
 function unsealWay(fp, start) {
   const { water } = terrainGrid();
   const walls = fp.walls;
@@ -497,32 +694,31 @@ function unsealWay(fp, start) {
       pocketQueue[tail++] = n;
     }
   }
-  // Sealed: out through the drawn pieces (never a lot) to the nearest open ground.
-  const step = (c, f) => {
-    const x = c % GRID_W;
-    if (x > 0) f(c - 1);
-    if (x < GRID_W - 1) f(c + 1);
-    if (c >= GRID_W) f(c - GRID_W);
-    if (c < CELLS - GRID_W) f(c + GRID_W);
-  };
-  const from = new Map();
-  const front = Array.from(pocketQueue.subarray(0, tail));
-  for (const c of front) from.set(c, -1);
-  for (let k = 0; k < front.length && front.length < CORRIDOR; k++) {
+  // Sealed: out through the drawn pieces (never a lot) to the nearest open ground,
+  // trying each cell's neighbours west, east, north, south. The cells opened are listed
+  // in fp.opened, and leave fp.wallCells when footprints() is done.
+  const cg = ++corridorGen, front = corridorFront, blocked = fp.blocked;
+  let n = 0;
+  for (let k = 0; k < tail; k++) {
+    const c = pocketQueue[k];
+    front[n++] = c;
+    corridorMark[c] = cg;
+    corridorFrom[c] = -1;
+  }
+  for (let k = 0; k < n && n < CORRIDOR; k++) {
+    const c = front[k], x = c % GRID_W;
     let out = -1;
-    step(front[k], (n) => {
-      if (out >= 0 || from.has(n) || water[n]) return;
-      if (!walls[n]) { out = n; from.set(n, front[k]); return; }
-      if (fp.blocked[n]) return;
-      from.set(n, front[k]);
-      front.push(n);
-    });
-    if (out < 0) continue;
-    for (let c = from.get(out); c >= 0 && pocketMark[c] !== gen; c = from.get(c)) {
-      walls[c] = 0;
-      const i = fp.wallCells.indexOf(c);
-      if (i >= 0) fp.wallCells.splice(i, 1);
+    for (let d = 0; d < 4 && out < 0; d++) {
+      const m = d === 0 ? (x > 0 ? c - 1 : -1) : d === 1 ? (x < GRID_W - 1 ? c + 1 : -1) : d === 2 ? (c >= GRID_W ? c - GRID_W : -1) : (c < CELLS - GRID_W ? c + GRID_W : -1);
+      if (m < 0 || corridorMark[m] === cg || water[m]) continue;
+      if (!walls[m]) { out = m; corridorMark[m] = cg; corridorFrom[m] = c; break; }
+      if (blocked[m]) continue;
+      corridorMark[m] = cg;
+      corridorFrom[m] = c;
+      front[n++] = m;
     }
+    if (out < 0) continue;
+    for (let p = corridorFrom[out]; p >= 0 && pocketMark[p] !== gen; p = corridorFrom[p]) { walls[p] = 0; fp.opened.push(p); }
     return;
   }
 }
@@ -602,23 +798,28 @@ function clearPoint(state, fp, c) {
   return best ?? { x, z };
 }
 
-function stampBuilding(fp, b) {
+function stampBuilding(fp, b, R = ALL) {
   if (b.type === 'bridge') return;
-  if (b.type === 'farm' || b.type === 'park') return stampField(fp, b);
+  if (b.type === 'farm' || b.type === 'park') return stampField(fp, b, R);
   // Conservative: every cell the footprint (plus a walker's margin) touches.
-  const m = PERSON_MARGIN;
-  const cx0 = Math.floor((b.x - b.w / 2 - m - ORIGIN_X) / CELL);
-  const cz0 = Math.floor((b.z - b.d / 2 - m - ORIGIN_Z) / CELL);
-  const cx1 = Math.floor((b.x + b.w / 2 + m - ORIGIN_X) / CELL - 1e-6);
-  const cz1 = Math.floor((b.z + b.d / 2 + m - ORIGIN_Z) / CELL - 1e-6);
-  for (let z = cz0; z <= cz1; z++)
-    for (let x = cx0; x <= cx1; x++) {
-      const j = cellIndex(x, z);
-      if (j >= 0) fp.blocked[j] = b.id + 1;
-    }
-  for (const j of [doorCell(b), frontCell(b)]) if (j >= 0 && fp.blocked[j] === b.id + 1) fp.blocked[j] = 0;
+  const [cx0, cz0, cx1, cz1] = stampRect(b);
+  for (let z = Math.max(cz0, R.z0); z <= Math.min(cz1, R.z1); z++)
+    for (let x = Math.max(cx0, R.x0); x <= Math.min(cx1, R.x1); x++) fp.blocked[z * GRID_W + x] = b.id + 1;
+  for (const j of [doorCell(b), frontCell(b)]) if (j >= 0 && inBox(R, j) && fp.blocked[j] === b.id + 1) fp.blocked[j] = 0;
 }
 
+// The cells a building's lot layer stamps: its w x d plus a walker's margin.
+function stampRect(b) {
+  const m = PERSON_MARGIN;
+  return [Math.floor((b.x - b.w / 2 - m - ORIGIN_X) / CELL), Math.floor((b.z - b.d / 2 - m - ORIGIN_Z) / CELL),
+    Math.floor((b.x + b.w / 2 + m - ORIGIN_X) / CELL - 1e-6), Math.floor((b.z + b.d / 2 + m - ORIGIN_Z) / CELL - 1e-6)];
+}
+
+// The cells whose near lists a drawn piece joins: its bounds grown by the walls test's reach.
+function reachCells(r) {
+  const [x0, z0, x1, z1] = rectBounds(r, PERSON_MARGIN + WALL_CORE + 0.01);
+  return [Math.floor((x0 - ORIGIN_X) / CELL), Math.floor((z0 - ORIGIN_Z) / CELL), Math.floor((x1 - ORIGIN_X) / CELL), Math.floor((z1 - ORIGIN_Z) / CELL)];
+}
 // ---------------------------------------------------------------- walls (walkers)
 
 // fp.blocked is the lot layer: each building's w x d (plus a walker's margin), what
@@ -645,48 +846,40 @@ function coreHit(r, i, j, m) {
   return Math.abs(r.x - cx) <= WALL_CORE && Math.abs(r.z - cz) <= WALL_CORE;
 }
 
-// The cell every building's way in must keep open: its doorstep (doorstepCell), or,
-// where its own wing or porch covers the street cell and the cell beyond is someone
+// The cell every building's way in must keep open (wayInOf): its doorstep (doorstepCell),
+// or, where its own wing or porch covers the street cell and the cell beyond is someone
 // else's lot (an old wing built across the door), the street cell itself.
-function wayIn(fp, b, rects) {
-  if (b.type === 'bridge' || b.type === 'park') return -1;
-  const step = doorstepCell(b, rects);
-  if (b.type === 'farm') return step;
-  const front = frontCell(b);
-  return step !== front && step >= 0 && fp.blocked[step] ? front : step;
-}
 
-function stampWalls(fp, b, keepOpen, rects = buildingOutline(b)) {
+// R clips the stamp to a box of cells (regionalFootprints); fp.wallCells and fp.doorCells
+// are kept here only when they are lists (the full build).
+function stampWalls(fp, b, keepOpen, rects = buildingOutline(b), R = ALL) {
   if (b.type === 'bridge' || b.type === 'park') return;
   if (!rects.length) return;
   // Near lists hold every piece within a walker's margin of some point of the cell; the walls
   // test reaches WALL_CORE further.
-  const m = PERSON_MARGIN, reach = m + WALL_CORE + 0.01;
+  const m = PERSON_MARGIN;
   const field = b.type === 'farm';
   const door = doorCell(b);
-  const before = field || door < 0 ? 0 : fp.walls[door];
+  const doorHere = door >= 0 && inBox(R, door);
+  const before = field || !doorHere ? 0 : fp.walls[door];
   for (const r of rects) {
-    const [x0, z0, x1, z1] = rectBounds(r, reach);
-    const i0 = Math.floor((x0 - ORIGIN_X) / CELL), i1 = Math.floor((x1 - ORIGIN_X) / CELL);
-    const j0 = Math.floor((z0 - ORIGIN_Z) / CELL), j1 = Math.floor((z1 - ORIGIN_Z) / CELL);
-    for (let j = j0; j <= j1; j++)
-      for (let i = i0; i <= i1; i++) {
-        const c = cellIndex(i, j);
-        if (c < 0) continue;
+    const [i0, j0, i1, j1] = reachCells(r);
+    for (let j = Math.max(j0, R.z0); j <= Math.min(j1, R.z1); j++)
+      for (let i = Math.max(i0, R.x0); i <= Math.min(i1, R.x1); i++) {
+        const c = j * GRID_W + i;
         let k = fp.nearAt[c];
-        if (!k) { fp.near.push([]); k = fp.nearAt[c] = fp.near.length; }
+        if (!k) { fp.near.push([]); k = fp.nearAt[c] = fp.near.length; fp.liveNear++; }
         fp.near[k - 1].push(r);
-        if (!fp.walls[c] && !keepOpen.has(c) && coreHit(r, i, j, m)) { fp.walls[c] = b.id + 1; fp.wallCells.push(c); }
+        if (!fp.walls[c] && !keepOpen.has(c) && coreHit(r, i, j, m)) { fp.walls[c] = b.id + 1; fp.wallCells?.push(c); }
       }
   }
-  if (!field && door >= 0) {
+  if (!field && doorHere) {
     // The door cell stays as the lot layer has it (open); people stop on the doorstep.
-    if (fp.walls[door] !== before && !before) fp.wallCells.splice(fp.wallCells.indexOf(door), 1);
+    if (fp.walls[door] !== before && !before) fp.wallCells?.splice(fp.wallCells.indexOf(door), 1);
     fp.walls[door] = before;
-    if (!fp.blocked[door] && !fp.door[door]) { fp.door[door] = 1; fp.doorCells.push(door); }
+    if (!fp.blocked[door] && !fp.door[door]) { fp.door[door] = 1; fp.doorCells?.push(door); }
   }
 }
-
 // The cells a drawn piece takes from walkers (its middle within a walker's margin of
 // the piece: the walls test), as a list.
 export function pieceCells(r) {
@@ -1097,19 +1290,17 @@ export function doorstepCell(b, rects = null) {
 
 // Farms: crops inside, a one-cell headland ring people may walk and wear.
 // Parks: lawn throughout.
-function stampField(fp, b) {
+function stampField(fp, b, R = ALL) {
   const { cx0, cz0, cx1, cz1 } = buildingCells(b);
   const crop = b.type === 'farm';
-  for (let z = cz0; z <= cz1; z++)
-    for (let x = cx0; x <= cx1; x++) {
-      const j = cellIndex(x, z);
-      if (j < 0) continue;
+  for (let z = Math.max(cz0, R.z0); z <= Math.min(cz1, R.z1); z++)
+    for (let x = Math.max(cx0, R.x0); x <= Math.min(cx1, R.x1); x++) {
+      const j = z * GRID_W + x;
       const edge = x === cx0 || x === cx1 || z === cz0 || z === cz1;
       if (!crop) fp.field[j] = FIELD.LAWN;
       else if (!edge) fp.field[j] = FIELD.CROP;
     }
 }
-
 // Is the rest of a flat [x, z, ...] route still clear of buildings, from the
 // waypoint at flat index fromIndex? Visits every cell each segment passes
 // through (a grid traversal: a leg clipping the corner of a wall by a hair
@@ -1419,16 +1610,35 @@ export function structuralGrid(state) {
     return grid;
   }
   const prev = grid;
-  const cost = new Float32Array(CELLS);
-  const wcode = new Uint8Array(CELLS);
   const ctx = structuralContext(state);
-  let comp = structuralComponents(prev);
-  for (let i = 0; i < CELLS; i++) {
-    structuralCell(ctx, i, cost, wcode);
-    if (comp && (cost[i] < Infinity) !== (prev.cost[i] < Infinity)) comp = undefined;
+  let cost, wcode, comp = structuralComponents(prev);
+  if (prev && prev.roads === r && prev.navRev === r.navRev && prev.fp && prev.fords === ctx.fords) {
+    // Only the footprints changed (same roads, works and bridges): every cell's cost is a
+    // function of its own inputs, so only the cells whose lot layer changed, and those beside
+    // a tier changed since, can differ from a full build. The rest keep their values.
+    cost = prev.cost.slice();
+    wcode = prev.water.slice();
+    const redo = (i) => {
+      structuralCell(ctx, i, cost, wcode);
+      if (comp && (cost[i] < Infinity) !== (prev.cost[i] < Infinity)) comp = undefined;
+    };
+    const ob = prev.fp.blocked, nb = ctx.fp.blocked, of = prev.fp.field, nf = ctx.fp.field;
+    for (let i = 0; i < CELLS; i++) if (!ob[i] !== !nb[i] || of[i] !== nf[i]) redo(i);
+    for (const i of structuralDirty.get(r) ?? []) {
+      const cx = i % GRID_W, cz = (i - cx) / GRID_W;
+      for (let z = Math.max(0, cz - 1); z <= Math.min(GRID_H - 1, cz + 1); z++)
+        for (let x = Math.max(0, cx - 1); x <= Math.min(GRID_W - 1, cx + 1); x++) redo(z * GRID_W + x);
+    }
+  } else {
+    cost = new Float32Array(CELLS);
+    wcode = new Uint8Array(CELLS);
+    for (let i = 0; i < CELLS; i++) {
+      structuralCell(ctx, i, cost, wcode);
+      if (comp && (cost[i] < Infinity) !== (prev.cost[i] < Infinity)) comp = undefined;
+    }
   }
   const nodes = nodesFor(r, prev, structuralNodeDirty);
-  grid = owned({ key: `${base}:${r.version}`, bucket: base, base, roads: r, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height, ...nodes, comp }, r);
+  grid = owned({ key: `${base}:${r.version}`, bucket: base, base, roads: r, navRev: r.navRev, fp: ctx.fp, fords: ctx.fords, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z, cell: CELL, cost, water: wcode, height: terrainGrid().height, ...nodes, comp }, r);
   structuralCache.set(state, grid);
   structuralDirty.set(r, new Set());
   return grid;
@@ -1560,8 +1770,10 @@ function decayAndRetier(state) {
   const { water, slope } = terrainGrid();
   const { blocked, field } = footprints(state);
   const era = state.era ?? 0;
+  const box = activeBox(r);
   let x0 = GRID_W, z0 = GRID_H, x1 = -1, z1 = -1;
-  for (let i = 0; i < CELLS; i++) {
+  for (let bz = box.z0, bz1 = box.z1, bx0 = box.x0, bx1 = box.x1; bz <= bz1; bz++)
+  for (let i = bz * GRID_W + bx0, end = bz * GRID_W + bx1; i <= end; i++) {
     let w = wear[i];
     const t = tier[i];
     if (w === 0 && t === 0) continue;
@@ -1585,6 +1797,8 @@ function decayAndRetier(state) {
       low[i] = 0;
     }
   }
+  // Every cell with wear or a tier was in the box and is now in [x0, x1] x [z0, z1].
+  Object.assign(box, { x0, z0, x1, z1 });
   if (x1 >= 0) markDirtyRect(r, x0, z0, x1, z1);
 }
 
@@ -1611,7 +1825,9 @@ function consolidateWear(state) {
   if (!flankScratch) flankScratch = { to: new Int32Array(CELLS), list: [] };
   const { to, list } = flankScratch;
   list.length = 0;
-  for (let i = 0; i < CELLS; i++) {
+  const box = activeBox(r);
+  for (let bz = box.z0; bz <= box.z1; bz++)
+  for (let i = bz * GRID_W + box.x0, end = bz * GRID_W + box.x1; i <= end; i++) {
     const w = wear[i];
     if (w < 5 || tier[i] > 2 || (planned[i] & FLAG.PLANNED) || water[i] || blocked[i]) continue;
     const cx = i % GRID_W, cz = (i - cx) / GRID_W;
@@ -1655,9 +1871,12 @@ function bridgeGaps(state) {
   const minWear = GAP_WEAR * UPGRADE_AT[1];
   const W = GRID_W;
   const fill = [];
-  // Two cells in from the edge, so every neighbour index below is in range.
-  for (let z = 2; z < GRID_H - 2; z++) {
-    for (let x = 2, i = z * W + 2; x < W - 2; x++, i++) {
+  // Two cells in from the edge, so every neighbour index below is in range; cells
+  // outside the box have no wear.
+  const box = activeBox(r);
+  const xa = Math.max(2, box.x0), xb = Math.min(W - 3, box.x1);
+  for (let z = Math.max(2, box.z0); z <= Math.min(GRID_H - 3, box.z1); z++) {
+    for (let x = xa, i = z * W + xa; x <= xb; x++, i++) {
       const t = tier[i];
       if (t >= 3 || wear[i] < minWear || water[i] || blocked[i] || field[i] === FIELD.CROP) continue;
       let want = 0;
@@ -2168,3 +2387,5 @@ function freshNavCells(state) {
 }
 
 export const __test = { consolidateWear, bridgeGaps, decayAndRetier, seedReclaimedPaths, freshNavCells };
+
+

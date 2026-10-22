@@ -16,7 +16,7 @@ import {rng, hash32, hashUnit} from './rng.js';
 import {decide, findHook} from './hooks.js';
 import {byId, cellIndex, lookFor, nextId, BRIDGE} from './state.js';
 import {monthIndex} from './clock.js';
-import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, wallMemo, wallsStillClear, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG, walkerSegmentBlocked, walkerLegOutlined, structuralWaterAt, ORIGIN_X, ORIGIN_Z, CELL, GRID_W, GRID_H} from './roads.js';
+import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, wallMemo, wallsStillClear, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG, walkerSegmentBlocked, walkerLegOutlined, structuralWaterAt, growActiveBox, ORIGIN_X, ORIGIN_Z, CELL, GRID_W, GRID_H} from './roads.js';
 import {halfWidth, wearBucket} from '../render/paths.js';   // the drawn path widths (pure, no renderer state)
 import {findRoute, cellsToWaypoints} from '../navigation.js';
 import {projectSite} from './buildings.js';
@@ -327,6 +327,7 @@ function addWear(state, x, z, amount) {
   const c = cellIndex(state.roads, x, z);
   if (c < 0) return;
   state.roads.wear[c] += amount;
+  growActiveBox(state.roads, c);
   state.roads.wearAddedMonth = (state.roads.wearAddedMonth ?? 0) + amount;
 }
 
