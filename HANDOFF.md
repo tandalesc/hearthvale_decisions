@@ -41,6 +41,8 @@ The player is the town's deliberative leadership ("System 2"). They never place 
     - The instructions describe money in words, because the model reads banded words far better than raw numbers.
     - The model still borrows more when already in debt, so `maybeBorrow` has a hard rule: lenders balk at a year of debt.
   - **`react_to_policy`** stays a `choice`. A scale was no better, and strike/leave aren't on the same scale as grumble/protest.
+  - **`where_to_settle`** is gone; settling is the sim's own rule (`households.js` `settleDistrict`). Its options were positions (D1–D4 meant whichever district was roomiest), so nothing could be pooled, cached or distilled, and the model's answers almost never matched a later question. Newcomers now draw among districts with free homes, weighted by room, work in the centre, looks and land value against their means.
+  - **`strike_vote`** became **`strike_resolve`**: one `score` question per strike (back down → solid) from four bands of the workers' situation. Each working household then strikes, works short hours or works in the sim (`src/sim/strikes.js`), scaled by that resolve, and the output penalty follows the work lost. The old vote asked every district and wealth band, including the gentry, and weighed a district of 3 like one of 500.
   - **Town snapshot bands** (`src/sim/decisions/slices.js`) were recalibrated. Before, nearly every town read wellbeing "good", jobs "scarce" and homes "plenty".
     - Wellbeing: cut-offs at 80 and 89.
     - Jobs: relative to the usual surplus of workers (below −0.42 is scarce, above −0.2 is plenty).

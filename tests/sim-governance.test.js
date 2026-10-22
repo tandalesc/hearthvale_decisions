@@ -17,6 +17,8 @@ import {
   addCard, makeCard, docketQuarterly, rule, sessionCap, yearCap, SESSION_CAP,
 } from '../src/sim/docket.js';
 import {EVENTS, eventsMonthly, fireEvent} from '../src/sim/events.js';
+import {immigrate} from '../src/sim/households.js';
+import {serialize, restore} from '../src/sim/serialize.js';
 import {splitFaction, factionOf, factionsYearly} from '../src/sim/factions.js';
 import {setCardProse} from '../src/sim/docket.js';
 import {emptyState} from '../src/sim/state.js';
@@ -507,25 +509,72 @@ test('discoveries and new chapels go on high ground; bodies have a colour and a 
   assert.equal(governanceSystem.bodyBuilding(s, 'moot')?.type, 'moot');
 });
 
-test('where_to_settle maps candidate districts to D1..D4 and back', async () => {
-  const s = fixtureState('town');
-  const ids = s.districts.slice(0, 2).map((d) => d.id);
-  const bus = {
-    stats: () => ({state: 'idle', room: 64}),
-    async ask(kind, id, context, opts) {
-      if (kind !== 'where_to_settle') return null;
-      assert.ok(context.d1 && (ids.length < 2 || context.d2));
-      assert.deepEqual(opts.allowed, [...ids.map((_, i) => `d${i + 1}`), 'pass_by']);
-      return {kind, choice: 'd2', confidence: 0.7, probabilities: Object.fromEntries(opts.allowed.map((o) => [o, o === 'd2' ? 0.7 : 0.3 / (opts.allowed.length - 1)]))};
-    },
+test('newcomers settle by the sim\'s own rule: a wave spreads out, and dear land draws merchants more than the poor', () => {
+  assert.equal(KIND_BY_ID.where_to_settle, undefined, 'no longer a decision question');
+  const settled = (wealth, trade) => {
+    const s = fixtureState('town');
+    const before = s.households.length;
+    immigrate(s, 300, {wealth, trade});
+    return s.households.slice(before);
   };
-  const subject = {type: 'migrant', record: {migrant: 'craftsman', candidates: ids}};
-  runMonths(s, 1, {decisions: bus, now: () => 0});
-  assert.equal(distribution(s, 'where_to_settle', subject), null, 'nothing until the model answers');
-  await new Promise((r) => setImmediate(r));
-  runMonths(s, 1, {decisions: bus, now: () => 9e9});
-  const p = distribution(s, 'where_to_settle', subject);
-  if (ids.length >= 2) assert.ok(p[`d${ids[1]}`] > 0.6, JSON.stringify(p));
+  const s = fixtureState('town');
+  const mean = s.districts.reduce((n, d) => n + (s.districtLand[d.id] ?? 0), 0) / s.districts.length;
+  const dearShare = (hs) => hs.filter((h) => (s.districtLand[h.districtId] ?? 0) > mean).reduce((n, h) => n + h.size, 0) / hs.reduce((n, h) => n + h.size, 0);
+  const poor = settled(0.5, 'labour'), rich = settled(2, 'trade');
+  assert.ok(new Set(poor.map((h) => h.districtId)).size >= 5, 'a wave spreads over several districts');
+  assert.ok(dearShare(rich) > dearShare(poor), `merchants ${dearShare(rich).toFixed(2)} vs poor ${dearShare(poor).toFixed(2)} in dear districts`);
+});
+
+test('a strike asks one strike_resolve question; households walk out in the sim, harder with more resolve', async () => {
+  assert.equal(KIND_BY_ID.strike_vote, undefined);
+  const outputFor = async (choice) => {
+    const s = fixtureState('town');
+    const asked = [];
+    const bus = {
+      stats: () => ({state: 'idle', room: 0}),
+      async ask(kind, id, context) {
+        if (kind !== 'strike_resolve') return null;
+        asked.push(context);
+        assert.equal(validateContext(kind, context), null);
+        return {kind, choice, confidence: 0.9, probabilities: {back_down: 0, some: 0, most: 0, solid: 0, [choice]: 1}};
+      },
+    };
+    const rec = fireEvent(s, 'strike', {force: true});
+    runMonths(s, 0.2, {decisions: bus, now: () => 0});
+    await new Promise((r) => setImmediate(r));
+    runMonths(s, 0.2, {decisions: bus, now: () => 0});
+    assert.equal(asked.length, 1, 'one question per strike');
+    const walk = s.events.active.find((e) => e.id === `${rec.id}m`)?.walkout;
+    assert.ok(walk && walk.strike > 0, JSON.stringify(walk));
+    return s.events.active.find((e) => e.id === `${rec.id}m`).mods.output;
+  };
+  const soft = await outputFor('back_down'), hard = await outputFor('solid');
+  assert.ok(hard < soft, `solid ${hard} < back_down ${soft}`);
+  assert.ok(hard >= 0.4 && soft <= 1);
+});
+
+test('offline, a strike still settles: the resolve question gets its local answer', () => {
+  const s = fixtureState('town');
+  const rec = fireEvent(s, 'strike', {force: true});
+  runMonths(s, 0.5);
+  const walk = s.events.active.find((e) => e.id === `${rec.id}m`)?.walkout;
+  assert.ok(walk && walk.resolve > 0.4 && walk.resolve < 1.7, JSON.stringify(walk));
+  assert.ok(s.events.active.find((e) => e.id === `${rec.id}m`).mods.output < 1);
+});
+
+test('a save from before keeps loading: retired kinds\' questions and answers are dropped', () => {
+  const s = fixtureState('town');
+  const gov = s.governance;
+  gov.asks.push({kind: 'strike_vote', meta: {record: 'e1', event: 'strike'}});
+  (gov.inflight ??= []).push({id: 999, kind: 'strike_vote', meta: {}, month: 0, tick: 0, questions: [{key: 'k', context: {}, subject: {dim: 'district', value: 'x'}}], answers: {}, answered: 0});
+  gov.sliceAnswers['strike_vote@e1'] = {'district=x': {probs: {strike: 1}, month: 0}};
+  gov.individual.where_to_settle = {'{}': {probs: {d1: 1}, month: 0}};
+  const back = restore(serialize(s));
+  assert.ok(!back.governance.asks.some((a) => a.kind === 'strike_vote'));
+  assert.ok(!(back.governance.inflight ?? []).some((x) => x.kind === 'strike_vote'));
+  assert.equal(back.governance.sliceAnswers['strike_vote@e1'], undefined);
+  assert.equal(back.governance.individual.where_to_settle, undefined);
+  runMonths(back, 1);
 });
 
 test('bridges: a cart bridge is on offer soon after people start crossing, and waits for demand to double after Not now', () => {
@@ -970,7 +1019,7 @@ test('the voice lint passes on all catalogue text', () => {
 // Question kinds
 
 test('the question kinds are well formed and their contexts validate', () => {
-  assert.ok(KINDS.length >= 24);
+  assert.ok(KINDS.length >= 23);
   for (const k of KINDS) {
     assert.match(k.id, /^[a-z][a-z0-9_]{1,31}$/);
     const options = Object.keys(k.criteria);

@@ -214,14 +214,6 @@ export const KINDS = [
     instructions: (c) => `The ${c.faction}${size(c)} are ${c.mood}. Their main complaint is ${c.grievance}. They ${c.hasBody === 'yes' ? 'have' : 'have no'} body of their own. What do they do? ${OWN}`,
   },
   {
-    id: 'where_to_settle', share: 'town', slices: [], weights: {}, cadence: 0,
-    criteria: {d1: 'Settle in the first district.', d2: 'Settle in the second district.', d3: 'Settle in the third district.',
-      d4: 'Settle in the fourth district.', pass_by: 'Move on to another town.'},
-    context: {migrant: oneOf(['poor_family', 'craftsman', 'merchant']), d1: text(80), d2: text(80, true), d3: text(80, true), d4: text(80, true)},
-    instructions: (c) => `A ${c.migrant.replace('_', ' ')} arrives. Districts: first ${c.d1}` +
-      `${c.d2 ? `; second ${c.d2}` : ''}${c.d3 ? `; third ${c.d3}` : ''}${c.d4 ? `; fourth ${c.d4}` : ''}. Where do they settle? ${OWN}`,
-  },
-  {
     id: 'festival_participation', share: 'district', slices: ['district', 'faithBand'], weights: {district: 0.4, faithBand: 0.6}, cadence: 0,
     criteria: {join: 'Join in.', watch: 'Watch from the side.', ignore: 'Stay away.', protest: 'Protest against it.'},
     context: {...SLICE_FIELDS, event: oneOf(['fair', 'feast', 'jubilee', 'carnival'])},
@@ -241,10 +233,13 @@ export const KINDS = [
     instructions: (c) => `A ${c.event} strikes Hearthvale. ${who(c)}${size(c)} respond. ${OWN}`,
   },
   {
-    id: 'strike_vote', share: 'proposal', slices: ['district', 'wealthBand'], weights: {district: 0.5, wealthBand: 0.5}, cadence: 0, highStakes: true,
-    criteria: {strike: 'Join the strike.', work: 'Keep working.', partial: 'Work short hours in support.'},
-    context: {...SLICE_FIELDS, wages: oneOf(['low', 'fair', 'good'])},
-    instructions: (c) => `The union calls a strike. ${who(c, 'Workers')}${size(c)} vote. Wages are ${c.wages}. ${OWN}`,
+    // A scale, lowest first: one question per strike. Each household's own
+    // choice is the sim's (src/sim/strikes.js); this sets how hard they hold out.
+    id: 'strike_resolve', type: 'score', share: 'town', slices: [], weights: {}, cadence: 0,
+    criteria: {back_down: 'Most go back to work.', some: 'Some stay out.', most: 'Most stay out.', solid: 'Nearly all stay out.'},
+    context: {wages: oneOf(['low', 'fair', 'good']), hardship: oneOf(['none', 'some', 'much']), savings: oneOf(['thin', 'some', 'plenty']), mood: oneOf(MOODS)},
+    instructions: (c) => `The union calls a strike. Wages are ${c.wages}. Workers face ${c.hardship === 'none' ? 'no' : c.hardship} hardship, ` +
+      `their savings are ${c.savings} and they are ${c.mood}. How many stay out? ${OWN}`,
   },
   {
     id: 'newcomer_integrate', share: 'district', slices: ['district', 'trade'], weights: {district: 0.5, trade: 0.5}, cadence: 12,

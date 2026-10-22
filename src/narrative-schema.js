@@ -293,7 +293,7 @@ export const KIND_ABOUT = {
   resident_routine: 'their day', household_stay_move: 'staying or going', choose_trade: 'what the young ones will do',
   react_to_policy: 'the newest rule', faction_stance: 'the open proposal', institution_form_support: 'a new body',
   petition: 'speaking up', festival_participation: 'the festivities', crime_charity: 'getting by',
-  event_response: 'hard times', strike_vote: 'a strike', newcomer_integrate: 'settling in', enterprise_plan: 'the year ahead',
+  event_response: 'hard times', strike_resolve: 'a strike', newcomer_integrate: 'settling in', enterprise_plan: 'the year ahead',
   enterprise_found: 'starting a business', household_home: 'their home', take_loan: 'money troubles', merchant_speculate: 'their coin',
   farm_land: 'their land',
 };

@@ -17,7 +17,7 @@ import {riverX, heightAt, waterAt, terrainKey, hasRiver} from '../terrain.js';
 import {policyModifiers, levelOf, costScale} from './policies.js';
 import {fill, coin} from './text/voice.js';
 import {addChronicle} from './chronicle.js';
-import {nudgeMood} from './factions.js';
+import {nudgeMood, addFactionStory} from './factions.js';
 import {addCard, makeCard, applyEffects} from './docket.js';
 import * as bodies from './institutions.js';
 import {killShare, immigrate} from './households.js';
@@ -25,7 +25,6 @@ import {closeEnterprise} from './enterprises.js';
 import {pay} from './economy.js';
 import {floodPoint, fireBlock, floodRisk} from './sites.js';
 import {eventResponseRequested} from './decisions/scheduler.js';
-import {tellStory} from './decisions/effects.js';
 import {findHook} from './hooks.js';
 import {subjectOpen} from './subjects.js';
 import {bridgeCollapseRisk} from './bridges.js';
@@ -622,8 +621,8 @@ export function fireEvent(state, id, {choice = null, from = null, force = false}
   for (const e of def.effects ?? []) applyEventOp(state, record, e);
   if (def.response) eventResponseRequested(state, record);
   if (def.participation) eventResponseRequested(state, record, 'festival_participation');
-  if (def.vote) eventResponseRequested(state, record, 'strike_vote');
-  if (id === 'strike') tellStory(state, 'labourers', 'strike');
+  if (def.vote) eventResponseRequested(state, record, 'strike_resolve');
+  if (id === 'strike') addFactionStory(state, 'labourers', 'strike');
 
   if (!def.choices) {
     addChronicle(state, def.line ?? def.title, 'line', {event: id});

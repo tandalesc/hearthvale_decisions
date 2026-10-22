@@ -475,12 +475,13 @@ export function immigrate(state, people, {rand = () => rng(state), districtId = 
   const arrived = [];
   let left = Math.round(people);
   const price = priceLevel(state);
-  const room = districtRoom(state);
+  const view = districtId == null ? settleView(state) : null;
   while (left > 0) {
     const size = Math.min(left, 1 + Math.floor(rand() * 4));
     left -= size;
     const savings = Math.round((40 + rand() * 120) * price * wealth);
-    const settleIn = districtId ?? settleDistrict(state, rand, room, migrantKind(savings / price, trade));
+    const settleIn = districtId ?? settleDistrict(state, rand, view, migrantKind(savings / price, trade), savings);
+    if (view && settleIn != null) view.free[settleIn] = Math.max(0, (view.free[settleIn] ?? 0) - size);
     const h = makeHousehold(state, {
       size, savings, wealth: savings,
       trade: trade ?? chooseTrade(state, null, rand, {type: 'migrant'}),
@@ -501,34 +502,52 @@ export function immigrate(state, people, {rand = () => rng(state), districtId = 
 
 const migrantKind = (savings, trade) => (trade === 'trade' || savings > 140 ? 'merchant' : trade === 'craft' ? 'craftsman' : 'poor_family');
 
-// Free room (people) per district id.
-function districtRoom(state) {
-  const free = {};
+// What newcomers see of each district on arrival: free room (people), average
+// household rent and land value per district id, and the mean land value.
+function settleView(state) {
+  const free = {}, rent = {}, homes = {};
   for (const v of vacancies(state)) free[v.home.districtId] = (free[v.home.districtId] ?? 0) + v.free;
-  return free;
+  for (const h of state.households) {
+    if (h.districtId == null) continue;
+    rent[h.districtId] = (rent[h.districtId] ?? 0) + (h.rent ?? 0);
+    homes[h.districtId] = (homes[h.districtId] ?? 0) + 1;
+  }
+  for (const id in rent) rent[id] /= homes[id];
+  const land = state.districtLand ?? {};
+  const values = state.districts.map((d) => land[d.id]).filter((v) => v > 0);
+  const meanLand = values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+  return {free, rent, land, meanLand};
 }
 
-// Kind where_to_settle: newcomers weigh up to four districts, the roomiest district of
-// each centre first (so the choice is also a choice between centres), then the next
-// roomiest. A centre with work to spare draws more. subject.record = {migrant:
-// 'poor_family' | 'craftsman' | 'merchant', candidates}.
-function settleDistrict(state, rand, free, migrant = 'poor_family') {
+// How dear land draws (+) or puts off (-) each kind of newcomer.
+const LAND_LEAN = {poor_family: -0.8, craftsman: -0.2, merchant: 0.5};
+
+// Where a newcomer settles: a weighted draw over the districts with free homes
+// (over all of them once none has room). Room to live, work in the district's
+// centre and pleasant streets draw everyone. Dear land puts off the poor and
+// draws merchants, and a district whose rent would eat their savings within
+// six months is a long shot. Settling takes up the room, so a wave spreads out
+// instead of piling into one district.
+function settleDistrict(state, rand, view, migrant, savings) {
   const districts = state.districts;
   if (!districts.length) return null;
-  if (districts.length === 1) return districts[0].id;
-  const roomy = [...districts].sort((a, b) => (free[b.id] ?? 0) - (free[a.id] ?? 0) || a.id - b.id);
-  const candidates = [], centres = new Set();
-  for (const d of roomy) if (!centres.has(d.centreId ?? 0)) { centres.add(d.centreId ?? 0); candidates.push(d.id); }
-  for (const d of roomy) if (candidates.length < 4 && !candidates.includes(d.id)) candidates.push(d.id);
-  candidates.length = Math.min(candidates.length, 4);
-  const prior = {pass_by: 0};
-  for (const id of candidates) {
-    const d = districts.find((x) => x.id === id);
-    const work = centreWorkPull(state, d?.centreId);
-    prior[`d${id}`] = (1 + (free[id] ?? 0)) * work * (0.6 + 0.8 * districtLooks(state, id));
+  const lean = LAND_LEAN[migrant] ?? 0;
+  const anyRoom = districts.some((d) => view.free[d.id] > 0);
+  let total = 0;
+  const weights = districts.map((d) => {
+    const room = anyRoom ? view.free[d.id] ?? 0 : 1;
+    const land = view.meanLand > 0 ? clamp((view.land[d.id] ?? view.meanLand) / view.meanLand, 0.25, 4) : 1;
+    const dear = (view.rent[d.id] ?? 0) * 6 > savings ? 0.3 : 1;
+    const w = room * centreWorkPull(state, d.centreId) * (0.6 + 0.8 * districtLooks(state, d.id)) * land ** lean * dear;
+    total += w;
+    return w;
+  });
+  let pick = districts.at(-1);
+  let x = rand() * total;
+  for (let i = 0; i < districts.length; i++) {
+    if ((x -= weights[i]) < 0) { pick = districts[i]; break; }
   }
-  const pick = decide(state, 'where_to_settle', {type: 'migrant', record: {migrant, candidates}}, {prior, rng: rand});
-  return Number(pick?.slice(1)) || candidates[0];
+  return pick.id;
 }
 
 // 0.5..2: open jobs against idle hands in a centre (from last month's figures).

@@ -31,6 +31,7 @@ import {
   proposalSnapshot, bodySnapshot, districtIdByName, centreIdByName, safe, updateBands,
 } from './slices.js';
 import {monthlyCost} from '../enterprises.js';
+import {strikeContext} from '../strikes.js';
 
 export const ANSWER_LOG_CAP = 2000;
 const SWEEP_DEADLINE_TICKS = 40;
@@ -80,6 +81,20 @@ function runtimeOf(state) {
 }
 
 export const resetScheduler = (state) => runtimes.delete(state);
+
+// A restored save may hold questions and answers of kinds the game no longer
+// asks (where_to_settle is now the sim's own, strike_vote became strike_resolve);
+// drop them.
+export function forgetRetiredKinds(state) {
+  const gov = state.governance;
+  if (!gov) return;
+  const known = (k) => !!KIND_BY_ID[String(k).split('@')[0]];
+  if (gov.asks) gov.asks = gov.asks.filter((a) => known(a.kind));
+  if (gov.inflight) gov.inflight = gov.inflight.filter((s) => known(s.kind));
+  for (const table of [gov.sliceAnswers, gov.refined, gov.individual]) {
+    for (const k of Object.keys(table ?? {})) if (!known(k)) delete table[k];
+  }
+}
 
 function g(state) {
   // A bare state (emptyState without the init phase) still works.
@@ -324,18 +339,14 @@ function buildQuestions(state, kind, meta) {
       return [...qs, ...tornPetitions(state, m, snap)];
     }
     case 'festival_participation':
-    case 'event_response':
-    case 'strike_vote': {
+    case 'event_response': {
       const event = {fair: 'fair', 'feast-day': 'feast', 'founders-jubilee': 'jubilee'}[meta.event] ?? meta.event;
-      const wages = (state.economy?.wageRate ?? 10) < 9 ? 'low' : (state.economy?.wageRate ?? 10) < 13 ? 'fair' : 'good';
-      const extra = kind === 'strike_vote' ? () => ({wages}) : () => ({event: validEvent(kind, event)});
-      if (kind === 'strike_vote') {
-        const snap = proposalSnapshot(state, {id: `strike-${meta.record}`, from: 'union', category: 'labour', title: 'A strike', cost: 0, helps: ['labour'], hurts: ['gentry']});
-        return sliceQuestions(state, kind, {...meta, variant: meta.record}, extra, () => snap);
-      }
       if (!validEvent(kind, event)) return [];
-      return sliceQuestions(state, kind, {...meta, variant: meta.record}, extra, townOr(state));
+      return sliceQuestions(state, kind, {...meta, variant: meta.record}, () => ({event}), townOr(state));
     }
+    case 'strike_resolve':
+      return [{key: qkey(kind, m, meta.record ?? 'strike'), subject: {record: meta.record}, context: strikeContext(state),
+        snapshot: townSnapshot(state), allowed: null, priority: PRIORITY.sweep}];
     case 'merchant_speculate': {
       const merchants = factionById(state, 'merchants');
       const mood = moodBand(merchants?.mood ?? 0.6);
@@ -863,7 +874,6 @@ export function distribution(state, kindId, subject) {
     return probs ? {...probs} : null;
   }
 
-  if (kindId === 'where_to_settle') return settleDistribution(state, subject);
   if (kindId === 'farm_land') return farmDistribution(state, subject);
   if (type === 'site' || kindId === 'choose_site') {
     const context = siteContext(rec);
@@ -879,28 +889,6 @@ export function distribution(state, kindId, subject) {
   }
   const own = rec.id != null ? gov.individual[kindId]?.[rec.id] : null;
   return isModel(own, m) ? {...own.probs} : null;
-}
-
-// where_to_settle: sim-core passes {type: 'migrant', record: {migrant, candidates:
-// [districtId, ...] best first}}. The model sees them as D1..D4; its answer
-// comes back keyed 'd<districtId>' (sim-core's option keys) plus 'pass_by'.
-function settleDistribution(state, subject) {
-  const rec = subject.record ?? {};
-  const ids = (rec.candidates ?? []).slice(0, 4);
-  if (!ids.length) return null;
-  const gov = g(state);
-  const context = {migrant: ['poor_family', 'craftsman', 'merchant'].includes(rec.migrant) ? rec.migrant : 'poor_family'};
-  ids.forEach((id, i) => { context[`d${i + 1}`] = districtLine(state, id); });
-  const key = signature(context);
-  const own = gov.individual.where_to_settle?.[key];
-  if (isModel(own, monthIndex(state.time), 12)) {
-    const out = {pass_by: own.probs.pass_by ?? 0};
-    ids.forEach((id, i) => { out[`d${id}`] = own.probs[`d${i + 1}`] ?? 0; });
-    return out;
-  }
-  const rt = runtimeOf(state);
-  if (rt.bus) askExtra(state, rt, rt.bus, 'where_to_settle', key, context, townSnapshot(state), [...ids.map((_, i) => `d${i + 1}`), 'pass_by'], PRIORITY.individual);
-  return null;
 }
 
 // farm_land: sim-world passes {type: 'farm', record: {buildingId, landValue:
@@ -928,11 +916,6 @@ function farmDistribution(state, subject) {
   const rt = runtimeOf(state);
   if (rt.bus) askExtra(state, rt, rt.bus, 'farm_land', key, context, rec.districtId != null ? districtSnapshot(state, rec.districtId) : townSnapshot(state), null, PRIORITY.individual);
   return null;
-}
-
-function districtLine(state, id) {
-  const s = districtSnapshot(state, id);
-  return safe(`${s.districtName ?? 'a quarter'}, ${s.character ?? 'old-town'}, rent ${s.rent ?? 'mid'}, ${s.roads ?? 'paths'}, ${s.crowding ?? 'snug'}, ${s.looks ?? 'plain'}`, 80);
 }
 
 const timeOfDayOf = (state) => ['morning', 'midday', 'evening'][Math.min(2, Math.floor(((state.time.tick % 50) / 50) * 3))];
@@ -1194,7 +1177,7 @@ export function previewQuestions(state, kinds = KINDS.map((k) => k.id)) {
       : kindId === 'react_to_policy' ? {policy: 'commons', change: 'adopted'}
         : kindId === 'event_response' ? {record: 'test', event: 'flood'}
           : kindId === 'festival_participation' ? {record: 'test', event: 'fair'}
-            : kindId === 'strike_vote' ? {record: 'test', event: 'strike'}
+            : kindId === 'strike_resolve' ? {record: 'test'}
               : {};
     if (kindId === 'faction_stance' || kindId === 'institution_form_support' || kindId === 'institution_negotiate') {
       const card = state.docket.find((c) => (kindId === 'institution_form_support' ? c.data?.forms : !c.data?.forms));

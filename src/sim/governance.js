@@ -27,7 +27,7 @@ import {EVENTS, eventsMonthly, eventModifiers} from './events.js';
 import {initFactions, factionsYearly, countFactions, addFactionStory, nudgeMood} from './factions.js';
 import {addStory} from './households.js';
 import {chronicleYearly, addChronicle, setChronicleProse, setSummaryProse} from './chronicle.js';
-import {schedulerTick, distribution, resetScheduler} from './decisions/scheduler.js';
+import {schedulerTick, distribution, resetScheduler, forgetRetiredKinds} from './decisions/scheduler.js';
 import {updateBands} from './decisions/slices.js';
 import {initApproval, approvalYearly} from './approval.js';
 
@@ -225,6 +225,7 @@ function restore(state) {
   initAdvisers(state);
   initFactions(state);
   resetScheduler(state);
+  forgetRetiredKinds(state);
   writeModifiers(state);
   initApproval(state);
 }

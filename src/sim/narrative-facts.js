@@ -94,7 +94,7 @@ const typeWord = (b) => clean(b?.variant || b?.type || 'building', 24).replace(/
 const CALM = {
   household_stay_move: ['stay'], react_to_policy: ['accept', 'support'], crime_charity: ['honest', 'give_alms'],
   household_home: ['keep'], petition: ['wait'], festival_participation: ['join', 'watch'], newcomer_integrate: ['assimilate'],
-  event_response: ['help'], strike_vote: ['work'], take_loan: ['hold'], enterprise_plan: ['hold'],
+  event_response: ['help'], strike_resolve: ['back_down'], take_loan: ['hold'], enterprise_plan: ['hold'],
   faction_stance: ['indifferent'], institution_form_support: ['indifferent'], merchant_speculate: ['invest_trade'],
 };
 

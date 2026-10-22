@@ -28,6 +28,7 @@ import * as docket from '../docket.js';
 import * as events from '../events.js';
 import {KIND_BY_ID} from './kinds.js';
 import {subjectBlocked, timesAsked} from '../subjects.js';
+import {walkout, resolveOf} from '../strikes.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -196,14 +197,6 @@ export const EFFECTS = {
     apply: applyPetitions,
   },
 
-  where_to_settle: {
-    fallback(c, snap) {
-      const w = {d1: 0.45, d2: c.d2 ? 0.25 : 0, d3: c.d3 ? 0.15 : 0, d4: c.d4 ? 0.08 : 0, pass_by: 0.07};
-      if (snap?.homes === 'scarce') mul(w, 'pass_by', 2.5);
-      return w;
-    },
-  },
-
   festival_participation: {
     fallback(c, snap) {
       const w = {join: 0.45, watch: 0.35, ignore: 0.15, protest: 0.05};
@@ -250,15 +243,20 @@ export const EFFECTS = {
     apply: applyEventResponse,
   },
 
-  strike_vote: {
-    fallback(c) {
-      const w = {low: {strike: 0.55, partial: 0.25, work: 0.2}, fair: {strike: 0.3, partial: 0.3, work: 0.4},
-        good: {strike: 0.1, partial: 0.2, work: 0.7}}[c.wages ?? 'fair'];
-      const out = {...w};
-      if (c.wealthBand === 'poor') out.strike *= 1.3;
-      return out;
+  strike_resolve: {
+    fallback(c, snap) {
+      const w = {back_down: 0.2, some: 0.35, most: 0.3, solid: 0.15};
+      if (c.wages === 'low') { mul(w, 'most', 1.4); mul(w, 'solid', 1.6); }
+      if (c.wages === 'good') { mul(w, 'back_down', 2); mul(w, 'solid', 0.5); }
+      if (c.hardship === 'much') { mul(w, 'most', 1.3); mul(w, 'solid', 1.5); }
+      if (c.savings === 'thin') { mul(w, 'back_down', 1.6); mul(w, 'solid', 0.7); }
+      if (c.savings === 'plenty') mul(w, 'solid', 1.4);
+      if (c.mood === 'angry') { mul(w, 'solid', 1.8); mul(w, 'back_down', 0.6); }
+      if (c.mood === 'glad') mul(w, 'back_down', 1.8);
+      if (snap?.unrest === 'angry') mul(w, 'solid', 1.3);
+      return w;
     },
-    apply: applyStrikeVote,
+    apply: applyStrikeResolve,
   },
 
   newcomer_integrate: {
@@ -643,17 +641,10 @@ function applyEventResponse(state, answers, sweep) {
   if (crowd) crowd.strength = Math.round(Math.min(1, crowd.strength * (0.7 + help / n)) * 100) / 100;
 }
 
-function applyStrikeVote(state, answers, sweep) {
-  let strike = 0, partial = 0, n = 0;
-  for (const a of answers) {
-    strike += a.probs.strike ?? 0;
-    partial += a.probs.partial ?? 0;
-    n++;
-  }
-  if (!n) return;
-  const out = Math.max(0.4, 1 - (strike / n) * 0.8 - (partial / n) * 0.3);
-  const mods = state.events.active.find((e) => e.id === `${sweep?.meta?.record}m`);
-  if (mods) mods.mods.output = Math.round(out * 100) / 100;
+// The workers' resolve scales each household's own draw (strikes.js).
+function applyStrikeResolve(state, answers, sweep) {
+  if (sweep?.meta?.record == null) return;
+  walkout(state, sweep.meta.record, resolveOf(answers[0]?.probs));
 }
 
 function applyIntegration(state, answers) {
