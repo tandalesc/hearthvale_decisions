@@ -136,10 +136,35 @@ test('construction shows a scaffold and no roof until late; completion removes t
   assert.ok(bodyH(record({ built: 0.3 })) < bodyH(record({ built: 1 })));
 });
 
+test('early mills are water mills: a wheel on the river side, turning with the flow', () => {
+  for (const era of [0, 1, 2]) {
+    for (const side of [-1, 1]) {
+      for (const rot of [0, 1, 2, 3]) {
+        const z = 12, x = riverX(z) + side * (WATER_HALF + 8);
+        const list = specs(record({ type: 'mill', styleEra: era, rot, x, z, w: 9.4, d: 7.4, id: 40 + rot })).list;
+        assert.ok(!list.some((s) => s.piece === 'sails'), 'no windmill sails');
+        const wheel = list.find((s) => s.piece === 'wheel');
+        const body = list.find((s) => s.piece === 'body');
+        assert.ok(wheel && body, `era ${era} rot ${rot}: house and wheel`);
+        // Nearer the water than the house (unless the river lies ahead of the
+        // door: then on an end), and never out on the street front.
+        const a = rot * Math.PI / 2, dx = wheel.x - x, dz = wheel.z - z;
+        const toRiver = (s) => Math.abs(s.x - riverX(s.z));
+        if (-side * Math.sin(a) < 0.5) assert.ok(toRiver(wheel) < toRiver(body) - 2, `era ${era} rot ${rot}: wheel toward the river`);
+        assert.ok(dx * Math.sin(a) + dz * Math.cos(a) < 0.5, `era ${era} rot ${rot}: wheel not on the front`);
+        // The floats run downstream (toward -z) at the bottom of the turn.
+        const flow = [riverX(wheel.z - 1) - riverX(wheel.z + 1), -2];
+        assert.ok(Math.cos(wheel.yaw) * flow[0] - Math.sin(wheel.yaw) * flow[1] >= 0, 'turns with the flow');
+      }
+    }
+  }
+  assert.ok(!specs(record({ type: 'mill', styleEra: 3 })).list.some((s) => s.piece === 'wheel'), 'a steam mill has no wheel');
+});
+
 test('kit pieces are flat-shaded with unit normals and valid parts', () => {
   const builders = [G.bodyPiece, () => G.pitchedRoof(G.PROFILES.gable), () => G.pitchedRoof(G.PROFILES.thatch), G.hipRoof, G.flatRoof,
     G.chimneyPiece, G.spirePiece, G.domePiece, G.sawtoothPiece, G.stackPiece, G.postsPiece, () => G.postsPiece({ planks: true }),
-    G.porticoPiece, G.awningPiece, G.sailsPiece, G.fieldPiece, G.bannerPiece];
+    G.porticoPiece, G.awningPiece, G.sailsPiece, G.wheelPiece, G.fieldPiece, G.bannerPiece];
   for (const build of builders) {
     const g = build();
     assert.equal(g.index, null, 'non-indexed');
