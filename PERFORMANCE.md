@@ -1,3 +1,17 @@
+# Data locality: dirty regions and dead rows (2026-10-22)
+
+**What changed.** These are items 2–6 and 8 of `docs/design/data-locality.md`.
+- The student's last decoder layer computes only the option rows.
+- `structuralGrid` patches footprint-only changes instead of rebuilding.
+- The monthly road passes scan only the box of cells with wear or a tier.
+- `unsealWay` uses typed scratch arrays.
+- The scheduler no longer rebuilds per-tick maps.
+- `footprints()` restamps only the cells the changed buildings reach, instead of every building (3,200 full rebuilds in a 150-year town).
+
+**Result.** Towns are bit-identical. The same `serialize()` hash at every decade for seeds 66, 7 and 12 over 150 years, and shadow checks matched the old code at every use. The student takes 0.72× its time on a 40-year replay. Whole-run timings are still to be measured; the machine was under heavy shared load (load average up to 87).
+
+---
+
 # Scheduler: home questions filter first (2026-10-22)
 
 **What changed.** `homeQuestions` (`src/sim/decisions/scheduler.js`) runs on every tick with room for questions. It used to build a whole context for every household with a home, then keep the few within 40 % of affording an upgrade. Now it runs the savings test first and builds contexts only for the households that pass. This came out of the data-locality investigation (`docs/design/data-locality.md`), which ranks the further proposals.

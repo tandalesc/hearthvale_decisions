@@ -1,8 +1,23 @@
 # Data locality in the simulation (investigation)
 
-> **Status** (2026-10-22): investigation. One proof of concept landed with it: the
-> scheduler's `homeQuestions` (§3, item 1). It saves about 4 % of a 150-year headless run, and
-> towns stay bit-identical. Everything else here is a proposal.
+> **Status** (2026-10-22): items 1–6 and 8 are implemented, and towns stay bit-identical.
+> - Item 1: the scheduler's `homeQuestions` filter.
+> - Item 2: the student computes only the option rows in its last layer. 0.72× the student's
+>   time on top of the answer cache; 0 of 18,040 replayed answers differ.
+> - Items 3–6: the structural grid patch, a typed `unsealWay`, the monthly road scans over an
+>   active box, and the scheduler's per-tick structures.
+> - Item 8: footprints restamp only the region a world bump changed.
+>
+> For items 2–6 and 8, `scripts/town-hash.js` gives the same hash at every decade for seeds
+> 66, 7 and 12 over 150 years. Temporary shadow checks (since removed) compared each one with
+> the old code at every use:
+> - 1,637 structural patches;
+> - 5,397 monthly box checks;
+> - 6,390 `unsealWay` runs;
+> - 6,279 regional footprint builds, compared field for field.
+>
+> The full test suite passes, apart from one wall-clock budget, measured while the machine's
+> load average was about 87. Clean timings are still to do. Items 7 and 9–11 remain proposals.
 
 **Question.** Would better memory layout or cache behaviour make headless student towns
 (`scripts/distill-collect.js`) and the game's sim worker faster, while keeping every
