@@ -99,6 +99,34 @@ export function shoreCharacter(x, z, d = T.bankDistance(x, z)) {
   return k === T.KIND.SEA ? BEACH.sea : k === T.KIND.LAKE ? BEACH.lake : k === T.KIND.POND ? BEACH.pond : 0;
 }
 
+/**
+ * Taper the beach widths of the A channel (RGBA rows of n x n samples) in
+ * place. shoreCharacter jumps (14 m of sand to none) where the nearest water
+ * changes kind, from the sea to the river say, and the sand then ended in a
+ * straight, stepped crease along that line. Two box passes of radius r per
+ * axis (a tent of about 2r metres) let it run out instead. Marsh (negative)
+ * samples are kept as they are.
+ */
+export function smoothBeach(data, n, r = 6) {
+  const b = new Float32Array(n * n);
+  for (let k = 0; k < n * n; k++) b[k] = Math.max(0, data[k * 4 + 3]);
+  const tmp = new Float32Array(n);
+  const pass = (stride, step) => {
+    for (let line = 0; line < n; line++) {
+      const o = line * stride;
+      let sum = 0;
+      for (let i = -r; i <= r; i++) sum += b[o + Math.max(0, Math.min(n - 1, i)) * step];
+      for (let i = 0; i < n; i++) {
+        tmp[i] = sum / (2 * r + 1);
+        sum += b[o + Math.min(n - 1, i + r + 1) * step] - b[o + Math.max(0, i - r) * step];
+      }
+      for (let i = 0; i < n; i++) b[o + i * step] = tmp[i];
+    }
+  };
+  for (let k = 0; k < 2; k++) { pass(n, 1); pass(1, n); }
+  for (let k = 0; k < n * n; k++) if (data[k * 4 + 3] >= 0) data[k * 4 + 3] = b[k];
+}
+
 const smooth = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 const toI = (x) => (x - GROUND_ORIGIN) / GROUND_STEP;
 
@@ -146,6 +174,7 @@ export function createGround() {
         data[k * 4 + 3] = shoreCharacter(x, z, shore);
       }
     }
+    smoothBeach(data, GROUND_N);
     composite({ i0: 0, j0: 0, i1: GROUND_N - 1, j1: GROUND_N - 1 });
     uniforms.uWaterHalf.value = T.WATER_HALF;
     texture.clearUpdateRanges();

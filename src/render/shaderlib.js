@@ -84,6 +84,23 @@ float vnoise(vec2 p) {
   return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x),
              mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
 }
+#ifdef MICRO_DETAIL
+// Value noise with its gradient (Quilez, "Value noise derivatives"): x the
+// value (0..1), yz d/dp. Quintic fade, so the gradient is smooth across
+// cells and relief built from it shows no grid. Only compiled where
+// micro-detail is on, so other shaders are unchanged.
+vec3 vnoised(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  float a = hash12(i), b = hash12(i + vec2(1.0, 0.0));
+  float c = hash12(i + vec2(0.0, 1.0)), d = hash12(i + vec2(1.0, 1.0));
+  float k = a - b - c + d;
+  return vec3(a + (b - a) * u.x + (c - a) * u.y + k * u.x * u.y,
+              du * (vec2(b - a, c - a) + k * u.yx));
+}
+#endif
 `;
 
 // Micro-detail (docs/design/micro-detail.md): pattern code adds the slope of
