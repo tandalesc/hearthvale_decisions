@@ -8,6 +8,7 @@
 //   node --single-threaded scripts/benchmark-crowd.js --k=2            # ~10k walkers
 //   node --single-threaded scripts/benchmark-crowd.js --k=4 --frozen   # the walker loop alone
 //   node scripts/benchmark-crowd.js --k=2 --root=/tmp/base             # another checkout's src/
+//   node scripts/benchmark-crowd.js --k=2 --rows=32                    # rows as the game sends them
 //
 // --frozen calls stepPeople directly and advances time.tick by hand: no month or year
 // jobs, no building changes, no population drift. It then forces --changes footprint
@@ -57,9 +58,10 @@ const timedRoutes = {
 const services = {decisions: null, routes: timedRoutes, now: 0};
 // The walker loop's own context, as stepTick makes it (frozen mode).
 const peopleCtx = {services, rng: (stream) => rng(state, stream), now: null, skipPeople: false, flags: 0, monthIndex: 0};
-const view = createRenderView(state, {rowFloats: 20});
+const rowFloats = Number(opts.rows ?? 20);   // 32 as the game draws (rows with corners)
+const view = createRenderView(state, {rowFloats});
 const source = mirrorMod.createMirrorSource({});
-const mirror = mirrorMod.createRenderMirror({rowFloats: 20});
+const mirror = mirrorMod.createRenderMirror({rowFloats});
 
 const stages = {route: [], deliver: [], step: [], sync: [], delta: [], apply: [], cpu: [], rows: [], bytes: [], trips: []};
 const cpuNow = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };

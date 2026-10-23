@@ -4,6 +4,7 @@ import { GROUND_GLSL } from './ground.js';
 import { deckProfile } from '../sim/bridges.js';
 import { railStyle, railInner, RAIL_TOP } from '../sim/gatherings.js';
 import { surfaceLevelAt } from '../terrain.js';
+import { rowWindowAt } from '../sim/render-view.js';
 
 // Villagers (design-visual §4.5): instanced, animated entirely in the vertex
 // shader. The sim's render view owns the per-person rows (16 or 20 floats, see
@@ -165,12 +166,11 @@ float fadedScale(float s) {
   return s;
 }
 
-// Row position extrapolated to now, then draped on the ground texture so the
-// figure follows the terrain's curvature mid-segment.
+// A row position (rowMotion's) draped on the ground texture so the figure follows
+// the terrain's curvature mid-segment.
 // onGround: 1 when the base was draped (the feet can follow the ground too),
 // 2 on a bridge deck (the feet follow the deck: surfaceY), 0 otherwise.
-vec3 drapedBase(vec3 pos, vec3 vel, float t0, out float onGround) {
-  vec3 base = pos + vel * clamp(rowTime(t0) - t0, 0.0, 3.0);
+vec3 drapeRow(vec3 base, out float onGround) {
   onGround = 0.0;
   #ifdef SEGMENT_END
     // On a bridge deck the row's own y follows the deck profile; don't drape
@@ -188,10 +188,6 @@ vec3 drapedBase(vec3 pos, vec3 vel, float t0, out float onGround) {
     if (abs(base.y - g) < ${DRAPE_TOLERANCE.toFixed(2)}) { base.y = g; onGround = 1.0; }
   #endif
   return base;
-}
-vec3 drapedBase(vec3 pos, vec3 vel, float t0) {
-  float onGround;
-  return drapedBase(pos, vel, t0, onGround);
 }
 // Bridge decks near the view (people.js setDecks): ends, half-widths and a
 // table of DECK_SAMPLES heights along each deck (the sim's deckProfile:
@@ -248,6 +244,59 @@ float surfaceY(vec2 xz) {
 }
 `;
 
+// Where the row puts its walker at uTime and how it moves there (renderer units per
+// second): the first leg extrapolated (never past t1), then, for 32-float rows, on
+// corner to corner (render-view.js rowWindowAt). cornerT is when it turned onto the
+// window leg it is on (or -1), cornerYaw the heading it came in on. Needs the row's
+// attributes declared first.
+const ROW_MOTION_GLSL = /* glsl */ `
+#ifdef WINDOW
+attribute vec4 iE;   // corners 1 and 2: t, x, z, t
+attribute vec4 iF;   //   x, z; corner 3: t, x
+attribute vec2 iG;   //   z; how many corners
+#endif
+vec3 rowMotion(out vec3 vel, out float moving, out float cornerT, out float cornerYaw) {
+  float t0 = iA.x;
+  vec3 pos = iPos + iVel * clamp(rowTime(t0) - t0, 0.0, 3.0);
+  vel = iVel;
+  moving = rowTime(t0) < uTime ? 0.0 : 1.0;
+  cornerT = -1.0;
+  cornerYaw = 0.0;
+  #ifdef WINDOW
+  if (iG.y > 0.5 && iD.x > t0 && uTime > iD.x) {
+    vec3 prev = iD.xyz;
+    vec2 inDir = iVel.xz;
+    int n = int(iG.y + 0.5);
+    moving = 0.0;
+    vel = vec3(0.0);
+    pos.xz = prev.yz;
+    for (int k = 0; k < 3; k++) {
+      if (k >= n) break;
+      vec3 c = k == 0 ? iE.xyz : k == 1 ? vec3(iE.w, iF.xy) : vec3(iF.zw, iG.x);
+      vec2 d = (c.yz - prev.yz) / max(c.x - prev.x, 1e-4);
+      if (uTime < c.x) {
+        pos.xz = prev.yz + d * (uTime - prev.x);
+        vel = vec3(d.x, 0.0, d.y);
+        moving = 1.0;
+        cornerT = prev.x;
+        cornerYaw = atan(inDir.x, inDir.y);
+        break;
+      }
+      inDir = d;
+      prev = c;
+      pos.xz = prev.yz;
+    }
+  }
+  #endif
+  return pos;
+}
+vec3 rowBase(out float onGround) {
+  vec3 vel;
+  float moving, cornerT, cornerYaw;
+  return drapeRow(rowMotion(vel, moving, cornerT, cornerYaw), onGround);
+}
+`;
+
 const POSE_HEAD = /* glsl */ `
 attribute float aBone;
 attribute float aPart;
@@ -257,6 +306,7 @@ attribute vec4 iA;   // t0, phase, gait, action
 attribute vec4 iB;   // actionT0, skin, cloth, hat
 attribute vec2 iC;   // scale, facing
 attribute vec3 iTurn; // heading shown when the row's heading last changed, time of that change; z: an angler's water level (fishLineWater)
+${ROW_MOTION_GLSL}
 uniform float uLodNear;
 uniform float uIkNear;  // feet and hands read the ground within this distance
 uniform float uTurnEase; // 1: ease turns; 0: snap (reduced motion)
@@ -311,6 +361,12 @@ vec3 swingZ(vec3 p, vec3 pivot, float a) {
 // face a building or event on arrival. Ease from the heading shown at that
 // moment (iTurn, kept by markFades) to the row's own, along the shorter arc:
 // about 0.25 s on the move, 0.4 s for the arrival turn.
+// A turn at a window corner, eased from the heading the walker came in on.
+float cornerYawEased(float from, float target, float t) {
+  if (uTurnEase < 0.5) return target;
+  float k = smoothstep(0.0, 1.0, clamp((uTime - t) / 0.25, 0.0, 1.0));
+  return from + (mod(target - from + 3.14159265, 6.2831853) - 3.14159265) * k;
+}
 float easedYaw(float target) {
   if (uTurnEase < 0.5) return target;
   float dur = length(iVel.xz) > 0.05 ? 0.25 : 0.4;
@@ -404,16 +460,19 @@ vec3 personPosition(vec3 position) {
 
   // Extrapolate from the row's anchor (clamped so a stalled sim never slides
   // far); cull hidden and distant people before paying for the drape.
-  vec3 raw = iPos + iVel * clamp(rowTime(t0) - t0, 0.0, 3.0);
+  vec3 vel;
+  float moving0, cornerT, cornerYaw;
+  vec3 raw = rowMotion(vel, moving0, cornerT, cornerYaw);
   // Waiting at a waypoint for the next row: stand, don't walk on the spot.
-  if (rowTime(t0) < uTime) gait = 0.0;
+  if (moving0 < 0.5) gait = 0.0;
   float dist = distance(raw, cameraPosition);
   if (scale < 0.01 || dist > uLodFar) return raw;
   float onGround;
-  vec3 base = drapedBase(iPos, iVel, t0, onGround);
+  vec3 base = drapeRow(raw, onGround);
   bool lod = dist > uLodNear;
   // Face the direction of travel, else the stored facing.
-  float yaw = easedYaw(length(iVel.xz) > 0.05 ? atan(iVel.x, iVel.z) : iC.y);
+  float target = length(vel.xz) > 0.05 ? atan(vel.x, vel.z) : iC.y;
+  float yaw = cornerT > 0.0 ? cornerYawEased(cornerYaw, target, cornerT) : easedYaw(target);
   float cy = cos(yaw), sy = sin(yaw);
   float sc = max(scale, 0.05);
 
@@ -424,7 +483,7 @@ vec3 personPosition(vec3 position) {
   float moving = step(0.05, gait);
   float omega = 7.0 * clamp(gait, 0.6, 2.5);
   float w = uTime * omega + phase;
-  float stride = moving * min(length(iVel.xz) / sc * 1.5707963 / omega, 0.36);
+  float stride = moving * min(length(vel.xz) / sc * 1.5707963 / omega, 0.36);
   float swing = sin(w) * 0.55 * g;
   float armL = -swing * 0.8, armR = swing * 0.8;
   float outL = 0.07, outR = 0.07;
@@ -700,6 +759,7 @@ varying vec4 vShape;    // cast length, near radius, far radius, sun strength
 varying float vContact; // contact radius
 varying vec2 vSlope;    // ground rise per metre along (away, across)
 ${DRAPE_GLSL}
+${ROW_MOTION_GLSL}
 // A drop below the plane under the feet larger than this is a ledge.
 const float LEDGE = 0.35;
 // The surface at xz for the slope estimate: a ledge counts as level, so a
@@ -712,7 +772,8 @@ float surfaceNear(vec2 xz, float s0) {
 const float WATER_LEVEL = 0.025;
 const float MAX_STRETCH = 2.6; // shadow length per body height (sun ~21 deg)
 void main() {
-  vec3 base = drapedBase(iPos, iVel, iA.x);
+  float onGround0;
+  vec3 base = rowBase(onGround0);
   #ifdef BLOB_COVER
     float d = distance(base, uEye); // drawn from above: measure from the main camera
   #else
@@ -974,6 +1035,7 @@ uniform vec3 uCloth[16];
 uniform vec3 uLegs[4];
 uniform vec3 uHat[4];
 uniform vec3 uHair[4];
+${ROW_MOTION_GLSL}
 varying vec2 vImp;       // figure units: across from the middle, up from the feet
 varying vec4 vImpShape;  // side-on (0..1), facing the view (-1..1), stride swing, hat kind
 varying vec3 vImpSkin;
@@ -990,16 +1052,18 @@ vec3 impostorNormal() {
 }
 vec3 impostorPosition(vec3 position) {
   float scale = fadedScale(iC.x) * uFigureScale;
-  vec3 raw = iPos + iVel * clamp(rowTime(iA.x) - iA.x, 0.0, 3.0);
+  vec3 vel;
+  float moving, cornerT, cornerYaw;
+  vec3 raw = rowMotion(vel, moving, cornerT, cornerYaw);
   if (scale < 0.01 || distance(raw, cameraPosition) > uLodFar) return raw;
   float onGround;
-  vec3 base = drapedBase(iPos, iVel, iA.x, onGround);
+  vec3 base = drapeRow(raw, onGround);
   vec2 tc = cameraPosition.xz - base.xz;
   tc /= max(length(tc), 1e-4);
   vec3 right = vec3(tc.y, 0.0, -tc.x);
-  float yaw = length(iVel.xz) > 0.05 ? atan(iVel.x, iVel.z) : iC.y;
+  float yaw = length(vel.xz) > 0.05 ? atan(vel.x, vel.z) : iC.y;
   vec2 fdir = vec2(sin(yaw), cos(yaw));
-  float gait = rowTime(iA.x) < uTime ? 0.0 : iA.z;
+  float gait = moving < 0.5 ? 0.0 : iA.z;
   float omega = 7.0 * clamp(gait, 0.6, 2.5);
   float swing = step(0.05, gait) * sin(uTime * omega + iA.y);
   float action = floor(iA.w + 0.5);
@@ -1301,12 +1365,13 @@ export function createPeople(ctx) {
 
   /** (Re)bind the sim's Float32Array: per-row fade and turn state, kept here. */
   function bind(array, version, rowFloats) {
-    stride = rowFloats === 20 ? 20 : STRIDE;
-    const segment = stride === 20;
+    stride = rowFloats === 32 ? 32 : rowFloats === 20 ? 20 : STRIDE;
+    const segment = stride >= 20, window = stride === 32;
     for (const m of [material, depthMaterial, blobMaterial, blobApplyMaterial, blobLampMaterial, impostorMaterial]) {
-      if (!!m.defines?.SEGMENT_END !== segment) {
+      if (!!m.defines?.SEGMENT_END !== segment || !!m.defines?.WINDOW !== window) {
         m.defines = { ...(m.defines ?? {}) };
         if (segment) m.defines.SEGMENT_END = 1; else delete m.defines.SEGMENT_END;
+        if (window) m.defines.WINDOW = 1; else delete m.defines.WINDOW;
         m.needsUpdate = true;
       }
     }
@@ -1353,7 +1418,12 @@ export function createPeople(ctx) {
       iC: new THREE.InterleavedBufferAttribute(b.buffer, 2, 14),
       iFade: new THREE.InterleavedBufferAttribute(b.buffer, 2, stride),
     };
-    if (stride === 20) attrs.iD = new THREE.InterleavedBufferAttribute(b.buffer, 4, 16);
+    if (stride >= 20) attrs.iD = new THREE.InterleavedBufferAttribute(b.buffer, 4, 16);
+    if (stride === 32) {
+      attrs.iE = new THREE.InterleavedBufferAttribute(b.buffer, 4, 20);
+      attrs.iF = new THREE.InterleavedBufferAttribute(b.buffer, 4, 24);
+      attrs.iG = new THREE.InterleavedBufferAttribute(b.buffer, 2, 28);
+    }
     return attrs;
   }
 
@@ -1367,7 +1437,7 @@ export function createPeople(ctx) {
     const b = new THREE.InstancedBufferGeometry();
     b.setAttribute('position', blobBase.getAttribute('position'));
     b.setIndex(blobBase.getIndex());
-    for (const name of ['iPos', 'iVel', 'iA', 'iB', 'iC', 'iFade', ...(stride === 20 ? ['iD'] : [])]) b.setAttribute(name, attrs[name]);
+    for (const name of ['iPos', 'iVel', 'iA', 'iB', 'iC', 'iFade', ...(stride >= 20 ? ['iD'] : []), ...(stride === 32 ? ['iE', 'iF', 'iG'] : [])]) b.setAttribute(name, attrs[name]);
     mesh.geometry.dispose();
     blobs.geometry.dispose();
     mesh.geometry = g;
@@ -1394,6 +1464,7 @@ export function createPeople(ctx) {
   const planes = new Float64Array(24);
   let nearRows = new Int32Array(0), nearDist = new Float32Array(0), farRows = new Int32Array(0);
   const hist = new Int32Array(64);
+  const xz = [0, 0];
 
   function sortBands(time) {
     const a = boundArray, n = count;
@@ -1418,7 +1489,9 @@ export function createPeople(ctx) {
       // Hidden (indoors), unless still shrinking away at the door.
       if (a[o + 14] < 0.01 && !(fade[i * 2 + 1] >= 0.01 && time - fade[i * 2] < 0.3)) continue;
       const dt = rowDt(a, o, time);
-      const x = a[o] + a[o + 3] * dt, y = a[o + 1] + a[o + 4] * dt + 1, z = a[o + 2] + a[o + 5] * dt;
+      let x = a[o] + a[o + 3] * dt, z = a[o + 2] + a[o + 5] * dt;
+      const y = a[o + 1] + a[o + 4] * dt + 1;
+      if (stride === 32 && a[o + 29] > 0 && time > a[o + 16]) { rowWindowAt(a, o, time, xz); x = xz[0]; z = xz[1]; }
       const dx = x - ex, dy = y - ey, dz = z - ez, d2 = dx * dx + dy * dy + dz * dz;
       if (d2 > far2) continue;
       const d = Math.sqrt(d2);
@@ -1639,7 +1712,7 @@ export function createPeople(ctx) {
   /** Seconds to extrapolate row o by at `time`: never past its waypoint. */
   function rowDt(a, o, time) {
     const t0 = a[o + 6];
-    const t1 = stride === 20 && a[o + 16] > t0 ? Math.min(time, a[o + 16]) : time;
+    const t1 = stride >= 20 && a[o + 16] > t0 ? Math.min(time, a[o + 16]) : time;
     return Math.min(3, Math.max(0, t1 - t0));
   }
 
@@ -1648,9 +1721,10 @@ export function createPeople(ctx) {
     const a = boundArray;
     const o = i * stride;
     const dt = rowDt(a, o, time);
-    const x = a[o] + a[o + 3] * dt;
-    const z = a[o + 2] + a[o + 5] * dt;
+    let x = a[o] + a[o + 3] * dt;
+    let z = a[o + 2] + a[o + 5] * dt;
     let y = a[o + 1] + a[o + 4] * dt;
+    if (stride === 32 && a[o + 29] > 0 && time > a[o + 16]) { rowWindowAt(a, o, time, xz); x = xz[0]; z = xz[1]; }
     const onDeck = stride >= 20 && a[o + 19] > 0.5;
     if (ground && !onDeck) {
       const g = ground.sample(x, z);

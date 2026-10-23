@@ -22,6 +22,16 @@
 //   Rows are slots: each person keeps one row for as long as they walk, whatever their
 //   place in state.people (the save's tick order), and a person who leaves frees theirs
 //   (scale 0, id -1) for the next newcomer. So rows can have holes.
+//                      With {rowFloats: 32}, 12 more: the corners after that one, so a row
+//                      lasts several waypoints (docs/design/crowd-scale.md §4.1):
+//                        20-28 (t, x, z) for up to three more corners: renderer time the
+//                              walker reaches each, at the row's speed
+//                        29    how many of those there are (0..3)
+//                        30-31 spare
+//                      Past t1 the walker goes on corner to corner (rowWindowAt), on the
+//                      ground; rows on or toward a deck carry none. A row whose walker
+//                      is still on its route, within its corners, at the same speed and
+//                      action, is not written again when only the walker's rev moved.
 //   view.peopleCount   rows in use: one past the highest live slot (holes included).
 //   view.peopleDirty   {start, end, list, count} | null: the rows written since the consumer
 //                      last set it to null. list[0..count) are those rows (each once, in no
@@ -57,6 +67,8 @@ import {embankmentViews, bridgeViews} from './works.js';
 
 export const PERSON_STRIDE = 16;          // default row size
 export const PERSON_STRIDE_EXTENDED = 20; // rows with the segment end (rowFloats: 20)
+export const PERSON_STRIDE_WINDOW = 32;   // and the next corners (rowFloats: 32)
+const WINDOW = 3;
 // On-screen speed (units per renderer second) the gait cycle was drawn for.
 const GAIT_SPEED = 1.4;
 const REFRESH_AGE = 2;          // seconds before a moving row is re-anchored (drift control)
@@ -82,7 +94,7 @@ export function createRenderView(state, {capacity = 0, rowFloats = PERSON_STRIDE
     era: state.era,
     styleEra: state.era,
     archetype: state.archetype,
-    rowFloats: rowFloats === PERSON_STRIDE_EXTENDED ? PERSON_STRIDE_EXTENDED : PERSON_STRIDE,
+    rowFloats: rowFloats === PERSON_STRIDE_WINDOW ? PERSON_STRIDE_WINDOW : rowFloats === PERSON_STRIDE_EXTENDED ? PERSON_STRIDE_EXTENDED : PERSON_STRIDE,
     sync: (s, opts) => sync(view, inner, s, opts),
     rowOf: (id) => inner.slotOf.get(id) ?? -1,
   };
@@ -92,6 +104,12 @@ export function createRenderView(state, {capacity = 0, rowFloats = PERSON_STRIDE
     rowT: new Float32Array(0),
     rowOpen: new Uint8Array(0), // 1 = the row's waypoint is a corner, not the route's end
     rowGen: new Uint32Array(0), // the sync that last found the row's person
+    // What a windowed row was written from: its route, the last corner it carries
+    // (flat index), the speed and action. -1: it carries no corners past the first.
+    rowRoute: [],
+    rowSegEnd: new Int32Array(0),
+    rowSpeed: new Float32Array(0),
+    rowAction: new Int16Array(0),
     slotOf: new Map(),          // person id -> row
     free: [],                   // rows given up, for newcomers
     high: 0,                    // one past the highest row in use
@@ -139,6 +157,15 @@ function grow(view, inner, rows) {
   const rowGen = new Uint32Array(cap);
   rowGen.set(inner.rowGen.subarray(0, Math.min(inner.rowGen.length, cap)));
   inner.rowGen = rowGen;
+  const segEnd = new Int32Array(cap).fill(-1);
+  segEnd.set(inner.rowSegEnd.subarray(0, Math.min(inner.rowSegEnd.length, cap)));
+  inner.rowSegEnd = segEnd;
+  const rowSpeed = new Float32Array(cap);
+  rowSpeed.set(inner.rowSpeed.subarray(0, Math.min(inner.rowSpeed.length, cap)));
+  inner.rowSpeed = rowSpeed;
+  const rowAction = new Int16Array(cap);
+  rowAction.set(inner.rowAction.subarray(0, Math.min(inner.rowAction.length, cap)));
+  inner.rowAction = rowAction;
   const flag = new Uint8Array(cap);
   flag.set(inner.dirtyFlag.subarray(0, Math.min(inner.dirtyFlag.length, cap)));
   inner.dirtyFlag = flag;
@@ -219,9 +246,12 @@ function syncPeople(view, inner, state, now, speed) {
     rowGen[r] = gen;
     // A row also renews when its walker reaches a corner before the next tick
     // (its waypoint time has passed), so they turn it instead of waiting there.
-    const turn = speed > 0 && rowOpen[r] === 1 && stride === PERSON_STRIDE_EXTENDED && buf[r * stride + 16] <= now;
-    if (!force && !turn && rowRev[r] === p.rev && rowId[r] === p.id) continue;
-    rowOpen[r] = writeRow(buf, stride, r, p, state, now, speed, lag);
+    const turn = speed > 0 && rowOpen[r] === 1 && stride >= PERSON_STRIDE_EXTENDED && buf[r * stride + rowLastTime(buf, r * stride, stride)] <= now;
+    if (!force && !turn && rowId[r] === p.id && (rowRev[r] === p.rev || stillOnWindow(inner, r, p))) {
+      rowRev[r] = p.rev;
+      continue;
+    }
+    rowOpen[r] = writeRow(buf, stride, r, p, state, now, speed, lag, inner);
     rowId[r] = p.id;
     rowRev[r] = p.rev;
     inner.rowT[r] = now;
@@ -234,6 +264,9 @@ function syncPeople(view, inner, state, now, speed) {
       slotOf.delete(rowId[r]);
       rowId[r] = -1;
       rowOpen[r] = 0;
+      inner.rowSegEnd[r] = -1;
+      inner.rowRoute[r] = null;
+      if (stride === PERSON_STRIDE_WINDOW) buf[r * stride + 29] = 0;
       const o = r * stride;
       for (let k = 3; k < 6; k++) buf[o + k] = 0;
       buf[o + 8] = 0;
@@ -266,6 +299,7 @@ function takeSlot(view, inner, id) {
   inner.rowId[r] = id;
   inner.rowRev[r] = 0;
   inner.rowOpen[r] = 0;
+  inner.rowSegEnd[r] = -1;
   inner.slotOf.set(id, r);
   return r;
 }
@@ -289,16 +323,34 @@ function refreshStale(view, inner, state, now, speed, lag, n) {
     const p = state.people[i];
     const r = inner.slotAt[i];
     if (p.speed <= 0 || now - inner.rowT[r] < REFRESH_AGE) continue;
-    inner.rowOpen[r] = writeRow(view.people, view.rowFloats, r, p, state, now, speed, lag);
+    inner.rowOpen[r] = writeRow(view.people, view.rowFloats, r, p, state, now, speed, lag, inner);
+    inner.rowRev[r] = p.rev;
     inner.rowT[r] = now;
     markRow(inner, r);
   }
   if (inner.cursor > 1e9) inner.cursor = 0;
 }
 
+// The row's last corner time: t1, or the window's last.
+function rowLastTime(buf, o, stride) {
+  if (stride !== PERSON_STRIDE_WINDOW) return 16;
+  const n = buf[o + 29];
+  return n > 0 ? 20 + (n - 1) * 3 : 16;
+}
+
+// A walker whose rev moved but who is still doing what its row says: on the same
+// route, heading for one of the row's corners, at the row's speed, in the same action.
+function stillOnWindow(inner, r, p) {
+  const end = inner.rowSegEnd[r];
+  if (end < 0) return false;
+  const t = p.task;
+  return !!t && t.route === inner.rowRoute[r] && t.seg <= end && p.speed > 0 && Math.abs(p.speed - inner.rowSpeed[r]) < 1e-6 &&
+    p.action === inner.rowAction[r] && !p.indoor;
+}
+
 // Writes row i and returns 1 when its waypoint is a corner with more route
 // after it (the row then renews on reaching it), else 0.
-function writeRow(buf, stride, i, p, state, now, speed, lag) {
+function writeRow(buf, stride, i, p, state, now, speed, lag, inner) {
   const o = i * stride;
   const moving = p.speed > 0;
   const route = p.task?.route;
@@ -362,8 +414,59 @@ function writeRow(buf, stride, i, p, state, now, speed, lag) {
   buf[o + 13] = p.look.hat;
   buf[o + 14] = p.indoor ? 0 : 0.9 + 0.2 * hashUnit(p.id);
   buf[o + 15] = seg === p.task?.seg || !hasWaypoint ? p.heading : Math.atan2(vx, vz);
-  if (stride === PERSON_STRIDE_EXTENDED) writeSegmentEnd(buf, o, p, x, z, seg, now, speed, live, state, segmentOnDeck);
+  if (stride >= PERSON_STRIDE_EXTENDED) writeSegmentEnd(buf, o, p, x, z, seg, now, speed, live, state, segmentOnDeck);
+  if (stride === PERSON_STRIDE_WINDOW) {
+    const n = live && !segmentOnDeck && seg + 1 < (route?.length ?? 0) ? writeWindow(buf, o, p, route, seg, buf[o + 16], speed, state) : 0;
+    buf[o + 29] = n;
+    inner.rowSegEnd[i] = n > 0 ? seg + n * 2 : -1;
+    inner.rowRoute[i] = n > 0 ? route : null;
+    inner.rowSpeed[i] = p.speed;
+    inner.rowAction[i] = p.action;
+  }
   return live && route && seg + 3 < route.length ? 1 : 0;
+}
+
+// The corners after the row's first (route flat index seg), at the walker's speed, as
+// long as their legs keep off every deck: (t, x, z) from offset 20. How many.
+function writeWindow(buf, o, p, route, seg, t1, speed, state) {
+  let n = 0, t = t1;
+  for (let k = seg; n < WINDOW && k + 3 < route.length; k += 2, n++) {
+    const ax = route[k], az = route[k + 1], bx = route[k + 2], bz = route[k + 3];
+    if (crossesDeck(state, ax, az, bx, bz)) break;
+    t += Math.hypot(bx - ax, bz - az) / (p.speed * speed);
+    buf[o + 20 + n * 3] = t;
+    buf[o + 21 + n * 3] = bx;
+    buf[o + 22 + n * 3] = bz;
+  }
+  return n;
+}
+
+/** Where a 32-float row puts its walker at renderer time t: [x, z] (feet, before the
+ * drape). The first leg is pos + v * (min(t, t1) - t0), as for 20-float rows; past t1
+ * it goes on corner to corner, stopping at the last. */
+export function rowWindowAt(a, o, t, out = [0, 0]) {
+  const t0 = a[o + 6], t1 = a[o + 16];
+  if (t <= t1 || !(a[o + 29] > 0)) {
+    const dt = Math.min(3, Math.max(0, (t1 > t0 ? Math.min(t, t1) : t) - t0));
+    out[0] = a[o] + a[o + 3] * dt;
+    out[1] = a[o + 2] + a[o + 5] * dt;
+    return out;
+  }
+  let px = a[o + 17], pz = a[o + 18], pt = t1;
+  const n = a[o + 29];
+  for (let k = 0; k < n; k++) {
+    const ct = a[o + 20 + k * 3], cx = a[o + 21 + k * 3], cz = a[o + 22 + k * 3];
+    if (t < ct) {
+      const f = (t - pt) / Math.max(1e-6, ct - pt);
+      out[0] = px + (cx - px) * f;
+      out[1] = pz + (cz - pz) * f;
+      return out;
+    }
+    px = cx; pz = cz; pt = ct;
+  }
+  out[0] = px;
+  out[1] = pz;
+  return out;
 }
 
 // The current waypoint and when the walker gets there (renderer clock). The shader

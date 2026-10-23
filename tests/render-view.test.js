@@ -97,3 +97,37 @@ test('each walker keeps its row: a swap-remove moves no row, and only rows writt
   const list = Array.from(view.peopleDirty?.list.subarray(0, view.peopleDirty.count) ?? []);
   assert.ok(list.includes(view.rowOf(s.people[5].id)));
 });
+
+test('32-float rows carry the next corners: written less often, and drawn where 20-float rows put walkers', async () => {
+  const {fixtureState, stepTick} = await import('../src/sim/index.js');
+  const {createRoutePlanner} = await import('../src/route-planner.js');
+  const {rowWindowAt} = await import('../src/sim/render-view.js');
+  const s = fixtureState('town');
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
+  for (let i = 0; i < 200; i++) { routes.tick(s, 1e9); stepTick(s, 0.1, {routes}); }
+  const v20 = createRenderView(s, {rowFloats: 20}), v32 = createRenderView(s, {rowFloats: 32});
+  let n20 = 0, n32 = 0, far = 0, samples = 0, windowed = 0;
+  for (let f = 1; f <= 300; f++) {
+    const now = f / 60;
+    routes.tick(s, 1e9);
+    stepTick(s, 0.5 / 60, {routes});
+    v20.sync(s, {now, speed: 0.5});
+    v32.sync(s, {now, speed: 0.5});
+    n20 += v20.peopleDirty?.count ?? 0;
+    n32 += v32.peopleDirty?.count ?? 0;
+    v20.peopleDirty = v32.peopleDirty = null;
+    if (f % 15) continue;
+    for (const p of s.people) {
+      if (!(p.speed > 0)) continue;
+      const o20 = v20.rowOf(p.id) * 20, o32 = v32.rowOf(p.id) * 32, a = v20.people;
+      if (v32.people[o32 + 29] > 0) windowed++;
+      const dt = Math.min(3, Math.max(0, Math.min(now, a[o20 + 16]) - a[o20 + 6]));
+      const [x, z] = rowWindowAt(v32.people, o32, now);
+      samples++;
+      if (Math.hypot(x - (a[o20] + a[o20 + 3] * dt), z - (a[o20 + 2] + a[o20 + 5] * dt)) > 0.05) far++;
+    }
+  }
+  assert.ok(windowed > samples / 3, `rows with corners: ${windowed} of ${samples}`);
+  assert.ok(n32 < n20 * 0.6, `rows written: ${n32} against ${n20}`);
+  assert.ok(far < samples * 0.02, `drawn apart: ${far} of ${samples}`);
+});

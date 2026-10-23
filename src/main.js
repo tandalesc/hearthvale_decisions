@@ -38,7 +38,7 @@ const THUMB_W = 1280;
 const SIM_BUDGET_MS = 10;
 const WORKER_BUDGET_MS = 30;
 const TICK_SECONDS = 0.1;
-const ROW_FLOATS = 20;
+const ROW_FLOATS = 32;   // rows carry the next corners (render-view.js)
 
 const params = new URLSearchParams(location.search);
 const store = {

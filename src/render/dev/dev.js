@@ -35,7 +35,7 @@ async function loadView() {
         for (const h of state.households) h.size = Math.max(1, Math.round(h.size * k));
         sim.setIndividualCap(state, null);
       }
-      const view = createRenderView(state, { rowFloats: 20 });
+      const view = createRenderView(state, { rowFloats: 32 });
       window.__state = state;
       const speed = Number(params.get('speed') ?? 1);
       let t0 = null;
