@@ -52,6 +52,7 @@ test('pads flatten a footprint, blend to natural ground and can be removed', () 
   const tex = g.uniforms.tGround.value;
   assert.ok(g.flush());
   assert.equal(tex.updateRanges.length, 0);
+  tex.onUpdate(tex); // Three uploaded it (a frame drew)
   // Later changes upload one row range per dirty row, in pixels x 4 (Three's stride).
   g.setPad(1, { x: -40, z: 30, w: 8, d: 6, y: 6 });
   assert.ok(g.flush());
@@ -62,6 +63,35 @@ test('pads flatten a footprint, blend to natural ground and can be removed', () 
   const k = (Math.round((5 - GROUND_ORIGIN) / GROUND_STEP) * GROUND_N + Math.round((0 - GROUND_ORIGIN) / GROUND_STEP)) * 4;
   assert.ok(Math.abs(tex.image.data[k + 1] - (0 - riverX(5))) < 1e-4);
   assert.ok(Math.abs(tex.image.data[k + 2] - bankDistance(0, 5)) < 1e-4);
+});
+
+// Frames can flush without drawing (the first frame waits while materials
+// compile), and Three only uploads a texture when something drawn samples it.
+// A pad that changes in between must not put row ranges on the first upload:
+// Three would allocate the texture and send only those rows, leaving the rest
+// zero (river offset 0 everywhere, so the ground chunks discard every fragment
+// and the town stands on nothing).
+test('changes before the ground texture first reaches the GPU ride the whole upload', () => {
+  const g = createGround();
+  const tex = g.uniforms.tGround.value;
+  g.setPad(1, { x: -40, z: 30, w: 8, d: 6, y: 5 });
+  assert.ok(g.flush());
+  assert.equal(tex.updateRanges.length, 0, 'first flush: the whole texture');
+  // No draw yet: another pad, another flush.
+  g.setPad(2, { x: 20, z: -10, w: 6, d: 6, y: 4 });
+  g.flush();
+  assert.equal(tex.updateRanges.length, 0, 'still the whole texture, pad 2 included');
+  // Once Three has uploaded it, changes go up as row ranges again.
+  tex.onUpdate(tex);
+  g.setPad(2, { x: 20, z: -10, w: 6, d: 6, y: 4.5 });
+  g.flush();
+  assert.ok(tex.updateRanges.length > 0);
+  // A rebuild (a new valley) queues the whole texture again, until it uploads.
+  tex.clearUpdateRanges();
+  g.rebuild();
+  g.setPad(3, { x: 0, z: 60, w: 4, d: 4, y: 3 });
+  g.flush();
+  assert.equal(tex.updateRanges.length, 0, 'after a rebuild: the whole texture');
 });
 
 test('neighbouring pads blend by weight: order does not matter and they meet halfway', () => {
@@ -100,6 +130,7 @@ test('the river bed carries the gravel bars the channel strip draws, except at a
   assert.ok(Math.abs(g.sample(Math.round(riverX(at.z)) + 20, at.z) - heightAt(Math.round(riverX(at.z)) + 20, at.z)) < 1e-4);
   // A quay wall on that bank takes the bar away (and only rows near the run upload).
   g.flush();
+  g.uniforms.tGround.value.onUpdate(g.uniforms.tGround.value); // Three uploaded it
   g.setEmbankments([{ side: at.u < 0 ? 'west' : 'east', z0: at.z - 20, z1: at.z + 20 }]);
   assert.ok(Math.abs(g.sample(at.x, at.z) - heightAt(at.x, at.z)) < 1e-4, 'no bar against the wall');
   const tex = g.uniforms.tGround.value;

@@ -97,6 +97,8 @@ export function createRoadSplat() {
     pathTex.wrapS = pathTex.wrapT = THREE.ClampToEdgeWrapping;
     pathTex.colorSpace = THREE.NoColorSpace;
     pathTex.unpackAlignment = 1;
+    // Row ranges are safe once Three has really uploaded the whole texture.
+    pathTex.onUpdate = () => { pathFull = false; };
     uniforms.tPath.value = pathTex;
     street = new Uint8Array(W * H);
     streetData = new Uint8Array(W * H * 4);
@@ -153,8 +155,11 @@ export function createRoadSplat() {
   }
 
   // Redraw changed path tiles (all of them on the first build) and queue
-  // their rows for upload. pathFull: a whole-texture upload is queued this
-  // frame, so row ranges must not ride on it (Three would upload only them).
+  // their rows for upload. pathFull: a whole-texture upload is queued and has
+  // not reached the GPU yet, so row ranges must not ride on it (Three would
+  // upload only them). It clears when Three uploads (pathTex.onUpdate), not
+  // on the next update: frames can update without drawing (the first frame
+  // waits while materials compile), and nothing uploads until a draw.
   let pathFull = true;
   function updatePaths(roads, budget, rescan = true) {
     const rects = field.update(roads, budget, rescan);
@@ -236,10 +241,8 @@ export function createRoadSplat() {
       lastUpload = time;
       return true;
     }
-    // A render follows every update, so last frame's uploads have gone out:
-    // row ranges are safe again. Finish path tiles left over from the last
-    // scan, a few per frame; the grid is scanned again with the next upload.
-    pathFull = false;
+    // Finish path tiles left over from the last scan, a few per frame; the
+    // grid is scanned again with the next upload.
     let drew = false;
     if (field.pending()) drew = updatePaths(fieldRoads, PATH_TILES_PER_FRAME, false);
     if (roads.dirty || (roads.version ?? 0) !== lastVersion || forceFill || era !== streetEra) pending = true;
