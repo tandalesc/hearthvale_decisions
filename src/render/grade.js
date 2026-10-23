@@ -175,19 +175,23 @@ export function createGrade() {
   // over ~4 s; snowfall both ways over ~6 s. Never toggled.
   const weather = { rain: 0, snow: 0 };
   const easeTo = (cur, tgt, dt, up, down) => cur + (tgt - cur) * (1 - Math.exp(-dt / (tgt > cur ? up : down)));
-  let dayStart = 0;
+  // Seconds into the slow cycle's day. It advances only while the game runs.
+  let dayClock = 0;
 
   function setMode(next) {
     mode = next;
   }
 
   /** Recompute the target from the view's time and weather, then ease. */
-  function update(view, time, dt) {
+  function update(view, time, dt, {paused = false} = {}) {
     const yearT = view?.time?.yearT ?? lastYearT;
     lastYearT = yearT;
     let phase;
     if (mode === 'off') phase = 0.5;
-    else if (mode === 'slow') phase = (((time - dayStart) / 60) + 0.45) % 1; // one day per real minute
+    else if (mode === 'slow') {
+      if (!paused) dayClock += Math.max(0, dt);
+      phase = ((dayClock / 60) + 0.45) % 1; // one day per real minute of play
+    }
     else phase = piecewise(YEAR_TO_PHASE, yearT);
     gradeAt(target, yearT, phase);
     current.phase = phase % 1; // time of day for the ambience (0 midnight, 0.5 noon)
@@ -272,7 +276,7 @@ export function createGrade() {
     apply,
     setMode,
     mode: () => mode,
-    resetDay: (time) => { dayStart = time; },
+    resetDay: () => { dayClock = 0; },
     isNight: () => current.night > 0.5,
   };
 }
