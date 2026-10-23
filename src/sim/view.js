@@ -141,6 +141,7 @@ export function cardView(state, card) {
     why: card.why,
     templateWhy: card.why,
     prose: card.prose ?? null,
+    proseRevision: card.proseRevision ?? 0,
     needsProse: !!card.needsProse,
     asker: card.asker,
     urgency: card.urgency ?? 0,

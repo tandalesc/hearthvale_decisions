@@ -20,6 +20,7 @@ import {icon} from '../icons.js';
 import {animate} from '../motion.js';
 import {explainer, EXPLAINERS} from './explainer.js';
 import {createDocket} from './docket.js';
+import {isPaid} from '../../entitlements.js';
 import {seasonSummary, seasonStrip} from './budget.js';
 import {createAdvisersView} from './advisers.js';
 
@@ -73,7 +74,7 @@ export function createCouncil(ctx) {
 
   // page: the body shown (TOWN is every request); area: a category filter.
   let open = false, page = TOWN, area = 'all', data = null;
-  let indexSig = '', areaSig = '', headSig = '';
+  let indexSig = '', areaSig = '', headSig = '', proseSig = '';
 
   // ---------- events ----------
   $('.dk-close').addEventListener('click', () => close());
@@ -137,6 +138,12 @@ export function createCouncil(ctx) {
     if (!data) return;
     // A body that is gone (or a season that is over) takes the page back to the Town Council.
     if (page === BUDGETS ? !inSeason() && !data.season : page === ADVISERS ? !data.advisers : page !== TOWN && !body()) return setPage(TOWN, {quiet: true});
+    if (open && isPaid(ctx.entitlement?.())) {
+      const pending = data.cards.filter(card => !card.prose && card.needsProse !== false);
+      const ids = pending.map(card => card.id);
+      const sig = pending.map(card => `${card.id}:${card.proseRevision ?? 0}`).join('|');
+      if (sig !== proseSig) { proseSig = sig; Promise.resolve(ctx.prefetchCardProse?.(ids)).catch(() => {}); }
+    }
     renderIndex();
     renderHead();
     renderAreas();
@@ -261,7 +268,7 @@ export function createCouncil(ctx) {
 
   function close() {
     if (!open) return;
-    open = false;
+    open = false; proseSig = '';
     docket.setVisible(false);
     if (ctx.root.dataset.layout !== 'phone') el.hidden = true;
     ctx.onClose?.();

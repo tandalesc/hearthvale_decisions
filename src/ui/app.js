@@ -87,6 +87,7 @@ export function createApp(host) {
   const ctx = {
     root, prefs,
     entitlement: () => host.entitlement?.(),
+    prefetchCardProse: (ids) => host.prefetchCardProse?.(ids),
     requestCardProse: (id) => host.requestCardProse?.(id),
     cancelCardProse: () => host.cancelCardProse?.(),
     factionName: (id) => factionNames[id] ?? titleCase(id),

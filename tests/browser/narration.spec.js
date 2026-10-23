@@ -24,6 +24,33 @@ test('docket requests only the open selected card and preserves canonical choice
   expect(result.trade).toBe('Canonical effect.');
 });
 
+test('docket refreshes a same-id revised petition and requests its new narration', async ({page}) => {
+  await page.route('**/narration-test', route => route.fulfill({contentType:'text/html',body:'<!doctype html><body></body>'}));
+  await page.goto('/narration-test');
+  const result = await page.evaluate(async () => {
+    const {createDocket} = await import('/src/ui/components/docket.js');
+    const requests = [];
+    const ctx = {entitlement:()=>({tier:'paid'}),unlocks:()=>({}),coin:()=>100,
+      bodyName:()=> 'Council',bodyIcon:()=> 'council',onRule:()=>{},requestCardProse:id=>requests.push(id)};
+    const first = {id:'petition1',kind:'petition',from:'moot',title:'The first group asks',why:'One group needs help.',
+      proseRevision:0,needsProse:true,options:[{key:'hear',label:'Hear them',tradeoff:'Hear one group.'}]};
+    const docket = createDocket(ctx);
+    document.body.append(docket.el);
+    docket.update([first]);
+    docket.setVisible(true);
+    const revised = {...first,title:'Three groups ask together',why:'Three groups share a grievance.',proseRevision:1,
+      options:[{key:'hear',label:'Hear all three',tradeoff:'Hear every group.'}]};
+    docket.update([revised]);
+    return {requests, title:document.querySelector('.card-title')?.textContent,
+      why:document.querySelector('.card-why')?.textContent,
+      label:document.querySelector('.opt-label')?.textContent,
+      tradeoff:document.querySelector('.opt-trade')?.textContent,
+      revision:document.querySelector('.card')?.dataset.revision};
+  });
+  expect(result).toEqual({requests:['petition1','petition1'],title:'Three groups ask together',
+    why:'Three groups share a grievance.',label:'Hear all three',tradeoff:'Hear every group.',revision:'1'});
+});
+
 // This mock runs inside the actual simulation worker. Its controlled SSE body
 // exercises keeper previews → session snapshots → worker messages → card DOM.
 for (const ending of ['accepted', 'rejected', 'cancelled']) test(`worker narration previews ${ending} without changing canonical choices`, async ({page}) => {
@@ -33,10 +60,20 @@ for (const ending of ['accepted', 'rejected', 'cancelled']) test(`worker narrati
   expect(await hv(page,()=>window.hearthvale.simHost)).toBe('worker');
   await inSim(page,()=>{
     const original=globalThis.fetch;
+    globalThis.__narrationRequests=[];
     globalThis.fetch=async(url,options)=>{
       if(!String(url).includes('/api/narrate'))return original(url,options);
-      globalThis.__streamFacts=JSON.parse(options.body).facts;
-      return new Response(new ReadableStream({start(controller){globalThis.__streamController=controller;},cancel(){globalThis.__streamCancelled=true;}}),{headers:{'content-type':'text/event-stream'}});
+      const facts=JSON.parse(options.body).facts;
+      globalThis.__narrationRequests.push(facts.id);
+      // Council prefetches other cards too. Keep only the first stream under
+      // manual control; all others finish locally with valid template prose.
+      if(globalThis.__narrationRequests.length===1){
+        globalThis.__streamFacts=facts;
+        return new Response(new ReadableStream({start(controller){globalThis.__streamController=controller;},cancel(){globalThis.__streamCancelled=true;}}),{headers:{'content-type':'text/event-stream'}});
+      }
+      const prose={why:facts.why,options:Object.fromEntries(facts.options.map(o=>[o.key,o.tradeoff??'The town carries on.']))};
+      const body=`event: done\ndata: ${JSON.stringify({prose,source:'template'})}\n\n`;
+      return new Response(new TextEncoder().encode(body),{headers:{'content-type':'text/event-stream'}});
     };
   });
   await hv(page,()=>window.hearthvale.app.openCouncil());
@@ -88,6 +125,68 @@ for (const ending of ['accepted', 'rejected', 'cancelled']) test(`worker narrati
   }
   await expect(card.locator('.card-why')).toHaveText(canonicalWhy);
   expect(await card.locator('.opt-trade').allTextContents()).toEqual(canonicalOptions);
+  expect(errors).toEqual([]);
+});
+
+test('Plus Council prefetches every card with two streams, notices arrivals, and stops while closed', async ({page}) => {
+  const {open, hv, inSim} = await import('./helpers.js');
+  await page.route('**/api/session', route => route.fulfill({json:{tier:'paid',authenticated:true,billingEnabled:true}}));
+  const errors = await open(page,{fixture:'town'});
+  expect(await hv(page,()=>window.hearthvale.simHost)).toBe('worker');
+  await inSim(page,state=>{
+    const base=state.docket[0];
+    const now=state.time.year*12+state.time.month;
+    state.docket=[1,2,3].map(n=>({...structuredClone(base),id:`prefetch${n}`,title:`${base.title} ${n}`,
+      surfacedMonth:now,expiresMonth:now+24,prose:null,needsProse:true,proseRevision:0}));
+  });
+  await inSim(page,()=>{
+    const original=globalThis.fetch;
+    globalThis.__prefetch={requests:[],controllers:{},facts:{},active:0,max:0,cancelled:[]};
+    globalThis.fetch=async(url,options)=>{
+      if(!String(url).includes('/api/narrate')) return original(url,options);
+      const facts=JSON.parse(options.body).facts, seen=globalThis.__prefetch;
+      seen.requests.push(facts.id);seen.facts[facts.id]=facts;
+      return new Response(new ReadableStream({
+        start(controller){seen.controllers[facts.id]=controller;seen.active++;seen.max=Math.max(seen.max,seen.active);},
+        cancel(){seen.active--;seen.cancelled.push(facts.id);delete seen.controllers[facts.id];},
+      }),{headers:{'content-type':'text/event-stream'}});
+    };
+  });
+  await hv(page,()=>window.hearthvale.app.openCouncil());
+  await expect.poll(()=>inSim(page,()=>globalThis.__prefetch.requests.length)).toBe(2);
+  expect(await inSim(page,()=>globalThis.__prefetch.max)).toBe(2);
+  expect(await inSim(page,()=>globalThis.__prefetch.requests)).toEqual(['prefetch1','prefetch2']);
+  const finish=async(id)=>inSim(page,(_state,_sim,id)=>{
+    const p=globalThis.__prefetch, facts=p.facts[id], controller=p.controllers[id];
+    const prose={why:facts.why,options:Object.fromEntries(facts.options.map(o=>[o.key,o.tradeoff??'The town carries on.']))};
+    controller.enqueue(new TextEncoder().encode(`event: done\ndata: ${JSON.stringify({prose,source:'template'})}\n\n`));
+    controller.close();p.active--;delete p.controllers[id];
+  },id);
+  await finish('prefetch1');
+  await expect.poll(()=>inSim(page,()=>globalThis.__prefetch.requests.length)).toBe(3);
+  expect(await inSim(page,()=>globalThis.__prefetch.requests[2])).toBe('prefetch3');
+  await finish('prefetch2');
+  await finish('prefetch3');
+  await expect.poll(()=>inSim(page,state=>state.docket.filter(c=>c.prose).length)).toBe(3);
+  await inSim(page,state=>{
+    state.docket.push({...structuredClone(state.docket[0]),id:'prefetch4',title:'A newly arrived request',prose:null,needsProse:true});
+  });
+  await expect.poll(()=>inSim(page,()=>globalThis.__prefetch.requests.includes('prefetch4'))).toBe(true);
+  await finish('prefetch4');
+  await expect.poll(()=>inSim(page,state=>Boolean(state.docket.find(c=>c.id==='prefetch4')?.prose))).toBe(true);
+  await inSim(page,state=>{
+    state.docket.push({...structuredClone(state.docket[0]),id:'prefetch5',title:'A request before closing',prose:null,needsProse:true});
+  });
+  await expect.poll(()=>inSim(page,()=>globalThis.__prefetch.requests.includes('prefetch5'))).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect.poll(()=>inSim(page,()=>globalThis.__prefetch.cancelled.includes('prefetch5'))).toBe(true);
+  await inSim(page,state=>{
+    state.docket.push({...structuredClone(state.docket[0]),id:'prefetch6',title:'A request while closed',prose:null,needsProse:true});
+  });
+  expect(await inSim(page,()=>globalThis.__prefetch.requests.includes('prefetch6'))).toBe(false);
+  await hv(page,()=>window.hearthvale.app.openCouncil());
+  await expect.poll(()=>inSim(page,()=>globalThis.__prefetch.requests.includes('prefetch6'))).toBe(true);
+  await page.keyboard.press('Escape');
   expect(errors).toEqual([]);
 });
 

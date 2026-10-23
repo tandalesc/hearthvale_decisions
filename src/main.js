@@ -465,6 +465,7 @@ async function boot() {
     openAccount: (options) => account.open(options),
     cancelCardProse: () => host.cancelCardProse(),
     requestCardProse: (id) => host.requestCardProse(id),
+    prefetchCardProse: (ids) => host.prefetchCardProse(ids),
     ui: (req) => host.ui(req),
     inspect: (target) => host.inspect(target),
     notes: host.notes,

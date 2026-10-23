@@ -64,7 +64,10 @@ export function deriveSubjects(card, centreId = null) {
   const [head, rest] = [tid.slice(0, tid.indexOf(':')), tid.slice(tid.indexOf(':') + 1)];
   if (['adopt', 'raise', 'ease'].includes(head)) out.add(`rule:${rest}`);
   else if (head === 'event') out.add(`event:${rest}`);
-  else if (head === 'grievance') out.add(`petition:${card.data?.faction ?? card.faction ?? 'town'}:${rest}`);
+  else if (head === 'grievance') {
+    const factions = card.data?.petitioners?.map(p => p.faction) ?? card.factions ?? [card.data?.faction ?? card.faction ?? 'town'];
+    for (const faction of factions) out.add(`petition:${faction}:${rest}`);
+  }
   if (card.data?.policy || card.policy) out.add(`rule:${card.data?.policy ?? card.policy}`);
   if (card.data?.forms) out.add(`form:${card.data.forms}`);
   if (card.data?.revive) out.add(`revive:${card.data.revive}`);
@@ -159,7 +162,8 @@ function historyIndex(state) {
     for (const s of h.subjects ?? deriveSubjects(h)) {
       const seen = map.get(s);
       if (seen) seen.count++;
-      else map.set(s, {year: h.year, choice: h.choice, outcome: h.outcome, mood: h.mood ?? null, count: 1});
+      else map.set(s, {year: h.year, choice: h.choice, outcome: h.outcome,
+        mood: h.moods?.[s] ?? h.mood ?? null, count: 1});
     }
   }
   indexCache.set(state, {key, map});

@@ -171,6 +171,7 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
       },
     },
 
+    prefetchCardProse: (ids) => { if (isPaid(entitlement)) proseKeeper?.prefetchCards?.(ids); },
     cancelCardProse: () => proseKeeper?.cancel?.(),
     requestCardProse: (id) => (isPaid(entitlement) ? proseKeeper?.requestCard?.(id) : null) ?? Promise.resolve(null),
 

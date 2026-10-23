@@ -59,6 +59,7 @@ export function createInlineHost({sim, routes = null, decisions = null, students
     setIndividualCap: (v) => session.setIndividualCap(v),
     decisions: session.decisions,
     notes: session.notes,
+    prefetchCardProse: (ids) => session.prefetchCardProse(ids),
     cancelCardProse: () => session.cancelCardProse(),
     requestCardProse: (id) => session.requestCardProse(id),
     useNarrator: (n, prose) => session.useNarrator(n, prose),
@@ -208,6 +209,7 @@ export function createWorkerHost(opts = {}) {
       configure: (s) => { call('decisions.configure', [s]).catch(() => {}); },
       setEnabled: (on) => { call('decisions.setEnabled', [on]).catch(() => {}); },
     },
+    prefetchCardProse: (ids) => call('prefetchCardProse', [ids]),
     cancelCardProse: () => call('cancelCardProse'),
     requestCardProse: (id) => call('requestCardProse', [id]),
     notes: {
