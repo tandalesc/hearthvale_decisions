@@ -11,7 +11,7 @@ export function createCardNarration(card) {
   const quote = h('blockquote.card-flavour', {hidden: true});
   const quoteText = h('p.card-quote-text');
   quote.append(quoteText);
-  const placeholder = h('p.card-narration-placeholder', {hidden: true}, 'Loading…');
+  const placeholder = h('div.card-narration-placeholder.shimmer', {hidden: true, 'aria-hidden': 'true'}, h('i'), h('i'));
   body.append(explanation, quote, placeholder);
   const toggle = h('button.icon-btn.card-narration-toggle', {type: 'button', hidden: true, 'aria-controls': body.id});
   const loading = h('span.card-narration-loading', {'aria-hidden': 'true', hidden: true}, h('i'), h('i'), h('i'));
@@ -40,7 +40,7 @@ export function createCardNarration(card) {
     el.classList.toggle('is-loading', pending);
     el.dataset.view = waiting ? 'loading' : showQuote ? 'quote' : 'explanation';
     setAttr(body, 'aria-busy', pending ? 'true' : null);
-    loading.hidden = !pending;
+    loading.hidden = !pending || waiting;
     // Preserve a useful focus destination if a preview is rejected while the
     // player is using its swap control.
     if (!text && document.activeElement === toggle) explanation.focus({preventScroll: true});

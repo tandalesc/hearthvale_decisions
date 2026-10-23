@@ -102,7 +102,7 @@ test('inspector replaces validated previews with fallback without saving drafts 
   await hv(page,id=>window.hearthvale.app.inspector.show({personId:id}),personId);
   await expect.poll(()=>page.evaluate(()=>Boolean(window.noteStream))).toBe(true);
   await expect(page.locator('.inspector .note-text')).toBeEmpty();
-  await expect(page.locator('.inspector .note-loading')).toBeVisible();
+  await expect(page.locator('.inspector .shimmer')).toBeVisible();
   await page.evaluate(()=>{
     const send=(event,data)=>window.noteStream.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
     send('meta',{source:'llm'});
@@ -145,9 +145,9 @@ test('a streamed quote replaces the explanation, and a player selection survives
   await expect(page.locator('.card-narration-toggle')).toBeHidden();
   await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:''}}));
   await expect(page.locator('.card-why')).toBeHidden();
-  await expect(page.locator('.card-narration-placeholder')).toHaveText('Loading…');
+  await expect(page.locator('.card-narration-placeholder i')).toHaveCount(2);
   await expect(page.locator('.card-narration-placeholder')).toBeVisible();
-  await expect(page.locator('.card-narration-loading')).toBeVisible();
+  await expect(page.locator('.card-narration-loading')).toBeHidden();
   await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:'The muddy lanes make every journey longer.'}}));
   await expect(page.locator('.card-why')).toBeHidden();
   await expect(page.locator('.card-flavour')).toBeVisible();
@@ -183,7 +183,7 @@ test('rejected quote restores the explanation and never styles template fallback
 test('reduced motion keeps quote loading and swaps still',async({page})=>{
   await quoteSurface(page,{reduced:true});
   await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:''}}));
-  await expect(page.locator('.card-narration-loading i').first()).toHaveCSS('animation-name','none');
+  await expect(page.locator('.card-narration-placeholder i').first()).toHaveCSS('animation-name','none');
   await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:'The muddy lanes slow us down.'}}));
   await expect(page.locator('.card-flavour')).toBeVisible();
   expect(await page.locator('.card-narration').evaluate(el=>el.getAnimations({subtree:true}).filter(a=>a.effect.getComputedTiming().duration>1).map(a=>a.constructor.name))).toEqual([]);
