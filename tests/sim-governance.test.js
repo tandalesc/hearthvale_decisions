@@ -1148,3 +1148,18 @@ test('a person\'s card says what they are up to: on the way, or there, in the ho
     }
   }
 });
+
+test('the Council lists cards in arrival order, so new requests join the end', () => {
+  const s = freshTown();
+  s.docket = [];
+  const mk = (id, month, kind = 'proposal', urgency = 0) => {
+    const c = makeCard(s, {kind, from: 'moot', templateId: `order:${id}`, title: id, why: 'Why.', urgency,
+      options: [{key: 'do', label: 'Do it', tradeoff: 'Trade-off.'}]});
+    c.id = id; c.surfacedMonth = month; s.docket.push(c);
+    return c;
+  };
+  mk('old', 1); mk('older-same-month', 3); mk('later-same-month', 3);
+  // An urgent event arriving last does not jump the queue.
+  mk('urgent-event', 5, 'event', 3);
+  assert.deepEqual(view.selectDocket(s).map((c) => c.id), ['old', 'older-same-month', 'later-same-month', 'urgent-event']);
+});

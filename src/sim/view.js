@@ -172,8 +172,6 @@ export function cardView(state, card) {
   };
 }
 
-const KIND_ORDER = {event: 0, demand: 1, petition: 2, debate: 3, proposal: 4, budget: 4, report: 5};
-
 // A budget card's figures as they stand (struck lines left out of the ask).
 const BUDGET_TRADE = {
   approve: (g) => `Grant ${coin(g)} as asked.`,
@@ -197,13 +195,15 @@ function budgetCardView(state, card) {
   };
 }
 
-// The cards awaiting a ruling (surfaced by a session), most urgent first.
+// The cards awaiting a ruling (surfaced by a session) in the order they
+// reached the Council: new arrivals join the end instead of pushing the
+// cards the player is reading (and the next to expire) down the list.
 export function selectDocket(state) {
   // A demand waiting on the body's answer to an offer stays off the table.
+  const order = new Map(state.docket.map((c, i) => [c, i]));
   return state.docket
     .filter((c) => c.surfacedMonth != null && !c.negotiating)
-    .sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || (b.urgency ?? 0) - (a.urgency ?? 0) ||
-      (a.expiresMonth ?? 0) - (b.expiresMonth ?? 0) || a.id.localeCompare(b.id))
+    .sort((a, b) => a.surfacedMonth - b.surfacedMonth || order.get(a) - order.get(b))
     .map((c) => cardView(state, c));
 }
 
