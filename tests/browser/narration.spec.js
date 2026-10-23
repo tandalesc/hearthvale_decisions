@@ -128,7 +128,7 @@ for (const ending of ['accepted', 'rejected', 'cancelled']) test(`worker narrati
   expect(errors).toEqual([]);
 });
 
-test('Plus Council prefetches every card with two streams, notices arrivals, and stops while closed', async ({page}) => {
+test('Plus Council prefetches its cards with two streams, notices arrivals, and stops while closed', async ({page}) => {
   const {open, hv, inSim} = await import('./helpers.js');
   await page.route('**/api/session', route => route.fulfill({json:{tier:'paid',authenticated:true,billingEnabled:true}}));
   const errors = await open(page,{fixture:'town'});
@@ -182,10 +182,43 @@ test('Plus Council prefetches every card with two streams, notices arrivals, and
   await expect.poll(()=>inSim(page,()=>globalThis.__prefetch.cancelled.includes('prefetch5'))).toBe(true);
   await inSim(page,state=>{
     state.docket.push({...structuredClone(state.docket[0]),id:'prefetch6',title:'A request while closed',prose:null,needsProse:true});
+    // Only the next five are narrated ahead: one ruling makes room for the sixth.
+    state.docket=state.docket.filter(c=>c.id!=='prefetch1');
   });
   expect(await inSim(page,()=>globalThis.__prefetch.requests.includes('prefetch6'))).toBe(false);
   await hv(page,()=>window.hearthvale.app.openCouncil());
   await expect.poll(()=>inSim(page,()=>globalThis.__prefetch.requests.includes('prefetch6'))).toBe(true);
+  await page.keyboard.press('Escape');
+  expect(errors).toEqual([]);
+});
+
+test('Plus Council narrates ahead only the next five cards and never budget cards', async ({page}) => {
+  const {open, hv, inSim} = await import('./helpers.js');
+  await page.route('**/api/session', route => route.fulfill({json:{tier:'paid',authenticated:true,billingEnabled:true}}));
+  const errors = await open(page,{fixture:'town'});
+  await inSim(page,state=>{
+    const base=state.docket.find(c=>c.kind!=='budget');
+    const now=state.time.year*12+state.time.month;
+    state.docket=[1,2,3,4,5,6,7].map(n=>({...structuredClone(base),id:`ahead${n}`,title:`${base.title} ${n}`,
+      surfacedMonth:now,expiresMonth:now+24,prose:null,needsProse:true,proseRevision:0}));
+  });
+  await inSim(page,()=>{
+    const original=globalThis.fetch;
+    globalThis.__ahead=[];
+    globalThis.fetch=async(url,options)=>{
+      if(!String(url).includes('/api/narrate')) return original(url,options);
+      const facts=JSON.parse(options.body).facts;
+      globalThis.__ahead.push(facts.id);
+      const prose={why:facts.why,options:Object.fromEntries(facts.options.map(o=>[o.key,o.tradeoff??'The town carries on.']))};
+      return new Response(new TextEncoder().encode(`event: done\ndata: ${JSON.stringify({prose,source:'template'})}\n\n`),{headers:{'content-type':'text/event-stream'}});
+    };
+  });
+  await hv(page,()=>window.hearthvale.app.openCouncil());
+  await expect.poll(()=>inSim(page,()=>globalThis.__ahead.length)).toBe(5);
+  await page.waitForTimeout(1500);
+  const asked=await inSim(page,()=>globalThis.__ahead);
+  expect(asked).toHaveLength(5);
+  expect(new Set(asked).size).toBe(5);
   await page.keyboard.press('Escape');
   expect(errors).toEqual([]);
 });

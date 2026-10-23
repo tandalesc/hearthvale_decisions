@@ -182,3 +182,29 @@ test('a completed response cannot overwrite a petition revised before its next U
  finish();await pending;
  assert.deepEqual(stored,[]);assert.equal(keeper.stats().failed,0);
 });
+
+test('budget cards are never narrated: they have no quote to show', async () => {
+ const state=fixtureState('town'), base=cardsNeedingProse(state)[0];
+ state.docket=[{...structuredClone(base),id:'budget1',kind:'budget',prose:null,needsProse:true}];
+ assert.deepEqual(cardsNeedingProse(state),[]);
+ let calls=0;
+ const keeper=startProseKeeper(()=>state,{fetcher:async()=>{calls++;return new Response('{}',{status:503});}});
+ keeper.prefetchCards(['budget1']);await keeper.requestCard('budget1');await turn();
+ assert.equal(calls,0);
+ keeper.stop();
+});
+
+test('an opened card keeps its request when the prefetch list moves on without it', async () => {
+ const state=fixtureState('town'), base=cardsNeedingProse(state)[0];
+ state.docket=['a','b','c'].map(id=>({...structuredClone(base),id,prose:null,needsProse:true}));
+ const signals={};
+ const keeper=startProseKeeper(()=>state,{fetcher:async(_url,options)=>{
+  signals[JSON.parse(options.body).facts.id]=options.signal;return new Promise(()=>{});
+ },actions:()=>()=>{}});
+ keeper.requestCard('c');keeper.prefetchCards(['a']);await turn();
+ assert.equal(signals.c?.aborted,false,'the opened card is still being narrated');
+ keeper.prefetchCards(['b']);await turn();
+ assert.equal(signals.a.aborted,true,'a prefetched card that left the list is cancelled');
+ assert.equal(signals.c.aborted,false);
+ keeper.stop();
+});

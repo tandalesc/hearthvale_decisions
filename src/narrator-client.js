@@ -328,7 +328,7 @@ export async function noteFor(state, query, {signal, onToken, onMeta, peek = nul
 }
 
 // ---------------------------------------------------------------------------
-// Demand-driven card flavour. Opening Council requests its surfaced cards;
+// Demand-driven card flavour. Opening Council requests its next five cards;
 // validated notes are stored through the simulation save action.
 // ---------------------------------------------------------------------------
 
@@ -439,6 +439,7 @@ export function startProseKeeper(getState, options = {}) {
     const revision = card?.proseRevision ?? 0;
     const existing = jobs.get(id);
     if (existing && card && existing.revision === revision) {
+      if (priority) existing.opened = true;
       if (priority && !existing.started) { queue = [existing, ...queue.filter(job => job !== existing)]; pump(); }
       return existing.promise;
     }
@@ -447,7 +448,7 @@ export function startProseKeeper(getState, options = {}) {
       queue = queue.filter(job => job !== existing);
     }
     if (!card) return Promise.resolve();
-    const job = {id, revision, controller: new AbortController(), started: false};
+    const job = {id, revision, controller: new AbortController(), started: false, opened: priority};
     job.promise = new Promise(resolve => { job.resolve = resolve; });
     jobs.set(id, job);
     priority ? queue.unshift(job) : queue.push(job);
@@ -463,7 +464,8 @@ export function startProseKeeper(getState, options = {}) {
     requestCard,
     prefetchCards(ids) {
       const wanted = new Set(ids);
-      for (const [id, job] of jobs) if (!wanted.has(id)) {
+      // A card the player opened keeps its request even if it is not among the next few.
+      for (const [id, job] of jobs) if (!wanted.has(id) && !job.opened) {
         job.controller.abort(); job.resolve(); jobs.delete(id);
       }
       queue = queue.filter(job => jobs.get(job.id) === job);
