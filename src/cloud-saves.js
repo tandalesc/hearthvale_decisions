@@ -20,7 +20,7 @@ export async function unpackCloudSave(blob) {
 
 // Local writes always finish first. Each operation is bound to the account that
 // started it, including timers, network requests and local link updates.
-export function createCloudSaves({saves, session, fetcher = (...a)=>fetch(...a), now = Date.now, onStatus = ()=>{}, operations = globalThis.localStorage}) {
+export function createCloudSaves({saves, session, fetcher = (...a)=>fetch(...a), now = Date.now, onStatus = ()=>{}, operations = {getItem:key=>globalThis.localStorage.getItem(key),setItem:(key,value)=>globalThis.localStorage.setItem(key,value),removeItem:key=>globalThis.localStorage.removeItem(key)}}) {
   const listeners = new Set(), states = new Map(), timers = new Map(), attempts = new Map();
   let catalog = emptyCatalog(), catalogAccount = null, chain = Promise.resolve();
   const account = () => session()?.authenticated ? session().cloudAccountId ?? null : null;
