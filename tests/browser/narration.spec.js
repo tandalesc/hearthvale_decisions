@@ -76,7 +76,11 @@ for (const ending of ['accepted', 'rejected', 'cancelled']) test(`worker narrati
       globalThis.__streamController.enqueue(new TextEncoder().encode(`event: done\ndata: ${JSON.stringify({prose,source:'llm'})}\n\n`));
       globalThis.__streamController.close();
     },ending);
-    if(ending==='accepted')await expect(card.locator('.card-flavour')).toHaveText('The farmers are indifferent after the bumper harvest.');
+    if(ending==='accepted') {
+      await expect(card.locator('.card-flavour')).toHaveText('The farmers are indifferent after the bumper harvest.');
+      await expect(card.locator('.card-narration-toggle')).toBeHidden();
+      await expect(card.locator('.card-why')).toBeHidden();
+    }
     else await expect(card.locator('.card-flavour')).not.toHaveText('A complete sentence from the town.');
     const stored=await inSim(page,(state,_sim,id)=>state.docket.find(card=>card.id===id)?.prose,id);
     if(ending==='accepted')expect(stored?.why).toBe('The farmers are indifferent after the bumper harvest.');
@@ -214,4 +218,8 @@ test('Plus waits from the first card render while free and saved prose stay inst
   await page.evaluate(async()=>{window.loadingTest.finish();await new Promise(resolve=>setTimeout(resolve,0));window.loadingTest.docket.update([window.loadingTest.card]);});
   await expect(page.locator('.docket').first().locator('.card-why')).toBeVisible();
   await expect(page.locator('.docket').first().locator('.card-narration-placeholder')).toBeHidden();
+  await page.evaluate(()=>window.loadingTest.docket.update([{...window.loadingTest.card,prose:{why:'A generated town quote.',source:'llm'}}]));
+  await expect(page.locator('.docket').first().locator('.card-flavour')).toBeVisible();
+  await expect(page.locator('.docket').first().locator('.card-narration-toggle')).toBeHidden();
+  await expect(page.locator('.docket').first().locator('.card-why')).toBeHidden();
 });

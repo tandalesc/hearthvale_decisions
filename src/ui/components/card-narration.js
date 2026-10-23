@@ -4,7 +4,7 @@ import {animate} from '../motion.js';
 
 // Quotes are presentation only. The canonical reason and every action remain
 // unchanged; a rejected or cancelled preview returns to the game explanation.
-export function createCardNarration(card) {
+export function createCardNarration(card, {allowSummaryToggle = true} = {}) {
   const el = h('div.card-narration');
   const body = h('div.card-narration-body', {id: `narration-${card.id}`});
   const explanation = h('p.card-why', {tabindex: '-1'});
@@ -44,7 +44,7 @@ export function createCardNarration(card) {
     // Preserve a useful focus destination if a preview is rejected while the
     // player is using its swap control.
     if (!text && document.activeElement === toggle) explanation.focus({preventScroll: true});
-    toggle.hidden = !text;
+    toggle.hidden = !text || !allowSummaryToggle;
     const label = showQuote ? 'Show game explanation' : 'Show town quote';
     setAttr(toggle, 'aria-label', label);
     setAttr(toggle, 'title', label);
