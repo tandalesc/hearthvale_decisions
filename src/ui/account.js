@@ -15,7 +15,7 @@ function rememberSignin(value) {
   try { if (value) localStorage.setItem(SIGNIN_KEY, JSON.stringify(value)); else localStorage.removeItem(SIGNIN_KEY); } catch {}
 }
 
-const PLUS_BENEFITS = ['10× and 20× speed', 'Live decisions for your townspeople', 'Richer writing in the Council and town notes'];
+const PLUS_BENEFITS = ['10× and 20× speed', '10 cloud towns with automatic saves and recovery history', 'Live decisions for your townspeople', 'Richer writing in the Council and town notes'];
 const benefits = () => h('ul.account-features', null, ...PLUS_BENEFITS.map(text => h('li', null, text)));
 const savedPlan = () => { try { return localStorage.getItem(PLAN_KEY) === 'year' ? 'year' : 'month'; } catch { return 'month'; } };
 
@@ -51,7 +51,7 @@ export function createAccount(initialSession) {
       const status = h('p.account-status', {role: 'status', 'aria-live': 'polite'}, notice || '');
       const title = (name, intro) => [h('h2', {id: 'account-title', tabindex: '-1'}, name), h('p.account-intro', null, intro)];
       const button = (label, fn, primary = false) => h('button.btn', {type: 'button', class: primary ? 'btn-primary' : 'btn-secondary', onclick: fn}, label);
-      const foot = h('p.account-foot', null, 'Free play needs no account. Towns stay on this device.');
+      const foot = h('p.account-foot', null, 'Free play needs no account. Sign in for one cloud town; local saves stay on this device.');
       async function post(path, body) {
         const response = await fetch(path, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
         const data = await response.json();

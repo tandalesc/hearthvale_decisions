@@ -11,6 +11,7 @@
 //   ?student=N                  hold every town on decision student version N (testing)
 import {loadEntitlement, entitledSpeed} from './entitlements.js';
 import {createAccount} from './ui/account.js';
+import {createCloudSaves} from './cloud-saves.js';
 import {createDecisionClient} from './decision-client.js';
 import {createLocalAnswerer, createStudentVersions} from './decision-local.js';
 import {loadNarrator, loadRenderer, loadSim} from './ui/bridge.js';
@@ -81,6 +82,8 @@ async function boot() {
   let entitlement = {tier: 'free', authenticated: false, billingEnabled: false};
   const entitlementReady = loadEntitlement();
   const account = createAccount(entitlement);
+  let cloudNotice = null;
+  const cloud = createCloudSaves({saves, session: () => entitlement, onStatus: value => cloudNotice?.(value)});
 
   // ---------- the main menu ----------
   const fixture = params.get('fixture');
@@ -90,7 +93,7 @@ async function boot() {
   if (!fixture && (intent?.kind === 'menu' || (!intent && params.get('play') !== '1'))) {
     try {
       const {createMainMenu} = await import('./ui/menu/menu.js');
-      menu = createMainMenu({saves, prefs, version, start: intent?.screen, openAccount: () => account.open()});
+      menu = createMainMenu({saves, cloud, prefs, version, start: intent?.screen, openAccount: () => account.open()});
       loader.toMenu();
     } catch (err) {
       console.error('[hearthvale] the main menu failed; continuing the last town', err);
@@ -179,6 +182,8 @@ async function boot() {
       if (r.error) throw new Error('A new town could not be founded.');
       return {info: r.info, slot: newSlotId()};
     }
+    if (choice.kind === 'cloud') choice = {kind:'load', id:await cloud.open(choice.id)};
+    if (choice.kind !== 'import') await cloud.prepare(choice.id);
     const raw = choice.kind === 'import' ? choice.raw : await saves.load(choice.id);
     if (!raw) throw new Error('That town is no longer on this device.');
     const r = await h.init({kind: 'raw', raw}, performance.now());
@@ -240,9 +245,8 @@ async function boot() {
       if (latest) {
         try {
           ({info, slot: slotId} = await openChoice({kind: 'load', id: latest.id}));
-        } catch {
-          notice = 'Your old town was made with an earlier version. A new town begins.';
-          await saves.remove(latest.id);
+        } catch (err) {
+          notice = `${err.message} Your saved town has been kept in Manage Towns.`;
         }
       }
     }
@@ -389,6 +393,7 @@ async function boot() {
       // The text comes from wherever the town runs (in the worker: off this thread).
       const [{text, meta}, thumb] = await Promise.all([host.save(), picture && document.visibilityState === 'visible' ? nextThumb() : null]);
       const ok = await saves.save(slotId, text, {...meta, ...(thumb ? {thumb} : {})});
+      if (ok) cloud.queue(slotId);
       if (manual) app.notices.toast(ok ? 'Town saved on this device.' : 'Storage is full. Export your town instead.');
       else if (!ok && !warnedFull) {
         warnedFull = true;
@@ -425,6 +430,7 @@ async function boot() {
   async function leave(intent) {
     clearTimeout(actionSaveTimer);
     await save(false, {picture: true});
+    if (slotId) await cloud.flush(slotId).catch(() => {});
     if (intent) setIntent(intent);
     reloadFresh();
   }
@@ -484,6 +490,12 @@ async function boot() {
   if (notice) app.notices.toast(notice, 6000);
   else if (!persist) app.notices.toast(`Test town (${fixture}): progress is not saved.`, 8000);
   // A new town is listed on the menu right away, picture and all.
+  const cloudWarnings = new Set();
+  cloudNotice = ({state, message}) => {
+    if (['conflict', 'limit'].includes(state) && !cloudWarnings.has(message)) {
+      cloudWarnings.add(message); app.notices.toast(message, 10000);
+    }
+  };
   if (persist && slotId && !(await saves.list()).some((t) => t.id === slotId)) setTimeout(() => save(false), 1500);
   document.title = info.townName ? `${info.townName} · Hearthvale` : 'Hearthvale';
 

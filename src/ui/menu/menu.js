@@ -24,6 +24,7 @@ import {archetypeOf} from '../../waters.js';
 import {metaFromSave} from '../../save-store.js';
 import {createValleyMap} from './valley-map.js';
 import {suggestName} from './names.js';
+import {createCloudTowns} from './cloud-towns.js';
 
 
 // Valleys a player can ask for. 'seed' lets the seed decide; 'classic' is the
@@ -79,7 +80,7 @@ function download(name, text) {
 
 const fileName = (meta) => `${String(meta.name || 'hearthvale').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-year-${meta.year ?? 0}.json`;
 
-export function createMainMenu({saves, prefs, start = 'title', openAccount}) {
+export function createMainMenu({saves, cloud, prefs, start = 'title', openAccount}) {
   mountSprite();
   applyLook(prefs);
   const darkMedia = matchMedia('(prefers-color-scheme: dark)');
@@ -119,6 +120,7 @@ export function createMainMenu({saves, prefs, start = 'title', openAccount}) {
   let latest = null;
   let resolveChoice = null;
   let selected = null;     // the town picked on the Manage Towns screen
+  let cloudPanel = null;
   let confirmDelete = null;
   const urls = new Set();
   const objectUrl = (blob) => { const u = URL.createObjectURL(blob); urls.add(u); return u; };
@@ -153,6 +155,7 @@ export function createMainMenu({saves, prefs, start = 'title', openAccount}) {
 
   function go(screen, {focus = true} = {}) {
     if (!screens[screen]) return;
+    cloudPanel?.destroy();cloudPanel=null;
     root.dataset.screen = screen;
     root.querySelector('.mm-back').dataset.go = parentScreen[screen] ?? 'title';
     confirmDelete = null;
@@ -255,12 +258,20 @@ export function createMainMenu({saves, prefs, start = 'title', openAccount}) {
     }, delay);
   }
 
+  function mountCloud() {
+    if(!cloud)return;
+    cloudPanel?.destroy();
+    cloudPanel=createCloudTowns({cloud,saves,selected:()=>selected,play:id=>pick({kind:'cloud',id}),openAccount,changed:async()=>{await refreshTowns();if(selected)selected=towns.find(t=>t.id===selected.id)??null;const list=body.querySelector('.mm-towns');if(list){list.innerHTML=towns.map(townRow).join('');syncTownActions();showPicture();}else if(towns.length){renderTowns();}}});
+    body.querySelector('section')?.append(cloudPanel.el);
+  }
+
   function renderTowns() {
     const importer = `<div class="mm-actions"><button type="button" class="btn btn-secondary" data-act="import">${icon('upload')}Import town</button><input type="file" accept="application/json,.json" data-act="import-file" hidden></div>`;
     if (!towns.length) {
       body.innerHTML = `<section class="mm-screen" aria-labelledby="mm-towns-title"><h2 id="mm-towns-title" tabindex="-1">Manage Towns</h2>
         <p class="mm-lede">No towns on this device yet. Start a new town or import one from another device.</p>
         <div class="mm-actions"><button type="button" class="btn btn-primary" data-go="new" data-autofocus>New town</button></div>${importer}</section>`;
+      mountCloud();
       return;
     }
     if (!selected || !towns.some((t) => t.id === selected.id)) selected = towns[0];
@@ -272,6 +283,7 @@ export function createMainMenu({saves, prefs, start = 'title', openAccount}) {
     </section>`;
     syncTownActions();
     showPicture();
+    mountCloud();
   }
 
   function townRow(t) {
@@ -321,6 +333,7 @@ export function createMainMenu({saves, prefs, start = 'title', openAccount}) {
     }
     syncTownActions();
     showPicture();
+    cloudPanel?.render();
   }
 
   function renderSettings() {
@@ -347,7 +360,7 @@ export function createMainMenu({saves, prefs, start = 'title', openAccount}) {
       <p>A year passes in about two minutes at normal speed. Play again in the same valley and you will get a different city.</p>
       <h3>Keys</h3>
       <div class="keys"><kbd>Space</kbd><span>Pause or resume</span><kbd>1</kbd><span>Normal speed</span><kbd>2</kbd><span>Three times</span><kbd>3</kbd><span>Five times</span><kbd>4</kbd><span>Ten times</span><kbd>5</kbd><span>Twenty times</span><kbd>C</kbd><span>Open or close the Council</span><kbd>R</kbd><span>Open or close the Rule Book</span><kbd>H</kbd><span>Hide or show the interface</span></div>
-      <p class="mm-small">Towns are saved on this device every 30 seconds. Export or import a town from Play → Manage Towns to keep a copy or move between devices.</p>
+      <p class="mm-small">Towns are saved on this device every 30 seconds. Registered players also get automatic cloud saves: one town for free, ten with Plus. Manage cloud towns and recovery history under Play → Manage Towns.</p>
     </section>`;
   }
 
@@ -540,6 +553,7 @@ export function createMainMenu({saves, prefs, start = 'title', openAccount}) {
 
   return {
     updateAccount(session) {
+      if(root.dataset.screen==='towns')mountCloud();
       const button = root.querySelector('.mm-account');
       if (button) button.textContent = session.authenticated ? 'Manage account' : 'Sign in';
       const tier = root.querySelector('.mm-account-tier');
@@ -566,6 +580,7 @@ export function createMainMenu({saves, prefs, start = 'title', openAccount}) {
     },
     /** Fades out over the game, then leaves the page. */
     close() {
+      cloudPanel?.destroy();
       darkMedia.removeEventListener?.('change', onDark);
       removeEventListener('resize', onResize);
       document.removeEventListener('keydown', onEscape);

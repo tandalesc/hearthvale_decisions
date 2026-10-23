@@ -353,3 +353,12 @@
 }
 :root[data-motion="reduced"] .mm-backdrop img.in { animation: none; }
 :root[data-motion="reduced"] .mm-page { transition: none; }
+
+.mm-cloud { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+.mm-cloud h3 { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font: 600 22px var(--font-display); }
+.mm-cloud h3 small { font: 400 14px var(--font-ui); color: var(--muted); }
+.mm-cloud-local, .mm-cloud-town, .mm-cloud-history, .mm-cloud-confirm { padding-block: 12px; }
+.mm-cloud-town + .mm-cloud-town { border-top: 1px solid var(--line); }
+.mm-cloud .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.mm-cloud-history button { margin: 4px; }
+.mm-cloud-confirm { border-top: 1px solid var(--line); }
