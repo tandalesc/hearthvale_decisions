@@ -11,6 +11,10 @@ const DIRS = [
   [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
   [1, 1, SQRT2], [-1, 1, SQRT2], [1, -1, SQRT2], [-1, -1, SQRT2],
 ];
+const DX = Int8Array.from(DIRS, (d) => d[0]);
+const DZ = Int8Array.from(DIRS, (d) => d[1]);
+const DLEN = Float64Array.from(DIRS, (d) => d[2]);
+const OCT = SQRT2 - 1;
 export const H_WEIGHT = 0.6;
 export const ENDPOINT_COST = 1.2;
 export const DETOUR_CELLS = 40;
@@ -265,9 +269,18 @@ export function* searchJob(grid, scratch, from, to, opts = {}) {
   const maxNodes = opts.maxNodes ?? 120000;
   const hw = opts.hWeight ?? H_WEIGHT;
   const corridor = opts.corridor || null;
+  const mask = corridor ? corridor.mask : null, CW = corridor ? corridor.CW : 0;
   const s = scratch;
   const stamp = nextStamp(s);
   const { g, parent, seen, closed, heap } = s;
+  const cost = grid.cost, height = grid.height || null, cell = grid.cell;
+  // The endpoints may stand on an impassable cell (a doorway): they cost
+  // ENDPOINT_COST there, exactly as costOf counts them.
+  const costAt = (i) => {
+    const c = cost[i];
+    if (i === from || i === to) return Number.isFinite(c) ? c : ENDPOINT_COST;
+    return c;
+  };
   const tx = to % W, tz = (to - tx) / W;
   heap.clear();
   g[from] = 0;
@@ -283,23 +296,36 @@ export function* searchJob(grid, scratch, from, to, opts = {}) {
     if (++expanded > maxNodes) return null;
     if (expanded % SLICE === 0) yield expanded;
     const cx = cur % W, cz = (cur - cx) / W;
-    const cc = costOf(grid, cur, from, to);
+    const cc = costAt(cur);
+    const gc = g[cur];
+    const inside = cx > 0 && cz > 0 && cx < W - 1 && cz < H - 1;
+    // Whether the four side cells are open, for the diagonals' corner rule.
+    const openE = cx < W - 1 && Number.isFinite(costAt(cur + 1));
+    const openW = cx > 0 && Number.isFinite(costAt(cur - 1));
+    const openS = cz < H - 1 && Number.isFinite(costAt(cur + W));
+    const openN = cz > 0 && Number.isFinite(costAt(cur - W));
     for (let d = 0; d < 8; d++) {
-      const [dx, dz, len] = DIRS[d];
+      const dx = DX[d], dz = DZ[d];
       const nx = cx + dx, nz = cz + dz;
-      if (nx < 0 || nz < 0 || nx >= W || nz >= H) continue;
+      if (!inside && (nx < 0 || nz < 0 || nx >= W || nz >= H)) continue;
       const n = nz * W + nx;
       if (closed[n] === stamp) continue;
-      if (corridor && !corridor.mask[Math.floor(nx / BLOCK) + Math.floor(nz / BLOCK) * corridor.CW]) continue;
-      const nc = costOf(grid, n, from, to);
+      if (mask && !mask[(nx >> 3) + (nz >> 3) * CW]) continue;
+      const nc = costAt(n);
       if (!Number.isFinite(nc)) continue;
-      if (dx && dz && (!Number.isFinite(costOf(grid, cz * W + nx, from, to)) || !Number.isFinite(costOf(grid, nz * W + cx, from, to)))) continue;
-      const ng = g[cur] + len * (cc + nc) * 0.5 + climb(grid, cur, n, len);
+      if (d >= 4 && !((dx > 0 ? openE : openW) && (dz > 0 ? openS : openN))) continue;
+      const len = DLEN[d];
+      let ng = gc + len * (cc + nc) * 0.5;
+      if (height) {
+        const grade = (height[n] - height[cur]) / (len * cell);
+        ng += GRADE_COST * grade * grade * len;
+      } else ng += 0;
       if (seen[n] === stamp && ng >= g[n]) continue;
       seen[n] = stamp;
       g[n] = ng;
       parent[n] = cur;
-      heap.push(ng + octile(nx - tx, nz - tz) * hw, n);
+      const ax = Math.abs(nx - tx), az = Math.abs(nz - tz);
+      heap.push(ng + (Math.max(ax, az) + OCT * Math.min(ax, az)) * hw, n);
     }
   }
   return null;
@@ -352,6 +378,7 @@ export function* flowFieldJob(grid, scratch, goal, opts = {}) {
   const s = scratch;
   const stamp = nextStamp(s);
   const { g, seen, closed, heap } = s;
+  const cost = grid.cost, height = grid.height || null, cell = grid.cell;
   const next = new Int32Array(W * H).fill(-1);
   heap.clear();
   g[goal] = 0;
@@ -366,17 +393,31 @@ export function* flowFieldJob(grid, scratch, goal, opts = {}) {
     if (++expanded > maxNodes) break;
     if (expanded % SLICE === 0) yield expanded;
     const cx = cur % W, cz = (cur - cx) / W;
-    const cc = costOf(grid, cur, goal, goal);
+    const c0 = cost[cur];
+    const cc = cur === goal ? (Number.isFinite(c0) ? c0 : ENDPOINT_COST) : c0;
+    const gc = g[cur];
+    const inside = cx > 0 && cz > 0 && cx < W - 1 && cz < H - 1;
+    // The side cells' plain costs decide the diagonals (no endpoint rule here).
+    const openE = cx < W - 1 && Number.isFinite(cost[cur + 1]);
+    const openW = cx > 0 && Number.isFinite(cost[cur - 1]);
+    const openS = cz < H - 1 && Number.isFinite(cost[cur + W]);
+    const openN = cz > 0 && Number.isFinite(cost[cur - W]);
     for (let d = 0; d < 8; d++) {
-      const [dx, dz, len] = DIRS[d];
+      const dx = DX[d], dz = DZ[d];
       const nx = cx + dx, nz = cz + dz;
-      if (nx < 0 || nz < 0 || nx >= W || nz >= H) continue;
+      if (!inside && (nx < 0 || nz < 0 || nx >= W || nz >= H)) continue;
       const n = nz * W + nx;
       if (closed[n] === stamp) continue;
-      const nc = grid.cost[n];
+      const nc = cost[n];
       if (!Number.isFinite(nc)) continue;
-      if (dx && dz && (!Number.isFinite(grid.cost[cz * W + nx]) || !Number.isFinite(grid.cost[nz * W + cx]))) continue;
-      const ng = g[cur] + len * (cc + nc) * 0.5 + climb(grid, n, cur, len);
+      if (d >= 4 && !((dx > 0 ? openE : openW) && (dz > 0 ? openS : openN))) continue;
+      const len = DLEN[d];
+      let ng = gc + len * (cc + nc) * 0.5;
+      if (height) {
+        // Climbing from n to cur: the field is walked toward the goal.
+        const grade = (height[cur] - height[n]) / (len * cell);
+        ng += GRADE_COST * grade * grade * len;
+      } else ng += 0;
       if (seen[n] === stamp && ng >= g[n]) continue;
       seen[n] = stamp;
       g[n] = ng;
