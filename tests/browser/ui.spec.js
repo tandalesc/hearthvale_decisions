@@ -438,6 +438,20 @@ test('a new card opens nothing and keeps focus; the Council stays where the play
   await expect(page.locator('.dock [data-body="council"] .badge')).toHaveText('4');
 });
 
+test('with "Pause and open", a new request pauses the town and opens the Council; closing it resumes', async ({page}) => {
+  await page.addInitScript(() => localStorage.setItem('hearthvale-ui', JSON.stringify({requests: 'pause'})));
+  await open(page, {fixture: 'town', stub: true, paused: false});
+  await page.keyboard.press('2');
+  await expect.poll(() => hv(page, () => window.hearthvale.speed())).toBe(3);
+  await hv(page, () => window.hearthvale.dev.addCard());
+  await expect(page.locator('.dk')).toBeVisible();
+  await expect.poll(() => hv(page, () => window.hearthvale.speed())).toBe(0);
+  await expect(page.locator('.notice-major[data-key="request"]')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.dk')).toBeHidden();
+  await expect.poll(() => hv(page, () => window.hearthvale.speed())).toBe(3);
+});
+
 test('town management lives on the main menu rather than in Settings', async ({page}) => {
   await open(page, {stub: true});
   await page.locator('.settings-btn').click();

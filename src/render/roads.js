@@ -318,7 +318,15 @@ export function createRoadSplat() {
     return r.tier[cz * r.W + cx];
   }
 
-  return { uniforms, update, tierAt, setFootprints, setEra, streetAt };
+  /** The GPU copies are gone (WebGL context restored): the next upload of the path texture must be whole. */
+  function reupload() {
+    if (!pathTex) return;
+    pathTex.clearUpdateRanges();
+    pathTex.needsUpdate = true;
+    pathFull = true;
+  }
+
+  return { uniforms, update, tierAt, setFootprints, setEra, streetAt, reupload };
 }
 
 // Piecewise-linear PATH_HALF in GLSL: the nominal half-width at a tier.

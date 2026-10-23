@@ -45,6 +45,7 @@ export function createSettings(ctx) {
         </fieldset>` : ''}
         <fieldset><legend>Play</legend>
           ${field('Title cards', 'Full-screen cards for a new age, a new body or a disaster. They pause the town.', seg('moments', p.moments, [['fast', 'While sped up'], ['always', 'Always'], ['never', 'Never']]))}
+          ${field('New requests', 'Pause the town and open the Council when a request arrives, so none slips by. The town picks up its pace when you close the Council.', seg('requests', p.requests, [['notify', 'Notify'], ['pause', 'Pause and open']]))}
           ${field('Decision model', 'The student that answers most of the town\'s questions in this browser.', '<b class="model-ver" style="font:500 13px var(--font-mono)">–</b>')}
         </fieldset>
         <fieldset><legend>Your town</legend>
