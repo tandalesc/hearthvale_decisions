@@ -1,5 +1,11 @@
 # Crowd scale: tens and hundreds of thousands of walkers (investigation)
 
+> **Status** (2026-10-22, later): stage 1 items 1, 2, 3, 4, 6, 7, 8 and 9 are implemented on
+> branch `claude/dreamy-rubin-ac86c0`, item 5 (shared delivery) was tried and dropped, and
+> item 9 without its "on screen first" part (the sim must not depend on the camera). Results
+> and new baselines: PERFORMANCE.md, "Crowds, stage 1". The text below is the investigation
+> as it was.
+>
 > **Status** (2026-10-22): research only. Nothing here is implemented. The measurements
 > come from throwaway harnesses (described in §1, not committed). The branch moved during
 > the session, from `34ae9a9` ("Everyone walks") to `57c3189`:

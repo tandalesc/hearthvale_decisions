@@ -13,7 +13,10 @@ test('the real sim runs in the worker: time passes, the mirror fills, a ruling l
   expect(await hv(page, () => window.hearthvale.state())).toBe(null);
   const t0 = await tick(page);
   await expect.poll(() => tick(page), {timeout: 15000}).toBeGreaterThan(t0 + 5);
-  // The render view on this side is the mirror, filled from the worker.
+  // The render view on this side is the mirror, filled from the worker. Compared
+  // with the town paused: while it runs, the mirror can trail the worker by a step.
+  await hv(page, () => window.hearthvale.setSpeed(0));
+  await settle(page);
   const mirror = await hv(page, () => {
     const v = window.hearthvale.host.mirror.view;
     return {buildings: v.buildings.length, people: v.peopleCount, roads: v.roads?.W ?? 0, year: v.time.year};
@@ -24,7 +27,6 @@ test('the real sim runs in the worker: time passes, the mirror fills, a ruling l
   expect(mirror.roads).toBeGreaterThan(0);
   // A ruling through the Council: the card leaves the worker's docket, once, even for
   // two clicks in the same task (the second goes while the first is on its way).
-  await hv(page, () => window.hearthvale.setSpeed(0));
   await hv(page, () => window.hearthvale.app.openCouncil());
   await settle(page);
   const card = page.locator('.dk .card:not(.is-next):not([data-leaving])').first();
@@ -39,7 +41,10 @@ test('the real sim runs in the worker: time passes, the mirror fills, a ruling l
   await expect.poll(() => inSim(page, (s, sim, id) => s.docket.some((c) => c.id === id), cid)).toBe(false);
   await settle(page);
   expect(await inSim(page, (s, sim, id) => s.cardHistory.filter((c) => c.id === id).length, cid)).toBe(1);
-  expect(await inSim(page, (s) => s.cardHistory.length)).toBe(history + 1);
+  // One ruling: a plain card adds one entry; a debate adds its own and one for each side.
+  const added = await inSim(page, (s, sim, n) => s.cardHistory.slice(n).map((c) => c.id), history);
+  expect(added.length).toBeGreaterThanOrEqual(1);
+  expect(new Set(added).size).toBe(added.length);
   expect(errors).toEqual([]);
 });
 

@@ -385,7 +385,7 @@ test('a busy crossroads can become a square that lifts land value', () => {
 // ---------------------------------------------------------------- navigation guarantees
 // (moved here from the old performance tests)
 
-test('A* is sliced and cooperative: bounded ticks finish many routes, cache them, and survive a roads version change', async () => {
+test('A* is sliced and cooperative: bounded ticks finish many routes, cache them, and keep them across a roads version change while they can be walked', async () => {
   const { RouteScheduler } = await import('../src/navigation.js');
   const s = blank(1);
   let clock = 0;
@@ -419,8 +419,13 @@ test('A* is sliced and cooperative: bounded ticks finish many routes, cache them
   for (let x = 20; x < 120; x++) setTier(s, cellIndex(x, cz), 3);
   const grid = navGrid(s);
   assert.equal(grid.footprintsOnly, false);
+  // The costs moved, the cells did not: every cached route is kept, still passable
+  // (crowd-scale.md §4.1, routes outlive grid changes).
+  const kept = q.cache.size;
   q.setGrid(grid);
-  assert.equal(q.cache.size, 0);
+  assert.equal(q.cache.size, kept);
+  for (const r of q.cache.values()) assert.ok([...r.cells].every((i, k, a) => k === 0 || k === a.length - 1 || Number.isFinite(grid.cost[i])));
+  q.cache.clear();
   let fresh = null;
   q.request(cellOf(-200, -100), goals[0], r => (fresh = r));
   while (q.pending) q.tick(50, 64);

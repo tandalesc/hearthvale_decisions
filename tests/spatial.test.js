@@ -122,11 +122,11 @@ test('the cooperative planner writes flat routes into tasks and walkers wear the
     assert.equal(p.task.pending, false);
     assert.equal(p.task.seg, 0);
     const r = p.task.route;
-    assert.ok(r.length >= 4 && r.length % 2 === 0, 'flat [x, z, ...]');
-    assert.deepEqual(r.slice(0, 2), [p.x, p.z]);
-    assert.deepEqual(r.slice(-2), [goal.x, goal.z]);
+    assert.ok(r instanceof Float32Array && r.length >= 4 && r.length % 2 === 0, 'flat [x, z, ...], as float32');
+    assert.deepEqual(Array.from(r.slice(0, 2)), [Math.fround(p.x), Math.fround(p.z)]);
+    assert.deepEqual(Array.from(r.slice(-2)), [Math.fround(goal.x), Math.fround(goal.z)]);
     while (stepAlongRoute(s, p, 2));
-    assert.ok(Math.hypot(p.x - goal.x, p.z - goal.z) < 1e-6);
+    assert.ok(Math.hypot(p.x - goal.x, p.z - goal.z) < 1e-4);
   }
   assert.ok(s.roads.wearAddedMonth > 0);
   const again = { id: 9, x: -140, z: -60, task: { kind: 'work' } };
@@ -148,7 +148,7 @@ test('unreachable goals block the task instead of walking through walls', () => 
   planner.request(s, p, { x: -100, z: 50 }, p.task);
   for (let i = 0; i < 2000 && planner.stats.pending; i++) planner.tick(s, 20);
   assert.equal(p.task.blocked, true);
-  assert.deepEqual(p.task.route, []);
+  assert.equal(p.task.route.length, 0);
 });
 
 // This used to be 'waypoints keep only the turns' and expected start, the

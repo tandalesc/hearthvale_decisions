@@ -7,6 +7,8 @@ import {footprints, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, wal
 import {addBuildingRecord, removeBuildingRecord} from '../src/sim/state.js';
 import {buildingOutline, inRect} from '../src/sim/outline.js';
 import {createRoutePlanner} from '../src/route-planner.js';
+import {shadowCertificates} from '../src/sim/people.js';
+import {cellIndex} from '../src/sim/state.js';
 import {createAutoTuner, guessTier} from '../src/render/quality.js';
 
 let seed = 99;
@@ -100,6 +102,37 @@ test('a walls memo gives routeClearFrom\'s answer whenever it gives one', () => 
     assert.equal(known, full, `walker ${w.p.id} from segment ${seg}`);
   }
   assert.ok(held > 0 && dropped > 0 && blocked > 0, `held ${held}, dropped ${dropped}, blocked ${blocked}`);
+});
+
+test('a walker a footprint certificate lets off would get nothing from the full checks', () => {
+  // The town as it grows (buildings go up and change every few ticks), with every walker
+  // the certificates let off checked in full: on open ground clear of every piece, its
+  // route still clear of walls, and skirtOutlines leaving the rest of its walk as it is.
+  const s = fixtureState('town');
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
+  let skipped = 0, checks = 0;
+  const seen = new Set();
+  shadowCertificates((state, p, keep) => {
+    skipped++;
+    const t = p.task;
+    const c = cellIndex(state.roads, p.x, p.z);
+    assert.ok(c >= 0 && !footprints(state).walls[c], `walker ${p.id} in a wall cell`);
+    if (!p.indoor && !t.seat) assert.ok(outlineClear(state, p.x, p.z), `walker ${p.id} on a drawn piece`);
+    assert.ok(routeClearFrom(state, p.x, p.z, t.route, t.seg), `walker ${p.id}: route through a wall`);
+    const rest = [p.x, p.z, ...t.route.slice(t.seg)];
+    assert.equal(skirtOutlines(state, rest, keep), rest, `walker ${p.id}: the walk would be skirted`);
+    seen.add(state.worldVersion);
+  });
+  try {
+    for (let i = 0; i < 1500; i++) {
+      routes.tick(s, 1e9);
+      stepTick(s, 0.1, {routes});
+      checks++;
+    }
+  } finally {
+    shadowCertificates(null);
+  }
+  assert.ok(skipped > 2000 && seen.size > 10, `walkers let off: ${skipped} over ${seen.size} footprint changes`);
 });
 
 test('auto quality keeps watching: a town that grows slow steps down again, and never back up', () => {

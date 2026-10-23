@@ -77,7 +77,7 @@ function walkDrawn(state, ticks) {
     if (k !== key) { key = k; inside = drawnPieces(state); }
     const rows = view.people;
     for (let i = 0; i < state.people.length; i++) {
-      const o = i * PERSON_STRIDE_EXTENDED;
+      const o = view.rowOf(state.people[i].id) * PERSON_STRIDE_EXTENDED;
       if (rows[o + 14] === 0) continue;   // indoors
       samples++;
       const t = Math.min(now + FRAME / 2, rows[o + 16]) - rows[o + 6];

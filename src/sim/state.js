@@ -12,7 +12,7 @@ import {createRoads as createWorldRoads, CELL, GRID_W, GRID_H, ORIGIN_X, ORIGIN_
 import {runPhase} from './hooks.js';
 import {newSeed, seedCode, parseSeed} from '../seed.js';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 export const DEFAULT_SEED = 4817;
 
 export const ROAD_GRID = {cell: CELL, W: GRID_W, H: GRID_H, ox: ORIGIN_X, oz: ORIGIN_Z};

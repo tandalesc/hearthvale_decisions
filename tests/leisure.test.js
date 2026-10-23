@@ -199,7 +199,7 @@ test('bridge gazers lean on the rail on the deck, at deck height, facing the wat
       const ax = bridge.b.x - bridge.a.x, az = bridge.b.z - bridge.a.z, al = Math.hypot(ax, az);
       assert.ok(deckSpot(s, p.x, p.z), `gazer ${p.id} on the deck`);
       assert.ok(Math.abs(walkerY(s, p.x, p.z) - deckHeightAt(s, p.x, p.z)) < 0.05, 'at deck height');
-      const i = s.people.indexOf(p), o = i * PERSON_STRIDE_EXTENDED;
+      const o = view.rowOf(p.id) * PERSON_STRIDE_EXTENDED;
       assert.equal(view.people[o + 19], 1, 'drawn on the deck');
       assert.ok(Math.abs(view.people[o + 1] - deckHeightAt(s, p.x, p.z)) < 0.05, 'drawn at deck height');
       assert.equal(p.action, ACTION.lean);
@@ -360,7 +360,7 @@ test('an angler\'s line hangs from the rod tip to the water, from a bank and fro
     assert.ok(here.length >= 1, `${activity}: anglers out`);
     const tip = rodTip(), figure = 1.1;   // render/people.js uFigureScale
     for (const p of here) {
-      const o = s.people.indexOf(p) * PERSON_STRIDE_EXTENDED, rows = view.people;
+      const o = view.rowOf(p.id) * PERSON_STRIDE_EXTENDED, rows = view.people;
       assert.equal(rows[o + 9], ACTION.fish);
       const scale = rows[o + 14] * figure, heading = rows[o + 15], baseY = rows[o + 1];
       // Where the tip is (the shader's held rod): over the water, well above it.

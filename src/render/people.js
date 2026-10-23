@@ -4,13 +4,18 @@ import { GROUND_GLSL } from './ground.js';
 import { deckProfile } from '../sim/bridges.js';
 import { railStyle, railInner, RAIL_TOP } from '../sim/gatherings.js';
 import { surfaceLevelAt } from '../terrain.js';
+import { rowWindowAt } from '../sim/render-view.js';
 
-// Villagers (design-visual §4.5): one instanced mesh for everyone, animated
-// entirely in the vertex shader. The sim's render view owns the per-person
-// rows (16 floats, see src/sim/render-view.js); we bind that Float32Array
-// zero-copy as an interleaved instance buffer and upload only dirty rows.
-// A second draw of the same buffer lays a soft contact blob under each
-// person so they sit on the ground at every quality tier.
+// Villagers (design-visual §4.5): instanced, animated entirely in the vertex
+// shader. The sim's render view owns the per-person rows (16 or 20 floats, see
+// src/sim/render-view.js). Each frame the rows in view are sorted into bands
+// (docs/design/crowd-scale.md §4.1; drawing only, the sim never sees the camera):
+//  - near: the nearest within uLodNear, at most NEAR_CAP for the tier: the full
+//    posed figure, and a second draw lays a soft contact blob (and a cast
+//    shadow) under each so they sit on the ground at every quality tier;
+//  - far: the rest out to uLodFar: a two-triangle impostor, drawn flat;
+//  - beyond uLodFar or out of view: nothing.
+// The bands' rows are copied into small instance buffers of their own.
 //
 // Walkers drape on the shared ground texture (ground.js) between waypoints,
 // except where their row height is clearly off the ground (bridge decks,
@@ -25,6 +30,13 @@ const DRAPE_TOLERANCE = 0.3;
 const FORD_BED = -0.3;
 
 const STRIDE = 16;
+
+// The near band's most walkers per tier: full figures, blob shadows, ripples.
+const NEAR_CAP = { low: 800, medium: 1500, high: 3000 };
+// A walker's bound for the view test: near walkers' shadows reach about 5 units past
+// their feet (MAX_STRETCH times a body), impostors are a body tall.
+const CULL_NEAR = 6;
+const CULL_FAR = 1.5;
 
 // Leg rig (figure units, before scale): hip pivot at LEG_Y, knee halfway.
 const LEG_Y = 0.72;
@@ -154,12 +166,11 @@ float fadedScale(float s) {
   return s;
 }
 
-// Row position extrapolated to now, then draped on the ground texture so the
-// figure follows the terrain's curvature mid-segment.
+// A row position (rowMotion's) draped on the ground texture so the figure follows
+// the terrain's curvature mid-segment.
 // onGround: 1 when the base was draped (the feet can follow the ground too),
 // 2 on a bridge deck (the feet follow the deck: surfaceY), 0 otherwise.
-vec3 drapedBase(vec3 pos, vec3 vel, float t0, out float onGround) {
-  vec3 base = pos + vel * clamp(rowTime(t0) - t0, 0.0, 3.0);
+vec3 drapeRow(vec3 base, out float onGround) {
   onGround = 0.0;
   #ifdef SEGMENT_END
     // On a bridge deck the row's own y follows the deck profile; don't drape
@@ -177,10 +188,6 @@ vec3 drapedBase(vec3 pos, vec3 vel, float t0, out float onGround) {
     if (abs(base.y - g) < ${DRAPE_TOLERANCE.toFixed(2)}) { base.y = g; onGround = 1.0; }
   #endif
   return base;
-}
-vec3 drapedBase(vec3 pos, vec3 vel, float t0) {
-  float onGround;
-  return drapedBase(pos, vel, t0, onGround);
 }
 // Bridge decks near the view (people.js setDecks): ends, half-widths and a
 // table of DECK_SAMPLES heights along each deck (the sim's deckProfile:
@@ -237,6 +244,59 @@ float surfaceY(vec2 xz) {
 }
 `;
 
+// Where the row puts its walker at uTime and how it moves there (renderer units per
+// second): the first leg extrapolated (never past t1), then, for 32-float rows, on
+// corner to corner (render-view.js rowWindowAt). cornerT is when it turned onto the
+// window leg it is on (or -1), cornerYaw the heading it came in on. Needs the row's
+// attributes declared first.
+const ROW_MOTION_GLSL = /* glsl */ `
+#ifdef WINDOW
+attribute vec4 iE;   // corners 1 and 2: t, x, z, t
+attribute vec4 iF;   //   x, z; corner 3: t, x
+attribute vec2 iG;   //   z; how many corners
+#endif
+vec3 rowMotion(out vec3 vel, out float moving, out float cornerT, out float cornerYaw) {
+  float t0 = iA.x;
+  vec3 pos = iPos + iVel * clamp(rowTime(t0) - t0, 0.0, 3.0);
+  vel = iVel;
+  moving = rowTime(t0) < uTime ? 0.0 : 1.0;
+  cornerT = -1.0;
+  cornerYaw = 0.0;
+  #ifdef WINDOW
+  if (iG.y > 0.5 && iD.x > t0 && uTime > iD.x) {
+    vec3 prev = iD.xyz;
+    vec2 inDir = iVel.xz;
+    int n = int(iG.y + 0.5);
+    moving = 0.0;
+    vel = vec3(0.0);
+    pos.xz = prev.yz;
+    for (int k = 0; k < 3; k++) {
+      if (k >= n) break;
+      vec3 c = k == 0 ? iE.xyz : k == 1 ? vec3(iE.w, iF.xy) : vec3(iF.zw, iG.x);
+      vec2 d = (c.yz - prev.yz) / max(c.x - prev.x, 1e-4);
+      if (uTime < c.x) {
+        pos.xz = prev.yz + d * (uTime - prev.x);
+        vel = vec3(d.x, 0.0, d.y);
+        moving = 1.0;
+        cornerT = prev.x;
+        cornerYaw = atan(inDir.x, inDir.y);
+        break;
+      }
+      inDir = d;
+      prev = c;
+      pos.xz = prev.yz;
+    }
+  }
+  #endif
+  return pos;
+}
+vec3 rowBase(out float onGround) {
+  vec3 vel;
+  float moving, cornerT, cornerYaw;
+  return drapeRow(rowMotion(vel, moving, cornerT, cornerYaw), onGround);
+}
+`;
+
 const POSE_HEAD = /* glsl */ `
 attribute float aBone;
 attribute float aPart;
@@ -246,6 +306,7 @@ attribute vec4 iA;   // t0, phase, gait, action
 attribute vec4 iB;   // actionT0, skin, cloth, hat
 attribute vec2 iC;   // scale, facing
 attribute vec3 iTurn; // heading shown when the row's heading last changed, time of that change; z: an angler's water level (fishLineWater)
+${ROW_MOTION_GLSL}
 uniform float uLodNear;
 uniform float uIkNear;  // feet and hands read the ground within this distance
 uniform float uTurnEase; // 1: ease turns; 0: snap (reduced motion)
@@ -300,6 +361,12 @@ vec3 swingZ(vec3 p, vec3 pivot, float a) {
 // face a building or event on arrival. Ease from the heading shown at that
 // moment (iTurn, kept by markFades) to the row's own, along the shorter arc:
 // about 0.25 s on the move, 0.4 s for the arrival turn.
+// A turn at a window corner, eased from the heading the walker came in on.
+float cornerYawEased(float from, float target, float t) {
+  if (uTurnEase < 0.5) return target;
+  float k = smoothstep(0.0, 1.0, clamp((uTime - t) / 0.25, 0.0, 1.0));
+  return from + (mod(target - from + 3.14159265, 6.2831853) - 3.14159265) * k;
+}
 float easedYaw(float target) {
   if (uTurnEase < 0.5) return target;
   float dur = length(iVel.xz) > 0.05 ? 0.25 : 0.4;
@@ -393,16 +460,19 @@ vec3 personPosition(vec3 position) {
 
   // Extrapolate from the row's anchor (clamped so a stalled sim never slides
   // far); cull hidden and distant people before paying for the drape.
-  vec3 raw = iPos + iVel * clamp(rowTime(t0) - t0, 0.0, 3.0);
+  vec3 vel;
+  float moving0, cornerT, cornerYaw;
+  vec3 raw = rowMotion(vel, moving0, cornerT, cornerYaw);
   // Waiting at a waypoint for the next row: stand, don't walk on the spot.
-  if (rowTime(t0) < uTime) gait = 0.0;
+  if (moving0 < 0.5) gait = 0.0;
   float dist = distance(raw, cameraPosition);
   if (scale < 0.01 || dist > uLodFar) return raw;
   float onGround;
-  vec3 base = drapedBase(iPos, iVel, t0, onGround);
+  vec3 base = drapeRow(raw, onGround);
   bool lod = dist > uLodNear;
   // Face the direction of travel, else the stored facing.
-  float yaw = easedYaw(length(iVel.xz) > 0.05 ? atan(iVel.x, iVel.z) : iC.y);
+  float target = length(vel.xz) > 0.05 ? atan(vel.x, vel.z) : iC.y;
+  float yaw = cornerT > 0.0 ? cornerYawEased(cornerYaw, target, cornerT) : easedYaw(target);
   float cy = cos(yaw), sy = sin(yaw);
   float sc = max(scale, 0.05);
 
@@ -413,7 +483,7 @@ vec3 personPosition(vec3 position) {
   float moving = step(0.05, gait);
   float omega = 7.0 * clamp(gait, 0.6, 2.5);
   float w = uTime * omega + phase;
-  float stride = moving * min(length(iVel.xz) / sc * 1.5707963 / omega, 0.36);
+  float stride = moving * min(length(vel.xz) / sc * 1.5707963 / omega, 0.36);
   float swing = sin(w) * 0.55 * g;
   float armL = -swing * 0.8, armR = swing * 0.8;
   float outL = 0.07, outR = 0.07;
@@ -689,6 +759,7 @@ varying vec4 vShape;    // cast length, near radius, far radius, sun strength
 varying float vContact; // contact radius
 varying vec2 vSlope;    // ground rise per metre along (away, across)
 ${DRAPE_GLSL}
+${ROW_MOTION_GLSL}
 // A drop below the plane under the feet larger than this is a ledge.
 const float LEDGE = 0.35;
 // The surface at xz for the slope estimate: a ledge counts as level, so a
@@ -701,7 +772,8 @@ float surfaceNear(vec2 xz, float s0) {
 const float WATER_LEVEL = 0.025;
 const float MAX_STRETCH = 2.6; // shadow length per body height (sun ~21 deg)
 void main() {
-  vec3 base = drapedBase(iPos, iVel, iA.x);
+  float onGround0;
+  vec3 base = rowBase(onGround0);
   #ifdef BLOB_COVER
     float d = distance(base, uEye); // drawn from above: measure from the main camera
   #else
@@ -946,6 +1018,108 @@ void main() {
 }
 `;
 
+// Far band: one camera-facing quad per walker, standing on the same draped base as
+// the figure, with the figure's colours laid out in figure units in the fragment
+// shader (hat, head, torso and arms, legs striding apart). Narrower seen from the
+// side, hair seen from behind; seated, kneeling and lying walkers are lower.
+const IMPOSTOR_HEAD = /* glsl */ `
+attribute vec3 iPos;
+attribute vec3 iVel;
+attribute vec4 iA;   // t0, phase, gait, action
+attribute vec4 iB;   // actionT0, skin, cloth, hat
+attribute vec2 iC;   // scale, facing
+uniform float uLodFar;
+uniform float uFigureScale;
+uniform vec3 uSkin[6];
+uniform vec3 uCloth[16];
+uniform vec3 uLegs[4];
+uniform vec3 uHat[4];
+uniform vec3 uHair[4];
+${ROW_MOTION_GLSL}
+varying vec2 vImp;       // figure units: across from the middle, up from the feet
+varying vec4 vImpShape;  // side-on (0..1), facing the view (-1..1), stride swing, hat kind
+varying vec3 vImpSkin;
+varying vec3 vImpCloth;
+varying vec3 vImpLegs;
+varying vec3 vImpHat;
+varying vec3 vImpHair;
+const float IMP_W = 0.8;
+const float IMP_H = 1.85;
+vec3 impostorNormal() {
+  vec2 d = cameraPosition.xz - iPos.xz;
+  d /= max(length(d), 1e-4);
+  return normalize(vec3(d.x, 0.6, d.y));
+}
+vec3 impostorPosition(vec3 position) {
+  float scale = fadedScale(iC.x) * uFigureScale;
+  vec3 vel;
+  float moving, cornerT, cornerYaw;
+  vec3 raw = rowMotion(vel, moving, cornerT, cornerYaw);
+  if (scale < 0.01 || distance(raw, cameraPosition) > uLodFar) return raw;
+  float onGround;
+  vec3 base = drapeRow(raw, onGround);
+  vec2 tc = cameraPosition.xz - base.xz;
+  tc /= max(length(tc), 1e-4);
+  vec3 right = vec3(tc.y, 0.0, -tc.x);
+  float yaw = length(vel.xz) > 0.05 ? atan(vel.x, vel.z) : iC.y;
+  vec2 fdir = vec2(sin(yaw), cos(yaw));
+  float gait = moving < 0.5 ? 0.0 : iA.z;
+  float omega = 7.0 * clamp(gait, 0.6, 2.5);
+  float swing = step(0.05, gait) * sin(uTime * omega + iA.y);
+  float action = floor(iA.w + 0.5);
+  float h = IMP_H;
+  if (action == 3.0 || action == 7.0 || action == 11.0) h *= 0.72;
+  else if (action == 10.0) h *= 0.3;
+  vImp = vec2(position.x * IMP_W, position.y * IMP_H);
+  vImpShape = vec4(abs(dot(fdir, right.xz)), dot(fdir, tc), swing, floor(iB.w + 0.5));
+  int skin = int(clamp(floor(iB.y + 0.5), 0.0, 5.0));
+  int cloth = int(clamp(floor(iB.z + 0.5), 0.0, 15.0));
+  int hat = int(clamp(floor(iB.w + 0.5), 0.0, 3.0));
+  vImpSkin = uSkin[skin];
+  vImpCloth = uCloth[cloth];
+  vImpLegs = uLegs[(skin + cloth) % 4];
+  vImpHat = uHat[hat];
+  vImpHair = uHair[(skin * 3 + int(abs(iA.y) * 2.0)) % 4];
+  return base + right * (position.x * IMP_W * scale) + vec3(0.0, position.y * h * scale, 0.0);
+}
+`;
+
+const IMPOSTOR_FRAG = /* glsl */ `
+varying vec2 vImp;
+varying vec4 vImpShape;
+varying vec3 vImpSkin;
+varying vec3 vImpCloth;
+varying vec3 vImpLegs;
+varying vec3 vImpHat;
+varying vec3 vImpHair;
+vec3 impostorColor() {
+  float side = vImpShape.x, swing = abs(vImpShape.z), hat = vImpShape.w;
+  float x = abs(vImp.x), y = vImp.y;
+  float wk = mix(1.0, 0.62, side);
+  // Hat: 0 none, 1 felt hat, 2 wide straw hat, 3 snug cap (the figure's shapes).
+  if (y > 1.63 && hat > 0.5) {
+    float crown = hat > 2.5 ? 0.18 : 0.15, top = hat > 2.5 ? 1.72 : hat > 1.5 ? 1.72 : 1.79;
+    float brim = hat > 2.5 ? 0.0 : hat > 1.5 ? 0.34 : 0.25;
+    if (y < top && (x < crown * wk || (y < 1.67 && x < brim))) return vImpHat;
+    discard;
+  }
+  if (y > 1.31) {
+    if (y > 1.65 || x > 0.17 * wk) discard;
+    return vImpShape.y < -0.25 || y > 1.58 ? vImpHair : vImpSkin;
+  }
+  if (y > 0.68) {
+    if (x < 0.22 * wk) return vImpCloth;
+    // Arms beside the torso from the front and back; seen from the side they swing.
+    if (y > 0.74 && y < 1.28 && x < mix(0.36, 0.14 + 0.2 * swing, side)) return y < 0.8 ? vImpSkin : vImpCloth;
+    discard;
+  }
+  // Legs: a gap between them from the front, apart at the feet in stride from the side.
+  float reach = 0.19 * wk + side * 0.3 * swing * (1.0 - y / 0.72);
+  if (x > reach || (side < 0.5 && x < 0.02)) discard;
+  return y < 0.06 ? vec3(0.30, 0.20, 0.12) : vImpLegs;
+}
+`;
+
 // Heading a row asks for, as the vertex shader reads it: the direction of
 // travel when moving, else the stored facing.
 function rowHeading(a, o) {
@@ -1145,19 +1319,42 @@ export function createPeople(ctx) {
   blobsLamp.frustumCulled = false;
   blobsLamp.renderOrder = 1.55; // after the lamp pools (props marks, 1) and the ripples (alpha back to 1)
   blobsLamp.visible = false;
-  scene.add(mesh, blobsApply, blobsLamp);
+  // Far band: impostors (one quad each), lit like the figures.
+  const impostorMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  patchMaterial(impostorMaterial, grade, {
+    key: 'people-impostor',
+    uniforms: { ...lodUniforms, ...paletteUniforms, ...deckUniforms },
+    vertexHead: DRAPE_GLSL + IMPOSTOR_HEAD,
+    vertexNormal: 'objectNormal = impostorNormal();\n',
+    vertexBegin: 'transformed = impostorPosition(position);\n',
+    fragmentHead: IMPOSTOR_FRAG,
+    fragmentColor: 'diffuseColor.rgb = impostorColor() * uTint;\n',
+  });
+  const quad = new THREE.BufferGeometry();
+  quad.setAttribute('position', new THREE.Float32BufferAttribute([-0.5, 0, 0, 0.5, 0, 0, 0.5, 1, 0, -0.5, 1, 0], 3));
+  quad.setAttribute('normal', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1], 3));
+  quad.setIndex([0, 1, 2, 0, 2, 3]);
+  const impostors = new THREE.Mesh(new THREE.InstancedBufferGeometry(), impostorMaterial);
+  impostors.name = 'people-impostors';
+  impostors.frustumCulled = false;
+  impostors.castShadow = false;
+  impostors.visible = false;
+  scene.add(mesh, impostors, blobsApply, blobsLamp);
   (ctx.shadowSurface?.scene ?? scene).add(blobs);
 
   let stride = STRIDE; // 16, or 20 when the view carries segment ends
-  let fadeAttr = null;   // per-row [change time, scale before]
+  let fade = null;       // per-row [change time, scale before]
   let prevScale = null;
-  let turnAttr = null;   // per-row [heading shown at the last change, change time, an angler's water level]
+  let turn = null;       // per-row [heading shown at the last change, change time, an angler's water level]
   let turnTarget = null; // per-row heading the row asked for at that change
   let turnSlow = null;   // per-row 1 when that change was a stander's (slower) turn
   let boundArray = null;
   let boundVersion = -1;
-  let buffer = null;
   let count = 0;
+  // The bands' instance buffers: near rows are [row, fade 2, turn 3], far rows [row, fade 2].
+  let near = null, far = null;
+  let nearCap = NEAR_CAP.high;
+  let wiredStride = -1;
   let castShadow = false;
   // People shadows: 'blob' (sun-aware blob only, the default) or 'full'
   // (also cast into the shadow map, where the tier has one).
@@ -1166,97 +1363,221 @@ export function createPeople(ctx) {
   let tierQuality = ctx.quality;
   let lampShadows = false; // tier allows walkers' lamp shadows
 
-  /** (Re)bind the sim's Float32Array as the interleaved instance buffer. */
+  /** (Re)bind the sim's Float32Array: per-row fade and turn state, kept here. */
   function bind(array, version, rowFloats) {
-    stride = rowFloats === 20 ? 20 : STRIDE;
-    const segment = stride === 20;
-    for (const m of [material, depthMaterial]) {
-      if (!!m.defines?.SEGMENT_END !== segment) {
+    stride = rowFloats === 32 ? 32 : rowFloats === 20 ? 20 : STRIDE;
+    const segment = stride >= 20, window = stride === 32;
+    for (const m of [material, depthMaterial, blobMaterial, blobApplyMaterial, blobLampMaterial, impostorMaterial]) {
+      if (!!m.defines?.SEGMENT_END !== segment || !!m.defines?.WINDOW !== window) {
         m.defines = { ...(m.defines ?? {}) };
         if (segment) m.defines.SEGMENT_END = 1; else delete m.defines.SEGMENT_END;
-        m.needsUpdate = true;
-      }
-    }
-    for (const m of [blobMaterial, blobApplyMaterial, blobLampMaterial]) {
-      if (!!m.defines?.SEGMENT_END !== segment) {
-        m.defines = { ...(m.defines ?? {}) };
-        if (segment) m.defines.SEGMENT_END = 1; else delete m.defines.SEGMENT_END;
+        if (window) m.defines.WINDOW = 1; else delete m.defines.WINDOW;
         m.needsUpdate = true;
       }
     }
     const rows = Math.floor(array.length / stride);
-    fadeAttr = new THREE.InstancedBufferAttribute(new Float32Array(rows * 2), 2);
-    fadeAttr.setUsage(THREE.DynamicDrawUsage);
+    fade = new Float32Array(rows * 2);
     prevScale = new Float32Array(rows);
     for (let i = 0; i < rows; i++) prevScale[i] = array[i * stride + 14];
     // Turns start settled: shown heading = the row's heading, long ago.
-    const turns = new Float32Array(rows * 3);
+    turn = new Float32Array(rows * 3);
     turnTarget = new Float32Array(rows);
     turnSlow = new Uint8Array(rows);
     for (let i = 0; i < rows; i++) {
       const h = rowHeading(array, i * stride);
       turnTarget[i] = h;
-      turns[i * 3] = h;
-      turns[i * 3 + 1] = -1e4;
-      turns[i * 3 + 2] = lineWater(array, i * stride, h);
+      turn[i * 3] = h;
+      turn[i * 3 + 1] = -1e4;
+      turn[i * 3 + 2] = lineWater(array, i * stride, h);
     }
-    turnAttr = new THREE.InstancedBufferAttribute(turns, 3);
-    turnAttr.setUsage(THREE.DynamicDrawUsage);
-    buffer = new THREE.InstancedInterleavedBuffer(array, stride);
+    boundArray = array;
+    boundVersion = version;
+    if (stride !== wiredStride) {
+      wiredStride = stride;
+      near = band(stride + 5, nearCap);
+      far = band(stride + 2, 1024);
+      wireNear();
+      wireFar();
+    }
+  }
+
+  function band(floats, cap) {
+    const array = new Float32Array(cap * floats);
+    const buffer = new THREE.InstancedInterleavedBuffer(array, floats);
     buffer.setUsage(THREE.DynamicDrawUsage);
+    return { array, buffer, floats, cap, n: 0 };
+  }
+
+  // The row's own attributes in a band buffer (the row's floats first).
+  function rowAttrs(b) {
     const attrs = {
-      iPos: new THREE.InterleavedBufferAttribute(buffer, 3, 0),
-      iVel: new THREE.InterleavedBufferAttribute(buffer, 3, 3),
-      iA: new THREE.InterleavedBufferAttribute(buffer, 4, 6),
-      iB: new THREE.InterleavedBufferAttribute(buffer, 4, 10),
-      iC: new THREE.InterleavedBufferAttribute(buffer, 2, 14),
-      iFade: fadeAttr,
-      iTurn: turnAttr,
+      iPos: new THREE.InterleavedBufferAttribute(b.buffer, 3, 0),
+      iVel: new THREE.InterleavedBufferAttribute(b.buffer, 3, 3),
+      iA: new THREE.InterleavedBufferAttribute(b.buffer, 4, 6),
+      iB: new THREE.InterleavedBufferAttribute(b.buffer, 4, 10),
+      iC: new THREE.InterleavedBufferAttribute(b.buffer, 2, 14),
+      iFade: new THREE.InterleavedBufferAttribute(b.buffer, 2, stride),
     };
-    if (segment) attrs.iD = new THREE.InterleavedBufferAttribute(buffer, 4, 16);
+    if (stride >= 20) attrs.iD = new THREE.InterleavedBufferAttribute(b.buffer, 4, 16);
+    if (stride === 32) {
+      attrs.iE = new THREE.InterleavedBufferAttribute(b.buffer, 4, 20);
+      attrs.iF = new THREE.InterleavedBufferAttribute(b.buffer, 4, 24);
+      attrs.iG = new THREE.InterleavedBufferAttribute(b.buffer, 2, 28);
+    }
+    return attrs;
+  }
+
+  // The figures and blobs read the near band; disposing the old geometries frees
+  // the old GPU buffers.
+  function wireNear() {
+    const attrs = { ...rowAttrs(near), iTurn: new THREE.InterleavedBufferAttribute(near.buffer, 3, stride + 2) };
     const g = new THREE.InstancedBufferGeometry();
     for (const name of ['position', 'normal', 'aBone', 'aPart']) g.setAttribute(name, baseGeometry.getAttribute(name));
     for (const [name, a] of Object.entries(attrs)) g.setAttribute(name, a);
     const b = new THREE.InstancedBufferGeometry();
     b.setAttribute('position', blobBase.getAttribute('position'));
     b.setIndex(blobBase.getIndex());
-    for (const name of ['iPos', 'iVel', 'iA', 'iB', 'iC', 'iFade', ...(segment ? ['iD'] : [])]) b.setAttribute(name, attrs[name]);
-    // Disposing the old geometries frees the old GPU buffers.
+    for (const name of ['iPos', 'iVel', 'iA', 'iB', 'iC', 'iFade', ...(stride >= 20 ? ['iD'] : []), ...(stride === 32 ? ['iE', 'iF', 'iG'] : [])]) b.setAttribute(name, attrs[name]);
     mesh.geometry.dispose();
     blobs.geometry.dispose();
     mesh.geometry = g;
     blobs.geometry = b;
     blobsApply.geometry = b;
     blobsLamp.geometry = b;
-    boundArray = array;
-    boundVersion = version;
+  }
+
+  function wireFar() {
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute('position', quad.getAttribute('position'));
+    g.setAttribute('normal', quad.getAttribute('normal'));
+    g.setIndex(quad.getIndex());
+    for (const [name, a] of Object.entries(rowAttrs(far))) g.setAttribute(name, a);
+    impostors.geometry.dispose();
+    impostors.geometry = g;
+  }
+
+  // ---------------------------------------------------------------------
+  // Culling and bands, every drawn frame.
+
+  const frustum = new THREE.Frustum();
+  const viewProj = new THREE.Matrix4();
+  const planes = new Float64Array(24);
+  let nearRows = new Int32Array(0), nearDist = new Float32Array(0), farRows = new Int32Array(0);
+  const hist = new Int32Array(64);
+  const xz = [0, 0];
+
+  function sortBands(time) {
+    const a = boundArray, n = count;
+    const camera = ctx.camera;
+    camera.updateMatrixWorld();
+    viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(viewProj);
+    for (let k = 0; k < 6; k++) {
+      const pl = frustum.planes[k];
+      planes[k * 4] = pl.normal.x; planes[k * 4 + 1] = pl.normal.y; planes[k * 4 + 2] = pl.normal.z; planes[k * 4 + 3] = pl.constant;
+    }
+    const ex = camera.position.x, ey = camera.position.y, ez = camera.position.z;
+    const nearD = lodUniforms.uLodNear.value, farD = lodUniforms.uLodFar.value, far2 = farD * farD;
+    if (nearRows.length < n) {
+      nearRows = new Int32Array(n);
+      nearDist = new Float32Array(n);
+      farRows = new Int32Array(n);
+    }
+    let nn = 0, nf = 0;
+    for (let i = 0; i < n; i++) {
+      const o = i * stride;
+      // Hidden (indoors), unless still shrinking away at the door.
+      if (a[o + 14] < 0.01 && !(fade[i * 2 + 1] >= 0.01 && time - fade[i * 2] < 0.3)) continue;
+      const dt = rowDt(a, o, time);
+      let x = a[o] + a[o + 3] * dt, z = a[o + 2] + a[o + 5] * dt;
+      const y = a[o + 1] + a[o + 4] * dt + 1;
+      if (stride === 32 && a[o + 29] > 0 && time > a[o + 16]) { rowWindowAt(a, o, time, xz); x = xz[0]; z = xz[1]; }
+      const dx = x - ex, dy = y - ey, dz = z - ez, d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > far2) continue;
+      const d = Math.sqrt(d2);
+      const r = d < nearD ? CULL_NEAR : CULL_FAR;
+      let seen = true;
+      for (let k = 0; k < 24; k += 4) {
+        if (planes[k] * x + planes[k + 1] * y + planes[k + 2] * z + planes[k + 3] < -r) { seen = false; break; }
+      }
+      if (!seen) continue;
+      if (d < nearD) { nearRows[nn] = i; nearDist[nn++] = d; }
+      else farRows[nf++] = i;
+    }
+    // More near than the band holds: the nearest go in it, the rest are drawn far.
+    let cut = Infinity;
+    if (nn > nearCap) {
+      hist.fill(0);
+      for (let k = 0; k < nn; k++) hist[Math.min(63, (nearDist[k] / nearD * 64) | 0)]++;
+      let sum = 0, bin = 0;
+      for (; bin < 64 && sum + hist[bin] <= nearCap; bin++) sum += hist[bin];
+      cut = bin;
+      let room = nearCap - sum, kept = 0;
+      for (let k = 0; k < nn; k++) {
+        const b = Math.min(63, (nearDist[k] / nearD * 64) | 0);
+        if (b < cut || (b === cut && room-- > 0)) nearRows[kept++] = nearRows[k];
+        else farRows[nf++] = nearRows[k];
+      }
+      nn = kept;
+    }
+    fill(near, nearRows, nn, true);
+    if (nf > far.cap) {
+      far = band(far.floats, Math.max(nf, Math.ceil(far.cap * 1.5)));
+      wireFar();
+    }
+    fill(far, farRows, nf, false);
+    mesh.geometry.instanceCount = nn;
+    blobs.geometry.instanceCount = nn;
+    impostors.geometry.instanceCount = nf;
+  }
+
+  // Copies rows into a band's buffer (with their fade, and for the near band their
+  // turn) and uploads what was written.
+  function fill(b, rows, n, withTurn) {
+    const a = boundArray, out = b.array, fs = b.floats;
+    for (let k = 0; k < n; k++) {
+      const i = rows[k], o = i * stride, t = k * fs;
+      for (let j = 0; j < stride; j++) out[t + j] = a[o + j];
+      out[t + stride] = fade[i * 2];
+      out[t + stride + 1] = fade[i * 2 + 1];
+      if (withTurn) {
+        out[t + stride + 2] = turn[i * 3];
+        out[t + stride + 3] = turn[i * 3 + 1];
+        out[t + stride + 4] = turn[i * 3 + 2];
+      }
+    }
+    b.n = n;
+    if (n) {
+      b.buffer.clearUpdateRanges();
+      b.buffer.addUpdateRange(0, n * fs);
+      b.buffer.needsUpdate = true;
+    }
   }
 
   function update(view, frame) {
     lastView = view;
     const array = view?.people;
     if (!array || !array.length) {
-      mesh.visible = blobs.visible = blobsApply.visible = marker.visible = false;
+      mesh.visible = blobs.visible = blobsApply.visible = blobsLamp.visible = impostors.visible = marker.visible = false;
       count = 0;
       return;
     }
     if (array !== boundArray || (view.peopleVersion ?? 0) !== boundVersion) {
       bind(array, view.peopleVersion ?? 0, view.rowFloats);
-      view.peopleDirty = null; // a fresh buffer uploads whole
+      view.peopleDirty = null; // a fresh buffer starts settled
     }
     const dirty = view.peopleDirty;
     if (dirty && dirty.end > dirty.start) {
-      buffer.addUpdateRange(dirty.start * stride, (dirty.end - dirty.start) * stride);
-      buffer.needsUpdate = true;
-      markFades(array, dirty.start, Math.min(dirty.end, prevScale.length), frame.time);
+      markFades(array, dirty.list ? dirty.list.subarray(0, dirty.count) : rangeRows(dirty.start, Math.min(dirty.end, prevScale.length)), frame.time);
     }
     view.peopleDirty = null;
 
     count = Math.min(view.peopleCount ?? 0, Math.floor(array.length / stride));
-    mesh.geometry.instanceCount = count;
-    blobs.geometry.instanceCount = count;
-    mesh.visible = blobs.visible = blobsApply.visible = count > 0;
-    blobsLamp.visible = lampShadows && count > 0 && lampShadow.uLampN.value > 0 && grade.uniforms.uNight.value > 0.2;
+    sortBands(frame.time);
+    const nn = near.n, nf = far.n;
+    mesh.visible = blobs.visible = blobsApply.visible = nn > 0;
+    impostors.visible = nf > 0;
+    blobsLamp.visible = lampShadows && nn > 0 && lampShadow.uLampN.value > 0 && grade.uniforms.uNight.value > 0.2;
 
     updateMarker(frame.time);
     syncTurnEase();
@@ -1305,20 +1626,21 @@ export function createPeople(ctx) {
     });
   }
 
+  const rangeRows = (start, end) => Int32Array.from({ length: Math.max(0, end - start) }, (_, k) => start + k);
+
   /** Note rows that just went indoors or came out (door fade) or turned (heading ease). */
-  function markFades(array, start, end, now) {
-    const f = fadeAttr.array;
-    const tr = turnAttr.array;
-    let lo = Infinity, hi = -1, tlo = Infinity, thi = -1;
-    for (let i = start; i < end; i++) {
+  function markFades(array, rows, now) {
+    const f = fade;
+    const tr = turn;
+    for (let k = 0; k < rows.length; k++) {
+      const i = rows[k];
+      if (i >= prevScale.length) continue;
       const o = i * stride;
       const s = array[o + 14];
       const prev = prevScale[i];
       if ((s < 0.01) !== (prev < 0.01)) {
         f[i * 2] = now;
         f[i * 2 + 1] = prev;
-        if (i < lo) lo = i;
-        if (i > hi) hi = i;
       }
       prevScale[i] = s;
       // Heading change: restart the ease from what the walker shows right
@@ -1326,29 +1648,13 @@ export function createPeople(ctx) {
       const h = rowHeading(array, o);
       // An angler's line hangs to the water under the rod's tip.
       const w = lineWater(array, o, h);
-      if (w !== tr[i * 3 + 2]) {
-        tr[i * 3 + 2] = w;
-        if (i < tlo) tlo = i;
-        if (i > thi) thi = i;
-      }
+      tr[i * 3 + 2] = w;
       if (Math.abs(wrapAngle(h - turnTarget[i])) > 0.01) {
         tr[i * 3] = shownHeading(tr[i * 3], tr[i * 3 + 1], turnTarget[i], turnSlow[i], now);
         tr[i * 3 + 1] = now;
         turnTarget[i] = h;
         turnSlow[i] = Math.hypot(array[o + 3], array[o + 5]) > 0.05 ? 0 : 1;
-        if (i < tlo) tlo = i;
-        if (i > thi) thi = i;
       }
-    }
-    if (hi >= lo) {
-      fadeAttr.clearUpdateRanges();
-      fadeAttr.addUpdateRange(lo * 2, (hi - lo + 1) * 2);
-      fadeAttr.needsUpdate = true;
-    }
-    if (thi >= tlo) {
-      turnAttr.clearUpdateRanges();
-      turnAttr.addUpdateRange(tlo * 3, (thi - tlo + 1) * 3);
-      turnAttr.needsUpdate = true;
     }
   }
 
@@ -1368,8 +1674,15 @@ export function createPeople(ctx) {
     lampShadows = Boolean(q.lampShadows);
     castShadow = shadowMode === 'full' && q.shadowMapSize > 0;
     mesh.castShadow = castShadow;
-    const near = q.name === 'low' ? 90 : q.name === 'high' ? 140 : 120;
-    lodUniforms.uLodNear.value = near;
+    lodUniforms.uLodNear.value = q.name === 'low' ? 90 : q.name === 'high' ? 140 : 120;
+    const cap = NEAR_CAP[q.name] ?? NEAR_CAP.medium;
+    if (cap !== nearCap) {
+      nearCap = cap;
+      if (wiredStride > 0) {
+        near = band(stride + 5, nearCap);
+        wireNear();
+      }
+    }
     lodUniforms.uLodFar.value = q.name === 'low' ? 200 : q.name === 'high' ? 300 : 260;
     // Low tier: the simple round blob only, no cast (and no shadow-map taps).
     contactOnly = castShadow || q.name === 'low';
@@ -1399,7 +1712,7 @@ export function createPeople(ctx) {
   /** Seconds to extrapolate row o by at `time`: never past its waypoint. */
   function rowDt(a, o, time) {
     const t0 = a[o + 6];
-    const t1 = stride === 20 && a[o + 16] > t0 ? Math.min(time, a[o + 16]) : time;
+    const t1 = stride >= 20 && a[o + 16] > t0 ? Math.min(time, a[o + 16]) : time;
     return Math.min(3, Math.max(0, t1 - t0));
   }
 
@@ -1408,9 +1721,10 @@ export function createPeople(ctx) {
     const a = boundArray;
     const o = i * stride;
     const dt = rowDt(a, o, time);
-    const x = a[o] + a[o + 3] * dt;
-    const z = a[o + 2] + a[o + 5] * dt;
+    let x = a[o] + a[o + 3] * dt;
+    let z = a[o + 2] + a[o + 5] * dt;
     let y = a[o + 1] + a[o + 4] * dt;
+    if (stride === 32 && a[o + 29] > 0 && time > a[o + 16]) { rowWindowAt(a, o, time, xz); x = xz[0]; z = xz[1]; }
     const onDeck = stride >= 20 && a[o + 19] > 0.5;
     if (ground && !onDeck) {
       const g = ground.sample(x, z);
@@ -1543,8 +1857,13 @@ export function createPeople(ctx) {
     setSelected,
     selected: () => selectedId,
     count: () => count,
+    /** Walkers drawn last frame: {near, far}. */
+    drawn: () => ({ near: near?.n ?? 0, far: far?.n ?? 0 }),
     dispose() {
-      scene.remove(mesh, blobs, blobsApply, marker);
+      scene.remove(mesh, impostors, blobs, blobsApply, blobsLamp, marker);
+      impostors.geometry.dispose();
+      impostorMaterial.dispose();
+      quad.dispose();
       markerGeometry.dispose();
       markerMaterial.dispose();
       mesh.geometry.dispose();

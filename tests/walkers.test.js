@@ -84,7 +84,7 @@ function run(speed, ticks) {
         bad.wetExample ??= {id: p.id, x: p.x, z: p.z};
       }
       // Where the renderer draws this walker half a frame later.
-      const o = i * PERSON_STRIDE_EXTENDED;
+      const o = view.rowOf(p.id) * PERSON_STRIDE_EXTENDED;
       if (rows[o + 14] === 0) continue;   // indoors: not drawn
       const t = Math.min(now + FRAME / 2, rows[o + 16]) - rows[o + 6];
       const dx = rows[o] + rows[o + 3] * t, dz = rows[o + 2] + rows[o + 5] * t;

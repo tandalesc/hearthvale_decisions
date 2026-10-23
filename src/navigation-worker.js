@@ -4,7 +4,8 @@
 import { RouteScheduler } from './navigation.js';
 import { useTerrain } from './terrain.js';
 
-const scheduler = new RouteScheduler({ maxCache: 2048 });
+// As many searches waiting as the planner may have out (route-planner.js maxPending).
+const scheduler = new RouteScheduler({ maxCache: 2048, maxPending: 16384 });
 let running = false;
 
 function pump() {

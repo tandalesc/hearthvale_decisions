@@ -1,3 +1,56 @@
+# Crowds, stage 1: toward 10,000 walkers (2026-10-22)
+
+**What changed.** Stage 1 of `docs/design/crowd-scale.md` §5, on its own branch. Measured with `scripts/benchmark-crowd.js` (new: the city fixture with every household k times its size, everyone walking, tick by tick as the sim worker runs it) and `scripts/benchmark-people-gpu.js` (new: the people's draws shown against hidden, GPU-timed, in headless Chrome on the render dev page's `&crowd=k` city). k = 2 is about 10k walkers, k = 4 about 20k. M5 Pro. The machine was shared with other sessions' jobs throughout (load average 3 to 16), so before/after figures come from runs made side by side, and absolute times differ between rows.
+
+Exact (towns bit-identical: `benchmark-city` city `703901ab5ff4f9b6`, town `09b227984c155a62`, `benchmark-crowd` k = 1, 2, 4, and `town-hash` seeds 66, 7, 12 unchanged):
+
+| commit | change | measured |
+|---|---|---|
+| `288966f` | Stable row slot per person; a dirty row *list* (render-view, mirror, renderer) | rows per step at k = 2: 9,660 → 1,856; 792 → 160 KB a step |
+| `66286e2` | Footprint checks by tile: a walk certified clear as lines (not only at samples) over its next 24 units is let off while no tile under it changes | `checkFootprints` −27 % of its CPU at k = 2 (1,445 → 1,054 ms per 600 ticks); step −12 % at k = 2 and −13 % at k = 4. A shadow test runs the full checks on every walker let off: 0 differences in 1.04 M |
+| `7be28f4` | Grid searches for `assignBuilders` and `nearestOf` (ties go back to the scan) | `assignBuilders` 3.2 → 1.1 ms at 10k walkers. `nearestOf` still scans in the city (at most 46 buildings of a type) |
+| `442e2df` | Culled, banded drawing: a capped near band (3,000 High, 1,500 Medium, 800 Low) of full figures with blob shadows, and two-triangle impostors out to `uLodFar` | people GPU at 10k: 1.30 → 0.06 ms (overview), 1.49 → 0.20 (close), 1.48 → 0.22 (mid range); at 20k: 2.65 → 0.09, 3.32 → 0.47, 2.81 → 0.38. Main thread: 0.15–0.25 ms a frame to cull and fill at 10k, 0.4 at 20k |
+| `cc98b58` | 32-float rows carrying the next three corners (render only, exact) | rows per step at k = 2: 1,857 → 995; `view.sync` −15 % |
+
+New baselines:
+
+| commit | change | measured | new `benchmark-city` hashes |
+|---|---|---|---|
+| `2d747c8`, `bbcb01a` | Route caches and flow fields outlive nav-grid changes (kept while passable; prune looks only near cells that closed) | at k = 2: cache 1.3 % → 33 % of requests, flow fields 21 %; nodes expanded 18 M → 6 M; walkers left waiting 629 → 252 | city `d5235fc460ca86dd`, town `18324e9a337f1166` |
+| `031e7f4` | `Float32Array` routes in the state and in saves; save version 3, version 2 migrated | at 10k walkers: save 45.5 → 23.0 MB (4.0 → 1.8 KB a walker), `serialize` 214 → 62 ms, heap 82 → 65 MB | city `e07e4015fc9ebf42`, town `1ec82c74725b9bdc` |
+| `77ea87a` | Cold start: 16,384 route requests at once (was 1,024), in order of asking | 10k new walkers, search at 10 ms a tick: half still waiting at tick 80, not 161; 5,016 moving at tick 100, not 2,646; 0 refusals, not 76,045 | city `f3407e9466d6dda9`, town unchanged |
+
+`town-hash` decade hashes change only by the save's version field from `031e7f4` on (identical with it read as 2): headless towns plan no walks.
+
+**Not committed: shared route post-processing** (item 5). Walkers given the same cell path shared one centre line (decks, rounding, skirting), and each took its lane from one full lane worked out per side. One path is delivered about 2.3 times in the frozen town and fewer in a growing one. A new shared entry with its first lane costs 188 µs against 142 µs for a walker's own pipeline, and it breaks even at about three walkers a path. Measured: delivery −15 % in the frozen town, +20 % in the growing one. The patch is kept outside the repo, in the session notes.
+
+**All of it together, k = 2, CPU profile, run side by side with `b907b29`:**
+
+| | frozen town | full sim |
+|---|---:|---:|
+| total, ms a tick | 27.3 → 24.9 | 49.2 → 45.3 |
+| search (the nav worker's work in the game) | 7.0 → 4.7 | 15.4 → 11.9 |
+| the rest (the sim worker's) | 20.4 → 20.2 | 33.7 → 33.4 |
+
+The sim worker does about 7 % more trips in the same time, because fewer walkers stand waiting. Cache hits deliver inside the tick, so their delivery now counts in the step.
+
+**Against the 10k targets (§4.1).**
+- Drawing meets them: 0.06–0.2 ms of people GPU at 10k on desktop.
+- Rows meet them: about 1,000 a step at 10k, against the target of about 600.
+- The sim worker does not. It needs about 18–20 ms a tick at 10k (quiet machine, full sim), against 5–7, so it sustains about 10×, not 20×. The doc's budget assumed deliveries fall from 3.7 to 1.3 ms through shared delivery, which this town's reuse does not allow. It also assumed footprint changes at about 2 ms, but they still cost about 3 ms. What is left, at k = 2 (full sim, ms a tick, loaded machine):
+  - delivery (`setRoute`): 7;
+  - `move`: 5;
+  - `checkFootprints`: 3;
+  - nav-grid rebuilds: 1.8;
+  - `view.sync`: 2.
+
+  The rebuilds run every couple of ticks: `roads.version` moves 8 a tick in the scaled city. That is probably the 4× `WALKER_SCALE` wear of §2.7.
+- Phones are not measured.
+
+**Not done here.** Route admission by what is on screen (§5 item 9): it would make the sim depend on the camera.
+
+---
+
 # Data locality, second pass: option rows, snapshot keys, the mirror, the river (2026-10-22)
 
 **What changed.** These are items 7, 9, 10 and 11 of `docs/design/data-locality.md`.

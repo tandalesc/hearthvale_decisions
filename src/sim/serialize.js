@@ -1,6 +1,8 @@
-// Saves (version 2). Plain JSON; typed arrays become {"$typed": "Float32Array", "b64": "..."}.
+// Saves (version 3). Plain JSON; typed arrays become {"$typed": "Float32Array", "b64": "..."}.
 // Transient fields (state.slices and any key starting with "_") are not saved.
 // Version 1 saves are refused with SaveVersionError so the UI can start a new town.
+// Version 2 saves open: their walkers' routes (lists of doubles) become Float32Arrays,
+// as version 3 keeps them (people.js toRoute).
 
 import {SAVE_VERSION, emptyState} from './state.js';
 import {runPhase} from './hooks.js';
@@ -44,6 +46,7 @@ export function restore(raw, {services = {}} = {}) {
     throw new SaveFormatError('The file is not valid JSON.');
   }
   if (!data || typeof data !== 'object') throw new SaveFormatError('The file is empty.');
+  if (data.version === 2) migrateRoutes(data);
   if (data.version !== SAVE_VERSION) {
     if (data.version == null || data.version < SAVE_VERSION) throw new SaveVersionError(data.version ?? 1);
     throw new SaveFormatError(`Save version ${data.version} is newer than this game.`);
@@ -56,6 +59,16 @@ export function restore(raw, {services = {}} = {}) {
   const state = {...emptyState(data.seed), terrainSeed: data.terrainSeed ?? null, terrainVersion: data.terrainVersion ?? 1, terrainArchetype: data.terrainArchetype ?? null, ...data};
   runPhase('restore', state, {services});
   return state;
+}
+
+// Version 2 -> 3: walkers' routes as Float32Arrays. The town then goes on from there,
+// a little differently from how version 2 would have (waypoints rounded to float32).
+function migrateRoutes(data) {
+  for (const p of data.people ?? []) {
+    const t = p?.task;
+    if (t && Array.isArray(t.route)) t.route = Float32Array.from(t.route);
+  }
+  data.version = 3;
 }
 
 function reviveTyped(key, value) {
