@@ -11,7 +11,8 @@ export function createCardNarration(card) {
   const quote = h('blockquote.card-flavour', {hidden: true});
   const quoteText = h('p.card-quote-text');
   quote.append(quoteText);
-  body.append(explanation, quote);
+  const placeholder = h('div.card-narration-placeholder.shimmer', {hidden: true, 'aria-hidden': 'true'}, h('i'), h('i'));
+  body.append(explanation, quote, placeholder);
   const toggle = h('button.icon-btn.card-narration-toggle', {type: 'button', hidden: true, 'aria-controls': body.id});
   const loading = h('span.card-narration-loading', {'aria-hidden': 'true', hidden: true}, h('i'), h('i'), h('i'));
   const status = h('span.sr-only.card-prose-status', {role: 'status', 'aria-live': 'polite'});
@@ -23,6 +24,7 @@ export function createCardNarration(card) {
     const generated = pending ? latest.streamingProse.why : latest.prose?.source !== 'template' ? latest.prose?.why : '';
     const text = typeof generated === 'string' && generated !== latest.why ? generated.trim() : '';
     const showQuote = Boolean(text) && preferred === 'quote';
+    const waiting = pending && !text && preferred === 'quote';
     const nextSignature = JSON.stringify([showQuote, showQuote ? text : latest.why, Boolean(text), pending]);
     if (nextSignature === signature) return;
     const previousHeight = body.getBoundingClientRect().height;
@@ -31,13 +33,14 @@ export function createCardNarration(card) {
     signature = nextSignature;
     setText(explanation, latest.why ?? '');
     setText(quoteText, text);
-    explanation.hidden = showQuote || !latest.why;
+    explanation.hidden = waiting || showQuote || !latest.why;
+    placeholder.hidden = !waiting;
     quote.hidden = !showQuote;
     el.classList.toggle('has-quote', Boolean(text));
     el.classList.toggle('is-loading', pending);
-    el.dataset.view = showQuote ? 'quote' : 'explanation';
+    el.dataset.view = waiting ? 'loading' : showQuote ? 'quote' : 'explanation';
     setAttr(body, 'aria-busy', pending ? 'true' : null);
-    loading.hidden = !pending;
+    loading.hidden = !pending || waiting;
     // Preserve a useful focus destination if a preview is rejected while the
     // player is using its swap control.
     if (!text && document.activeElement === toggle) explanation.focus({preventScroll: true});

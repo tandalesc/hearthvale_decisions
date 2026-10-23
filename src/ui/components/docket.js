@@ -5,6 +5,7 @@ import {h, setText} from '../dom.js';
 import {icon} from '../icons.js';
 import {collapse, enter, fold, animate, T, EASE} from '../motion.js';
 import {createCard, createNextCard} from './card.js';
+import {isPaid} from '../../entitlements.js';
 
 export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town gets on with its day.'], stuckAbove = () => 0} = {}) {
   const el = h('div.docket');
@@ -16,6 +17,7 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
 
   const full = new Map();
   const next = new Map();
+  let waiting = null;
   let cards = [], active = null, phone = false, lastSig = '', visible = false, requested = null;
 
   pager.querySelector('.prev').addEventListener('click', () => step(-1));
@@ -34,7 +36,15 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
     ctx.sound?.('tick');
   }
 
+  // The worker's first pending snapshot arrives after the card is drawn.
+  // Bridge that gap locally so Plus never flashes the summary before loading.
+  function presented(card) {
+    return waiting?.id === card.id && waiting.pending && !card.prose && !card.streamingProse
+      ? {...card, streamingProse: {pending: true, why: ''}} : card;
+  }
+
   function fullNode(card) {
+    card = presented(card);
     let node = full.get(card.id);
     // A node still folding away cannot come back; build it afresh.
     if (node?.dataset.leaving) node = null;
@@ -64,7 +74,15 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
     const current = cards.find((c) => c.id === active);
     if (visible && current && requested !== current.id) {
       requested = current.id;
-      Promise.resolve(ctx.requestCardProse?.(current.id)).catch(() => {});
+      const request = {id: current.id, pending: isPaid(ctx.entitlement?.()) && !current.prose};
+      waiting = request;
+      let pending;
+      try { pending = ctx.requestCardProse?.(current.id); } catch { request.pending = false; }
+      Promise.resolve(pending).catch(() => {}).finally(() => {
+        // The next snapshot supplies saved prose or the fallback. Do not
+        // redraw from the older snapshot when the request promise settles.
+        request.pending = false;
+      });
     }
     const others = phone ? [] : cards.filter((c) => c.id !== active);
     const desired = current ? [fullNode(current), ...others.map(nextNode)] : [];
@@ -138,7 +156,7 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
         lastSig = sig;
         render(0);
       } else {
-        for (const card of cards) full.get(card.id)?.__update(card);
+        for (const card of cards) full.get(card.id)?.__update(presented(card));
       }
     },
     focus(id) {
@@ -147,7 +165,7 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
       render(0);
       stack.querySelector('.card:not(.is-next) .option')?.focus({preventScroll: false});
     },
-    setVisible(value) { visible = value; if (!value) { requested = null; ctx.cancelCardProse?.(); } else render(); },
+    setVisible(value) { visible = value; if (!value) { requested = null; waiting = null; ctx.cancelCardProse?.(); } else render(); },
     get count() { return cards.length; },
     get active() { return active; },
     // Show a different set of cards at once (a filter changed): no fold-away
@@ -158,6 +176,7 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
       full.clear();
       next.clear();
       active = null;
+      waiting = null;
       lastSig = '';
     },
   };
