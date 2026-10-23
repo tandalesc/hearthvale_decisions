@@ -181,3 +181,18 @@ test('restore retry uses the persisted operation ID after its response is lost',
   assert.equal(f.operationsMap.has(key), false);
   assert.equal(f.slots.get('device').meta.cloud.alice.revision, 3);
 });
+
+
+test('blocked localStorage does not prevent offline play from starting', async () => {
+  const original=Object.getOwnPropertyDescriptor(globalThis,'localStorage');
+  Object.defineProperty(globalThis,'localStorage',{configurable:true,get(){throw new Error('Storage blocked');}});
+  try {
+    const client=createCloudSaves({saves:{},session:()=>({authenticated:false})});
+    assert.equal(client.enabled(),false);
+    assert.equal(await client.prepare('local'),'local');
+    await client.flush('local');
+  } finally {
+    if(original)Object.defineProperty(globalThis,'localStorage',original);
+    else delete globalThis.localStorage;
+  }
+});
