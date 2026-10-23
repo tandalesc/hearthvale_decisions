@@ -18,7 +18,7 @@ test('email sign-in has a focused form and a clear sent state', async ({page}) =
   await expect(page.getByRole('heading',{name:'Check your email'})).toBeVisible();
   await expect(page.getByRole('textbox',{name:'6-digit sign-in code'})).toBeFocused();
   expect(calls).toBe(1);
-  await expect(page.getByText('Free play needs no account. Towns stay on this device.')).toBeVisible();
+  await expect(page.locator('.account-foot')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Sign in',exact:true})).toBeFocused();

@@ -173,6 +173,25 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
   let warmPending = true; // compile every material once the town is built
   let warmUntil = -1;     // renderer time until which the first draw waits for that compile
   let drawnOnce = false;
+
+  // iOS drops the WebGL context (a backgrounded home-screen app, memory
+  // pressure). Three keeps the context restorable and re-creates its own GPU
+  // copies on restore. Ours need help: textures that upload only changed rows
+  // must go up whole first (a rows-only first upload leaves the rest zero: no
+  // ground at all), and the shadow map only redraws when asked.
+  let contextLost = false;
+  let contextLosses = 0;
+  const onContextLost = () => { contextLost = true; contextLosses++; };
+  const onContextRestored = () => {
+    contextLost = false;
+    ground.reupload();
+    roads.reupload();
+    lights.markDirty();
+    warmPending = true;
+    forceFrame = true;
+  };
+  canvas.addEventListener('webglcontextlost', onContextLost);
+  canvas.addEventListener('webglcontextrestored', onContextRestored);
   let firstFrame = []; // onFirstFrame callbacks, until the first frame is drawn (then null)
   const WARM_WAIT_S = 4;
   let footVersion = -1; // buildings.version() last rasterised into the road mask
@@ -297,7 +316,8 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
   }
 
   function update(view, time, dt) {
-    if (disposed) return;
+    // Nothing can reach the GPU until the context is back.
+    if (disposed || contextLost) return;
     const t0 = performance.now();
     lastView = view;
     if (terrainKey() !== builtSeed) rebuildTerrain();
@@ -597,10 +617,12 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
     camera: rig,
     /** Dev and test access (not part of the contract). */
     get internals() {
-      return { scene, renderer, grade, lights, buildings, water, terrain, ground, roads, shadowSurface: ctx.shadowSurface };
+      return { scene, renderer, grade, lights, buildings, water, terrain, ground, roads, shadowSurface: ctx.shadowSurface, contextLost: () => contextLost, contextLosses: () => contextLosses };
     },
     dispose() {
       disposed = true;
+      canvas.removeEventListener('webglcontextlost', onContextLost);
+      canvas.removeEventListener('webglcontextrestored', onContextRestored);
       resizeObserver?.disconnect();
       removeEventListener('resize', resize);
       removeEventListener('orientationchange', onOrientation);

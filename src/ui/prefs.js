@@ -13,6 +13,7 @@ export const DEFAULT_PREFS = {
   textSize: 'normal',       // normal | large
   master: 0.8, ambience: 0.6, ui: 0.7, muted: false,
   moments: 'fast',          // fast: blocking title cards at 3× and 5× only | always | never
+  requests: 'notify',       // notify: a notice, the town keeps going | pause: pause and open the Council at each new request
   settingsTab: 'game',      // the Settings tab opened last
   approvalTab: 'faction',   // the People view's Approval breakdown shown last
   binderWidth: null,        // px, the panel's dragged width; null is the layout default

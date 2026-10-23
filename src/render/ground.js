@@ -436,6 +436,13 @@ export function createGround() {
     setEmbankments,
     flush,
     rebuild: fillNatural,
+    /** The GPU copy is gone (WebGL context restored): send the whole texture again. */
+    reupload() {
+      texture.clearUpdateRanges();
+      texture.needsUpdate = true;
+      fullPending = true;
+      dirty = null;
+    },
     version: () => version,
     dispose: () => texture.dispose(),
   };

@@ -94,6 +94,28 @@ test('changes before the ground texture first reaches the GPU ride the whole upl
   assert.equal(tex.updateRanges.length, 0, 'after a rebuild: the whole texture');
 });
 
+test('a restored WebGL context sends the whole ground texture again before any rows', () => {
+  const g = createGround();
+  const tex = g.uniforms.tGround.value;
+  g.flush();
+  tex.onUpdate(tex);
+  // A pad changes, its rows queue, then the context is lost and restored.
+  g.setPad(1, { x: -40, z: 30, w: 8, d: 6, y: 5 });
+  g.flush();
+  assert.ok(tex.updateRanges.length > 0);
+  const before = tex.version;
+  g.reupload();
+  assert.equal(tex.updateRanges.length, 0, 'queued rows dropped');
+  assert.ok(tex.version > before, 'the texture is marked for upload');
+  g.setPad(1, { x: -40, z: 30, w: 8, d: 6, y: 6 });
+  g.flush();
+  assert.equal(tex.updateRanges.length, 0, 'changes ride the whole upload');
+  tex.onUpdate(tex);
+  g.setPad(1, { x: -40, z: 30, w: 8, d: 6, y: 7 });
+  g.flush();
+  assert.ok(tex.updateRanges.length > 0, 'rows again once it has gone up');
+});
+
 test('neighbouring pads blend by weight: order does not matter and they meet halfway', () => {
   // Two lots 2 m apart at different heights (their blend rings overlap).
   const a = { x: -100, z: 50, w: 6, d: 6, y: 3 };

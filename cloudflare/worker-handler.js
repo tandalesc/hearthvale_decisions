@@ -34,7 +34,7 @@ export default {
   const respond=async(status,body,headers={})=>json(status,body,{'Set-Cookie':cookie(await signSession(env,account)),...headers});
   const billing=account.email?await billingState(env,account.id,'read',{key:'billing'}):null;
   const paid=Boolean(account.email&&isPaid(billing));
-  if(path==='/api/session'&&request.method==='GET') return respond(200,{tier:paid?'paid':'free',authenticated:Boolean(account.email),...(account.email?{email:account.email,cloudAccountId:await hmac(env.AUTH_SECRET,`cloud-scope:${account.id}`)}:{}),billingEnabled:billingEnabled(env),limits:{narrationsPerMonth:cap(env,'PAID_NARRATIONS_MONTHLY',120),teacherQuestionsPerMonth:cap(env,'PAID_TEACHER_MONTHLY',1000),cloudTowns:paid?10:1,cloudSaveBytes:16*1024*1024}});
+  if(path==='/api/session'&&request.method==='GET') return respond(200,{tier:paid?'paid':'free',authenticated:Boolean(account.email),...(account.email?{email:account.email,cloudAccountId:await hmac(env.AUTH_SECRET,`cloud-scope:${account.id}`)}:{}),billingEnabled:billingEnabled(env),limits:{narrationsPerMonth:cap(env,'PAID_NARRATIONS_MONTHLY',2000),teacherQuestionsPerMonth:cap(env,'PAID_TEACHER_MONTHLY',1000),cloudTowns:paid?10:1,cloudSaveBytes:16*1024*1024}});
   if(path==='/api/cloud/recover'||path==='/api/cloud/towns'||path.startsWith('/api/cloud/towns/')) {
    if(!account.email) return respond(401,{error:'Sign in first'});
    const cloudAccountId=await hmac(env.AUTH_SECRET,`cloud-scope:${account.id}`);
@@ -117,7 +117,7 @@ export default {
    const streamHeaders=wantsStream?{'Set-Cookie':cookie(await signSession(env,account))}:null;
    if(cached?.fingerprint===fingerprint&&cached.expires>Date.now()) {logNarrationOutcome('cache',Date.now());return wantsStream?narrationStream({request,ctx,headers:streamHeaders,cached:cached.value}):respond(200,cached.value);}
    if(!env.ANTHROPIC_API_KEY) return respond(503,{error:'Narration unavailable',fallback:true});
-   if(!await allowance(env,account.id,'narration',1,cap(env,'PAID_NARRATIONS_MONTHLY',120),cap(env,'GLOBAL_NARRATIONS_MONTHLY',10000))) return respond(429,{error:'Narration budget used',fallback:true});
+   if(!await allowance(env,account.id,'narration',1,cap(env,'PAID_NARRATIONS_MONTHLY',2000),cap(env,'GLOBAL_NARRATIONS_MONTHLY',200000))) return respond(429,{error:'Narration budget used',fallback:true});
    const save=value=>state(env,account.id,'write',{key:'narration-cache',value:{fingerprint,value,expires:Date.now()+86400000}});
    const run=options=>observeNarration({run:callbacks=>narrateAnthropic(facts,env,callbacks),...options});
    if(wantsStream) return narrationStream({request,ctx,headers:streamHeaders,run,onComplete:save});

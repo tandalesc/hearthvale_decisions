@@ -169,6 +169,7 @@ export function createApp(host) {
     onMomentClosed: () => { if (momentPaused && !moments.isOpen) host.setSpeed(momentPaused); momentPaused = 0; syncLabels(); },
   });
   let momentPaused = 0;
+  let requestPaused = 0; // the pace a new request paused ("Pause and open"), put back when the Council closes
   // The Council. The town keeps its pace while it is open; the time controls
   // stay in reach for a player who wants to stop and think.
   const council = createCouncil({
@@ -189,6 +190,8 @@ export function createApp(host) {
       refresh(true);
     },
     onClose: () => {
+      if (requestPaused && !host.speed()) host.setSpeed(requestPaused);
+      requestPaused = 0;
       notices.setHeld(false);
       toggleClass(root, 'council-open', false);
       if (layout !== 'phone') audio?.play('tick');
@@ -649,6 +652,14 @@ export function createApp(host) {
     // Budgets have their season's notice; cards an adviser will answer wait in the Council.
     added = added.filter((c) => c.kind !== 'budget' && !c.advice?.act);
     if (!added.length) return;
+    // "Pause and open" (Settings): stop the town and show the request now.
+    // The Council puts the pace back when it closes (unless the player has).
+    if (prefs.get('requests') === 'pause' && !moments.isOpen) {
+      const speed = host.speed();
+      if (speed) { requestPaused = speed; host.setSpeed(0); }
+      if (!council.isOpen || (layout === 'phone' && sheet.index === 0)) openCard(added[0]);
+      return;
+    }
     if (council.isOpen && layout !== 'phone') return;
     if (council.isOpen && layout === 'phone' && sheet.index > 0) return;
     const first = added[0];

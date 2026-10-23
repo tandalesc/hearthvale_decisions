@@ -21,7 +21,6 @@
 .account-status:empty { display: none; }
 .account-status { color: var(--ink-2, #5a6a55); font-size: 13px; }
 .account-status.is-error { color: var(--danger, #9e493c); }
-.account-foot { padding-top: 14px; border-top: 1px solid var(--line, #dde0cf); color: var(--ink-2, #5a6a55); font-size: 11px; text-align: center; }
 .account-features { padding-left: 20px; margin: 0 0 4px; display: grid; gap: 6px; }
 .account-plans { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .account-plan { padding: 16px 12px; border: 1px solid var(--line-2, #c7ccb8); border-radius: 12px; background: var(--paper-card, #fffef9); color: inherit; text-align: left; cursor: pointer; }

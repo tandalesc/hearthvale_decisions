@@ -51,7 +51,6 @@ export function createAccount(initialSession) {
       const status = h('p.account-status', {role: 'status', 'aria-live': 'polite'}, notice || '');
       const title = (name, intro) => [h('h2', {id: 'account-title', tabindex: '-1'}, name), h('p.account-intro', null, intro)];
       const button = (label, fn, primary = false) => h('button.btn', {type: 'button', class: primary ? 'btn-primary' : 'btn-secondary', onclick: fn}, label);
-      const foot = h('p.account-foot', null, 'Free play needs no account. Sign in for one cloud town; local saves stay on this device.');
       async function post(path, body) {
         const response = await fetch(path, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
         const data = await response.json();
@@ -83,7 +82,7 @@ export function createAccount(initialSession) {
             location.assign('/?signin=success');
           }, 'Signing you in…');
         });
-        content.append(form, status, h('p.account-status', null, 'The code and link expire in 15 minutes. Use either one.'), button('Request a new email', () => { pending = null; rememberSignin(null); render('signin', emailValue); }), button('Use a different email', () => { pending = null; rememberSignin(null); render('signin'); }), button('Back to my town', close), foot);
+        content.append(form, status, h('p.account-status', null, 'The code and link expire in 15 minutes. Use either one.'), button('Request a new email', () => { pending = null; rememberSignin(null); render('signin', emailValue); }), button('Use a different email', () => { pending = null; rememberSignin(null); render('signin'); }), button('Back to my town', close));
         return;
       }
       if (page === 'signin') {
@@ -96,7 +95,7 @@ export function createAccount(initialSession) {
           if (!email.reportValidity()) return;
           pending = {email: email.value.trim(), challenge: null, expires: Date.now() + 900000};
           rememberSignin(pending); render('sent', pending.email);
-        }), button('Explore Hearthvale Plus', () => render('plans')), foot);
+        }), button('Explore Hearthvale Plus', () => render('plans')));
         return;
       }
       if (page === 'plans') {
@@ -121,7 +120,7 @@ export function createAccount(initialSession) {
           if (fresh.authenticated && fresh.tier === 'paid') { location.reload(); return; }
           status.textContent = 'Your payment is still being confirmed. Give it a moment, then refresh access again.';
         }, 'Checking your plan…')));
-        content.append(button('Keep playing for free', close), foot);
+        content.append(button('Keep playing for free', close));
         return;
       }
       const paid = session.tier === 'paid';
@@ -130,7 +129,7 @@ export function createAccount(initialSession) {
         content.append(h('p', null, 'Your current tier: Hearthvale Plus.'), benefits());
         if (session.billingEnabled) content.append(button('Manage subscription', () => run(async () => location.assign((await post('/api/billing/portal', {})).url), 'Opening your subscription…'), true));
       } else content.append(h('p', null, 'You can keep playing for free, or give your town a little more with Plus.'), button('Explore Hearthvale Plus', () => render('plans'), true));
-      content.append(button('Sign out', () => run(async () => { await post('/api/logout', {}); location.reload(); }, 'Signing out…')), status, foot);
+      content.append(button('Sign out', () => run(async () => { await post('/api/logout', {}); location.reload(); }, 'Signing out…')), status);
     }
   }
   return {open, close, update(next) { const changed = session.authenticated !== next.authenticated || session.tier !== next.tier; session = next; if (next.authenticated) { pending = null; rememberSignin(null); } if (changed && dialog?.open) refreshView?.(); }};
