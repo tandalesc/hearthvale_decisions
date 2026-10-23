@@ -617,7 +617,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
     camera: rig,
     /** Dev and test access (not part of the contract). */
     get internals() {
-      return { scene, renderer, grade, lights, buildings, water, terrain, ground, roads, shadowSurface: ctx.shadowSurface, contextLost: () => contextLost, contextLosses: () => contextLosses };
+      return { scene, renderer, grade, lights, buildings, water, terrain, ground, roads, people, shadowSurface: ctx.shadowSurface, contextLost: () => contextLost, contextLosses: () => contextLosses };
     },
     dispose() {
       disposed = true;

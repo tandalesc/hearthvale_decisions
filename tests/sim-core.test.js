@@ -30,7 +30,7 @@ const runTicks = (s, n, services = {}, options = {}) => {
 
 test('a new hamlet has about 28 people in 7 households, huts, a moot hall and no roads', () => {
   const s = createState(11);
-  assert.equal(s.version, 2);
+  assert.equal(s.version, 3);
   assert.equal(s.households.length, 7);
   assert.equal(s.indicators.pop, 28);
   assert.equal(s.people.length, 28);
@@ -394,6 +394,8 @@ test('decide uses pooled answers when a system offers them, local priors otherwi
   assert.equal(sampleDist([0, 0, 1], 0.2), 2);
 });
 
+const range = (d) => ({start: d.start, end: d.end});
+
 // What the renderer does after reading a sync.
 const consume = (view) => {
   view.peopleDirty = null;
@@ -405,7 +407,8 @@ test('render view: rows, extrapolation, dirty ranges and building events', () =>
   const view = createRenderView(s);
   view.sync(s, {now: 10, speed: 1});
   assert.equal(view.peopleCount, s.people.length);
-  assert.deepEqual({...view.peopleDirty}, {start: 0, end: s.people.length});
+  assert.deepEqual(range(view.peopleDirty), {start: 0, end: s.people.length});
+  assert.equal(view.peopleDirty.count, s.people.length);
   assert.equal(view.buildingEvents.length, s.buildings.length);
   assert.ok(view.buildingEvents.every((e) => e.kind === 'add'));
   assert.equal(view.bridges.length, s.buildings.filter((b) => b.type === 'bridge' && !b.collapsed).length, 'every standing bridge (a fallen one is not drawn)');
@@ -421,7 +424,7 @@ test('render view: rows, extrapolation, dirty ranges and building events', () =>
     for (let k = 0; k < view.rowFloats; k++) if (view.people[o + k] !== rows[o + k]) same = false;
     if (!same) assert.ok(view.rowFloats > 16 && rows[o + 16] > 10 && rows[o + 16] <= 10.016, `row ${i} renewed with no corner due`);
   }
-  if (view.peopleDirty) assert.ok(view.peopleDirty.end - view.peopleDirty.start < view.peopleCount / 10, 'nothing changed, little to upload');
+  if (view.peopleDirty) assert.ok(view.peopleDirty.count < view.peopleCount / 10, 'nothing changed, little to upload');
   assert.equal(view.buildingEvents.length, 0);
 
   runTicks(s, 30);
@@ -432,7 +435,7 @@ test('render view: rows, extrapolation, dirty ranges and building events', () =>
   const i = s.people.findIndex((p) => p.speed > 0 && p.task && p.task.route.length - p.task.seg >= 2);
   assert.ok(i >= 0);
   const p = s.people[i];
-  const o = i * view.rowFloats;
+  const o = view.rowOf(p.id) * view.rowFloats;
   const rev = p.rev;
   stepTick(s, 0.1);
   if (p.rev === rev) {
@@ -460,7 +463,7 @@ test('render view: rows, extrapolation, dirty ranges and building events', () =>
 
   // A speed change rewrites every row; pausing zeroes velocities.
   view.sync(s, {now: 15, speed: 0});
-  assert.deepEqual({...view.peopleDirty}, {start: 0, end: s.people.length});
+  assert.equal(view.peopleDirty.count, s.people.length);
   for (let k = 0; k < view.peopleCount; k++) assert.equal(view.people[k * view.rowFloats + 3], 0);
 });
 
@@ -499,11 +502,12 @@ test('performance: stepTick at 3,000 walkers stays under budget', () => {
     routes.tick?.(s);
   }
   // CPU time of this process, measured against a fixed reference job (serialising
-  // this city) in the same run: a busy or slower machine stretches both alike, so
-  // the budget holds anywhere and still catches a stepTick that got twice as slow.
-  // (On an M5 Pro, quiet: stepTick about 0.065 of the reference on average, 0.25 at p95.)
+  // this city without its walkers, whose routes are typed arrays that save quickly)
+  // in the same run: a busy or slower machine stretches both alike, so the budget
+  // holds anywhere and still catches a stepTick that got twice as slow.
+  // (On an M5 Pro: stepTick about 0.42 of the reference on average, 1.2 at p95.)
   const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
-  const reference = () => { const t = cpuMs(); for (let k = 0; k < 3; k++) serialize(s); return (cpuMs() - t) / 3; };
+  const reference = () => { const t = cpuMs(); for (let k = 0; k < 3; k++) serialize({...s, people: []}); return (cpuMs() - t) / 3; };
   const ref0 = reference();
   const times = [];
   for (let i = 0; i < 600; i++) {
@@ -517,6 +521,26 @@ test('performance: stepTick at 3,000 walkers stays under budget', () => {
   const mean = times.reduce((a, b) => a + b, 0) / times.length;
   const p95 = times[Math.floor(times.length * 0.95)];
   const msg = (what, v, limit) => `${what} ${v.toFixed(2)} ms of CPU, ${(v / ref).toFixed(3)} of the reference (${ref.toFixed(1)} ms); limit ${limit}`;
-  assert.ok(mean < 0.12 * ref, msg('mean', mean, 0.12));
-  assert.ok(p95 < 0.45 * ref, msg('p95', p95, 0.45));
+  assert.ok(mean < 0.8 * ref, msg('mean', mean, 0.8));
+  assert.ok(p95 < 2.2 * ref, msg('p95', p95, 2.2));
+});
+
+test('walkers keep their routes as Float32Arrays, and a version 2 save opens with them so', async () => {
+  const {restore, serialize} = await import('../src/sim/serialize.js');
+  const {createRoutePlanner} = await import('../src/route-planner.js');
+  const s = fixtureState('town');
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
+  for (let i = 0; i < 120; i++) { routes.tick(s, 1e9); stepTick(s, 0.1, {routes}); }
+  const walking = s.people.filter((p) => p.task?.route?.length >= 4);
+  assert.ok(walking.length > 20);
+  assert.ok(walking.every((p) => p.task.route instanceof Float32Array));
+  const text = serialize(s);
+  const again = restore(text);
+  assert.equal(serialize(again), text, 'round trip');
+  // The same town written as version 2 did: routes as plain lists of numbers.
+  const old = JSON.parse(text, (k, v) => (v && v.$typed === 'Float32Array' && k === 'route' ? Array.from(new Float32Array(Uint8Array.from(Buffer.from(v.b64, 'base64')).buffer)) : v));
+  old.version = 2;
+  const opened = restore(JSON.stringify(old, (k, v) => (ArrayBuffer.isView(v) ? {$typed: v.constructor.name, b64: Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('base64')} : v)));
+  assert.equal(opened.version, 3);
+  assert.equal(serialize(opened), text, 'migrated to the same town');
 });

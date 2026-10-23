@@ -6,6 +6,8 @@
 // applies those deltas to an object with exactly the shape createRenderView returns, so
 // src/render reads it as it reads the live view.
 //
+// Walker rows go as the rows render-view wrote (its dirty list), by slot.
+//
 //   worker:  const source = createMirrorSource();
 //            view.sync(state, {now, speed});
 //            const {delta, transfer} = source.delta(view, state);
@@ -60,18 +62,35 @@ export function createMirrorSource({scanShare = 60, wearBox = null} = {}) {
     return {delta: out, transfer};
   }
 
-  // Walker rows written since the last delta, as transferred copies.
+  // Walker rows written since the last delta, as transferred copies: the rows named
+  // (slots, rows, ids), or one range when that is about as small (start, end, rows, ids).
   function people(view, transfer) {
     const stride = view.rowFloats;
     const cap = view.people.length / stride;
     const out = {count: view.peopleCount, cap, stride};
-    const d = view.peopleDirty;
+    // A new source knows nothing of what its mirror holds: the first delta sends every row.
+    const d = first ? (view.peopleCount ? {start: 0, end: view.peopleCount} : null) : view.peopleDirty;
     if (d && d.end > d.start) {
-      out.start = d.start;
-      out.end = d.end;
-      out.rows = view.people.slice(d.start * stride, d.end * stride);
-      out.ids = view.peopleIds.slice(d.start, d.end);
-      transfer.push(out.rows.buffer, out.ids.buffer);
+      const n = d.list ? d.count : d.end - d.start;
+      if (!d.list || n * 1.25 >= d.end - d.start) {
+        out.start = d.start;
+        out.end = d.end;
+        out.rows = view.people.slice(d.start * stride, d.end * stride);
+        out.ids = view.peopleIds.slice(d.start, d.end);
+        transfer.push(out.rows.buffer, out.ids.buffer);
+      } else {
+        const slots = d.list.slice(0, n).sort();
+        const rows = new Float32Array(n * stride), ids = new Int32Array(n);
+        for (let k = 0; k < n; k++) {
+          const r = slots[k];
+          rows.set(view.people.subarray(r * stride, (r + 1) * stride), k * stride);
+          ids[k] = view.peopleIds[r];
+        }
+        out.slots = slots;
+        out.rows = rows;
+        out.ids = ids;
+        transfer.push(slots.buffer, rows.buffer, ids.buffer);
+      }
     }
     if (cap !== peopleCap && !d) {
       // A new buffer always comes with every row dirty (render-view grow); this is
@@ -274,6 +293,17 @@ export function createRenderMirror({rowFloats = 20} = {}) {
   };
   const recs = new Map();   // building id -> the mirror's record
 
+  // The rows that arrived since the renderer last cleared view.peopleDirty, as
+  // render-view keeps them: {start, end, list, count}.
+  let dirtyFlag = new Uint8Array(0), dirty = {start: 0, end: 0, list: new Int32Array(0), count: 0};
+  function markRow(r) {
+    if (dirtyFlag[r]) return;
+    dirtyFlag[r] = 1;
+    dirty.list[dirty.count++] = r;
+    if (r < dirty.start) dirty.start = r;
+    if (r + 1 > dirty.end) dirty.end = r + 1;
+  }
+
   function applyPeople(p) {
     const stride = view.rowFloats;
     if (p.cap * stride !== view.people.length) {
@@ -284,15 +314,33 @@ export function createRenderMirror({rowFloats = 20} = {}) {
       view.people = people;
       view.peopleIds = ids;
       view.peopleVersion++;
+      const flag = new Uint8Array(p.cap);
+      flag.set(dirtyFlag.subarray(0, Math.min(dirtyFlag.length, p.cap)));
+      dirtyFlag = flag;
+      const list = new Int32Array(p.cap);
+      list.set(dirty.list.subarray(0, Math.min(dirty.count, p.cap)));
+      dirty.list = list;
     }
     if (p.rows) {
-      view.people.set(p.rows, p.start * stride);
-      view.peopleIds.set(p.ids, p.start);
-      const d = view.peopleDirty;
-      if (d) {
-        if (p.start < d.start) d.start = p.start;
-        if (p.end > d.end) d.end = p.end;
-      } else view.peopleDirty = {start: p.start, end: p.end};
+      if (view.peopleDirty == null) {
+        for (let k = 0; k < dirty.count; k++) dirtyFlag[dirty.list[k]] = 0;
+        dirty.count = 0;
+        dirty.start = Infinity;
+        dirty.end = 0;
+      }
+      if (p.slots) {
+        for (let k = 0; k < p.slots.length; k++) {
+          const r = p.slots[k];
+          view.people.set(p.rows.subarray(k * stride, (k + 1) * stride), r * stride);
+          view.peopleIds[r] = p.ids[k];
+          markRow(r);
+        }
+      } else {
+        view.people.set(p.rows, p.start * stride);
+        view.peopleIds.set(p.ids, p.start);
+        for (let r = p.start; r < p.end; r++) markRow(r);
+      }
+      view.peopleDirty = dirty.count ? dirty : null;
     }
     view.peopleCount = p.count;
   }

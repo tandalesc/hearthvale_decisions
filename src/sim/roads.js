@@ -1338,6 +1338,120 @@ export function wallsStillClear(state, memo, x, z, route, seg) {
   return segmentClear(walls, x, z, route[seg], route[seg + 1], true);
 }
 
+// Footprint checks by tile (people.js checkFootprints). A walker whose next few legs are
+// clear of every wall and drawn piece as continuous lines, not only at the samples the
+// checks take, gets the same answers from those checks wherever it is along them: each
+// sample a check takes from where it stands lies on such a leg, within rounding. So
+// while the tiles under those legs (and under its memos' legs) keep their cells, it
+// need not be checked at all (legsCertified, changedTilesSince).
+
+// Is the leg a -> b clear of walls and drawn pieces as a line: every cell within
+// CERT_EPS of it open, on the map, and no piece near those cells (grown by a walker's
+// margin and ALONG_EPS) met by it? tiles (an array), when given, collects the tiles of
+// those cells (each once while they come in order). Conservative: false only means
+// "not known".
+const CERT_EPS = 1e-6;
+export function legCertified(fp, ax, az, bx, bz, tiles = null) {
+  const x0 = Math.min(ax, bx) - CERT_EPS, x1 = Math.max(ax, bx) + CERT_EPS;
+  const z0 = Math.min(az, bz) - CERT_EPS, z1 = Math.max(az, bz) + CERT_EPS;
+  const cx0 = Math.floor((x0 - ORIGIN_X) / CELL), cx1 = Math.floor((x1 - ORIGIN_X) / CELL);
+  const cz0 = Math.floor((z0 - ORIGIN_Z) / CELL), cz1 = Math.floor((z1 - ORIGIN_Z) / CELL);
+  if (cx0 < 0 || cz0 < 0 || cx1 >= GRID_W || cz1 >= GRID_H) return false;
+  const walls = fp.walls;
+  for (let cz = cz0; cz <= cz1; cz++)
+    for (let cx = cx0; cx <= cx1; cx++) {
+      // Only cells the leg (grown by CERT_EPS) passes through.
+      const qx = ORIGIN_X + cx * CELL, qz = ORIGIN_Z + cz * CELL;
+      if (!segmentMeetsBox(ax, az, bx, bz, qx - CERT_EPS, qz - CERT_EPS, qx + CELL + CERT_EPS, qz + CELL + CERT_EPS)) continue;
+      const c = cz * GRID_W + cx;
+      if (walls[c]) return false;
+      if (fp.nearAt[c]) {
+        const list = nearIn(fp, c);
+        if (list) for (const r of list) if (stretchMeets(r, ax, az, bx, bz)) return false;
+      }
+      if (tiles) {
+        const t = Math.floor(cz / NEAR_TILE) * TILES_W + Math.floor(cx / NEAR_TILE);
+        if (!tiles.includes(t)) tiles.push(t);
+      }
+    }
+  return true;
+}
+
+// Does the segment a -> b meet the box [x0, x1] x [z0, z1] (edges included)?
+function segmentMeetsBox(ax, az, bx, bz, x0, z0, x1, z1) {
+  let t0 = 0, t1 = 1;
+  const dx = bx - ax, dz = bz - az;
+  if (dx === 0) { if (ax < x0 || ax > x1) return false; }
+  else {
+    const a = (x0 - ax) / dx, b = (x1 - ax) / dx;
+    t0 = Math.max(t0, Math.min(a, b));
+    t1 = Math.min(t1, Math.max(a, b));
+    if (t0 > t1) return false;
+  }
+  if (dz === 0) return az >= z0 && az <= z1;
+  const a = (z0 - az) / dz, b = (z1 - az) / dz;
+  return Math.max(t0, Math.min(a, b)) <= Math.min(t1, Math.max(a, b));
+}
+
+// The tiles whose cells changed (near lists or walls) in the footprint builds after
+// generation gen, as a mask over the tiles with the generation it is good for:
+// {gen, mask, lineage} where lineage is the tile arrays a memo or certificate was made
+// against. Null when the log does not reach back that far (then nothing is known).
+export function changedTilesSince(state, gen) {
+  const fp = footprints(state);
+  if (gen == null || fp.gen - gen > TILE_LOG || fp.gen < gen) return null;
+  const mask = new Uint8Array(TILES_W * TILES_H);
+  let tx0 = TILES_W, tz0 = TILES_H, tx1 = -1, tz1 = -1, count = 0;
+  for (let g = gen + 1; g <= fp.gen; g++) {
+    const e = fp.log[g % TILE_LOG];
+    if (!e || e.gen !== g) return null;
+    for (const list of [e.near, e.wall]) {
+      for (const t of list) {
+        if (mask[t]) continue;
+        mask[t] = 1;
+        count++;
+        const tx = t % TILES_W, tz = (t - tx) / TILES_W;
+        if (tx < tx0) tx0 = tx;
+        if (tx > tx1) tx1 = tx;
+        if (tz < tz0) tz0 = tz;
+        if (tz > tz1) tz1 = tz;
+      }
+    }
+  }
+  return { gen: fp.gen, mask, count, tx0, tz0, tx1, tz1, tileGen: fp.tileGen, wallGen: fp.wallGen };
+}
+
+// Could a tile in tiles (with their box tx0..tz1, as walkTiles gives) be in changed
+// (changedTilesSince)? The boxes first, then the tiles themselves.
+export function tilesTouched(changed, tiles, tx0, tz0, tx1, tz1) {
+  if (!changed.count || tx1 < changed.tx0 || tx0 > changed.tx1 || tz1 < changed.tz0 || tz0 > changed.tz1) return false;
+  const mask = changed.mask;
+  for (let i = 0; i < tiles.length; i++) if (mask[tiles[i]]) return true;
+  return false;
+}
+
+// The footprint build's generation and tile arrays (what changedTilesSince is asked from).
+export function footprintGen(state) {
+  const fp = footprints(state);
+  return { gen: fp.gen, tileGen: fp.tileGen, wallGen: fp.wallGen };
+}
+
+// Could a tile a memo's legs sample (skirtMemo, wallMemo) be in changed?
+export const memoTouched = (changed, memo) => tilesTouched(changed, memo.tiles, memo.tx0, memo.tz0, memo.tx1, memo.tz1);
+
+// The box of a list of tiles.
+export function tileBox(tiles) {
+  let tx0 = TILES_W, tz0 = TILES_H, tx1 = -1, tz1 = -1;
+  for (const t of tiles) {
+    const tx = t % TILES_W, tz = (t - tx) / TILES_W;
+    if (tx < tx0) tx0 = tx;
+    if (tx > tx1) tx1 = tx;
+    if (tz < tz0) tz0 = tz;
+    if (tz > tz1) tz1 = tz;
+  }
+  return { tx0, tz0, tx1, tz1 };
+}
+
 // routeStillValid of [x, z, ...route from flat index seg] without building
 // that list: the walk from (x, z) to the waypoint skips its starting cell.
 export function routeClearFrom(state, x, z, route, seg) {

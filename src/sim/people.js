@@ -17,13 +17,14 @@ import {rng, hash32, hashUnit} from './rng.js';
 import {decide, findHook} from './hooks.js';
 import {byId, cellIndex, lookFor, nextId, BRIDGE} from './state.js';
 import {monthIndex} from './clock.js';
-import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, wallMemo, wallsStillClear, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG, walkerSegmentBlocked, walkerLegOutlined, structuralWaterAt, growActiveBox, ORIGIN_X, ORIGIN_Z, CELL, GRID_W, GRID_H} from './roads.js';
+import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, wallMemo, wallsStillClear, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG, walkerSegmentBlocked, walkerLegOutlined, structuralWaterAt, growActiveBox, legCertified, changedTilesSince, footprintGen, tilesTouched, memoTouched, tileBox, ORIGIN_X, ORIGIN_Z, CELL, GRID_W, GRID_H} from './roads.js';
 import {halfWidth, wearBucket} from '../render/paths.js';   // the drawn path widths (pure, no renderer state)
 import {findRoute, cellsToWaypoints} from '../navigation.js';
 import {projectSite} from './buildings.js';
 import {alongBridge, deckSurfaceY, DECK_VERGE} from './bridges.js';
 import {seatsOf} from './seats.js';
 import {rebuildDensity, densityAt} from './density.js';
+import {pointGrid, ringSearch} from './near.js';
 import {gatheringActivity, layoutOf, occasionFor, occasionSpot, wanderRoute, kinReset, kinAdd, ACTIVITIES, deckSpot, RAIL_MIN_HALF, railStand} from './gatherings.js';
 // A passer-by keeps this far (centre to centre) from a rail stander: half a body's
 // width plus half its depth.
@@ -161,22 +162,58 @@ export function assignBuilders(state) {
     const h = byId(state, 'households', p.householdId);
     return h && (h.trade === 'craft' || h.trade === 'labour' || h.trade === 'none');
   });
+  // Nearest first, the earlier candidate on a tie: by a grid of where they stand, once
+  // there are enough of them for that to pay.
+  const nearest = candidates.length > NEAR_SCAN ? nearestCandidate(candidates) : null;
+  let left = candidates.length;
   for (const pr of open) {
     const site = projectSite(state, pr);
     if (!site || !Number.isFinite(site.x)) continue;
     const want = Math.min(6, 2 + Math.floor((pr.workRequired ?? 30) / 40));
-    while (pr.workers.length < want && candidates.length) {
-      let best = -1, bestD = Infinity;
-      for (let i = 0; i < candidates.length; i++) {
-        const c = candidates[i];
-        const d = (c.x - site.x) ** 2 + (c.z - site.z) ** 2;
-        if (d < bestD) { bestD = d; best = i; }
+    while (pr.workers.length < want && left) {
+      let p;
+      if (nearest) p = nearest(site.x, site.z);
+      else {
+        let best = -1, bestD = Infinity;
+        for (let i = 0; i < candidates.length; i++) {
+          const c = candidates[i];
+          const d = (c.x - site.x) ** 2 + (c.z - site.z) ** 2;
+          if (d < bestD) { bestD = d; best = i; }
+        }
+        [p] = candidates.splice(best, 1);
       }
-      const [p] = candidates.splice(best, 1);
+      left--;
       pr.workers.push(p.id);
       assigned.add(p.id);
     }
   }
+}
+
+// Below this many points a plain scan is as quick as a grid. (Tests set it to check
+// the grid gives the scan's answers.)
+let NEAR_SCAN = 48;
+export function setNearScan(n) { NEAR_SCAN = n; }
+
+// The scan of assignBuilders as a search: (x, z) -> the candidate nearest it, the
+// earliest in the list on a tie, taken out of the running. Squared distances are
+// worked out exactly as the scan does.
+function nearestCandidate(list) {
+  const n = list.length;
+  const xs = new Float64Array(n), zs = new Float64Array(n);
+  for (let i = 0; i < n; i++) { xs[i] = list[i].x; zs[i] = list[i].z; }
+  const grid = pointGrid(xs, zs, n, 24);
+  const taken = new Uint8Array(n);
+  return (x, z) => {
+    let best = -1, bestD = Infinity;
+    ringSearch(grid, x, z, (i) => {
+      if (taken[i]) return;
+      const c = list[i];
+      const d = (c.x - x) ** 2 + (c.z - z) ** 2;
+      if (d < bestD || (d === bestD && i < best)) { bestD = d; best = i; }
+    }, (bound2) => best >= 0 && bestD < bound2);
+    taken[best] = 1;
+    return list[best];
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -685,7 +722,7 @@ function stepTo(state, p, task, spot, plan, now) {
   if (plan.occ) gatheringSpot(p, task, spot);
   standAdd(spot.x, spot.z, p.id, p.householdId);
   if (Math.hypot(spot.x - p.x, spot.z - p.z) < 0.02) return true;
-  pushSkirted(state, p, task.route, spot.via ? [spot.via[0], spot.via[1], spot.x, spot.z] : [spot.x, spot.z]);
+  pushSkirted(state, p, task, spot.via ? [spot.via[0], spot.via[1], spot.x, spot.z] : [spot.x, spot.z]);
   setVelocity(state, p, task, now);
   return false;
 }
@@ -700,10 +737,20 @@ function deckKeep(state) {
 // Points added to a walker's route from where it is (its route's last point, or where
 // it stands), round the corner of any drawn plinth, step or wing they cut (roads.js
 // skirtOutlines).
-function pushSkirted(state, p, route, pts) {
-  const n = route.length;
+function pushSkirted(state, p, task, pts) {
+  const route = task.route, n = route.length;
   const leg = skirtOutlines(state, [n >= 2 ? route[n - 2] : p.x, n >= 2 ? route[n - 1] : p.z, ...pts], deckKeep(state));
-  for (let k = 2; k < leg.length; k++) route.push(leg[k]);
+  task.route = extendRoute(route, leg, 2);
+}
+
+// Routes are Float32Arrays of [x, z, ...] (half the memory of a list of doubles, and
+// saved compactly): built once, and replaced, never grown in place.
+export const toRoute = (list) => (list instanceof Float32Array ? list : Float32Array.from(list));
+function extendRoute(route, pts, from = 0) {
+  const out = new Float32Array(route.length + pts.length - from);
+  out.set(route);
+  for (let k = from; k < pts.length; k++) out[route.length + k - from] = pts[k];
+  return out;
 }
 
 // An activity's spot (gatherings.js occasionSpot) taken: what the walker does there
@@ -782,7 +829,7 @@ function leaveDeck(state, p, task, now) {
   if (waterAt(qx, qz) || deckAt(state, qx, qz) || !clearOfWalls(state, footprints(state).walls, qx, qz)) return false;
   if (!legOpen(state, ex, ez, qx, qz)) return false;
   task.leaving = 1;
-  task.route.push(ex, ez, qx, qz);
+  task.route = extendRoute(task.route, [ex, ez, qx, qz]);
   setVelocity(state, p, task, now);
   return true;
 }
@@ -794,7 +841,7 @@ function wander(state, p, task, now) {
   const pts = wanderRoute(state, p, task, occ);
   if (!pts) return false;
   standAdd(task.spot[0], task.spot[1], p.id, p.householdId);   // a new spot, held from now
-  pushSkirted(state, p, task.route, pts);
+  pushSkirted(state, p, task, pts);
   setVelocity(state, p, task, now);
   return true;
 }
@@ -1022,6 +1069,9 @@ export function accessPoint(b, state = null) {
 // the nearest open cell, and routes that now cross one are planned again.
 // The last footprint key walkers were checked against is kept in the state, so a
 // restored town behaves exactly like the original.
+// A walk found clear may also hold a certificate (walkCertificate): while it holds, the
+// route checks below are known to find nothing, so they are not run. Certificates live
+// outside the state (never saved), like the memos: a restored town checks in full once.
 function checkFootprints(state, now) {
   checkDecks(state);
   const key = footprintKey(state);
@@ -1030,6 +1080,12 @@ function checkFootprints(state, now) {
   state.walkerFootprintKey = key;
   const {walls: blocked} = footprints(state);
   const roads = state.roads;
+  // The tiles changed since the last check, and this check's number.
+  const seen = footprintChecks.get(state);
+  const changed = seen ? changedTilesSince(state, seen.gen) : null;
+  const check = (seen?.check ?? 0) + 1;
+  const now0 = footprintGen(state);
+  footprintChecks.set(state, {gen: now0.gen, check});
   for (const p of state.people) {
     const c = cellIndex(roads, p.x, p.z);
     if (c >= 0 && blocked[c]) {
@@ -1044,6 +1100,13 @@ function checkFootprints(state, now) {
       if (p.task) replan(p, now);
       continue;
     }
+    // A walk whose certificate holds is clear where the walker stands as well (it is on
+    // a certified leg), so nothing below would find anything.
+    const task = p.task;
+    if (changed && !first && task && !task.waiting && task.seg < task.route.length && certHolds(certificates.get(task), p, task, changed, check)) {
+      certShadow?.(state, p, deckKeep(state));
+      continue;
+    }
     // On open ground, but a building just drawn here reaches over the spot (its plinth
     // or steps): a step aside, clear of it, and on from there.
     if (!first && !p.indoor && !p.task?.seat && !outlineClear(state, p.x, p.z)) {
@@ -1054,10 +1117,93 @@ function checkFootprints(state, now) {
       if (p.task) replan(p, now);
       continue;
     }
-    if (first || !p.task || p.task.waiting || p.task.seg >= p.task.route.length) continue;
-    if (!routeStillClear(state, p)) replan(p, now);
-    else reskirt(state, p, now);
+    if (first || !task || task.waiting || task.seg >= task.route.length) continue;
+    const route = task.route;
+    if (!routeStillClear(state, p)) {
+      replan(p, now);
+      continue;
+    }
+    reskirt(state, p, now);
+    if (p.task === task && task.route === route && !task.waiting) walkCertificate(state, p, task, check, now0);
   }
+}
+
+const footprintChecks = new WeakMap();   // state -> {gen, check}: the last footprint check
+// Tests: called for each walker a certificate let off, to run the full checks on it.
+let certShadow = null;
+export function shadowCertificates(fn) { certShadow = fn; }
+const certificates = new WeakMap();      // task -> certificate (walkCertificate)
+
+// A certificate for a walk just checked and found clear, with both memos taken: from
+// where the walker stands, its legs up to CERT_REACH ahead are clear of walls and drawn
+// pieces as lines (roads.js legCertified). Then while the walker is still on one of
+// them, the same route, and no tile under those legs or the memos' changed, every check
+// checkFootprints runs on its route gives what it gave now: the memos hold (nothing
+// they cover changed) and the leg from where it stands is part of a certified one.
+const CERT_REACH = 24;
+const CERT_ON_LEG = 1e-7;   // how far off its leg's line a walker may be (rounding only)
+function walkCertificate(state, p, task, check, gens) {
+  const route = task.route, seg = task.seg;
+  const walls = wallMemos.get(task), skirt = skirtMemos.get(task);
+  const old = certificates.get(task);
+  const tiles = old?.tiles ?? [];
+  tiles.length = 0;
+  if (!walls || walls.route !== route || !skirt || skirt.route !== route || !legCertified(footprints(state), p.x, p.z, route[seg], route[seg + 1], tiles)) {
+    if (old) certificates.delete(task);
+    return;
+  }
+  const fp = footprints(state);
+  let last = seg;
+  for (let k = seg, reach = Math.hypot(route[seg] - p.x, route[seg + 1] - p.z); k + 3 < route.length && reach < CERT_REACH; k += 2) {
+    if (!legCertified(fp, route[k], route[k + 1], route[k + 2], route[k + 3], tiles)) break;
+    reach += Math.hypot(route[k + 2] - route[k], route[k + 3] - route[k + 1]);
+    last = k + 2;
+  }
+  const box = tileBox(tiles);
+  const cert = old ?? {};
+  cert.route = route;
+  cert.length = route.length;
+  cert.seg0 = seg;
+  cert.seg1 = last;
+  cert.x0 = p.x;
+  cert.z0 = p.z;
+  cert.tiles = tiles;
+  cert.tx0 = box.tx0; cert.tz0 = box.tz0; cert.tx1 = box.tx1; cert.tz1 = box.tz1;
+  cert.check = check;
+  cert.tileGen = gens.tileGen;
+  cert.wallGen = gens.wallGen;
+  cert.wallMemo = walls;
+  cert.skirtMemo = skirt;
+  if (!old) certificates.set(task, cert);
+}
+
+// Does the certificate still hold for this walker at check number `check`? It must have
+// held (or been made) at the check before, against the same tile arrays, with none of
+// its tiles changed since (changed: roads.js changedTilesSince), nor any its memos'
+// legs sample, and the walker on one of its legs of the same route, with both memos
+// still the ones it was made with.
+function certHolds(cert, p, task, changed, check) {
+  if (!cert || cert.check !== check - 1 || cert.tileGen !== changed.tileGen || cert.wallGen !== changed.wallGen) return false;
+  const route = task.route, seg = task.seg;
+  if (route !== cert.route || route.length !== cert.length || seg < cert.seg0 || seg > cert.seg1) return false;
+  const walls = wallMemos.get(task), skirt = skirtMemos.get(task);
+  if (walls !== cert.wallMemo || skirt !== cert.skirtMemo || walls.memo.from > seg || skirt.clear.from > seg) return false;
+  const ax = seg === cert.seg0 ? cert.x0 : route[seg - 2], az = seg === cert.seg0 ? cert.z0 : route[seg - 1];
+  if (!onLeg(p.x, p.z, ax, az, route[seg], route[seg + 1])) return false;
+  if (tilesTouched(changed, cert.tiles, cert.tx0, cert.tz0, cert.tx1, cert.tz1) || memoTouched(changed, walls.memo) || memoTouched(changed, skirt.clear)) return false;
+  cert.check = check;
+  return true;
+}
+
+// Is (x, z) on the segment a -> b, to within CERT_ON_LEG?
+function onLeg(x, z, ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az, len2 = dx * dx + dz * dz;
+  const px = x - ax, pz = z - az;
+  if (len2 === 0) return px * px + pz * pz <= CERT_ON_LEG * CERT_ON_LEG;
+  const t = (px * dx + pz * dz) / len2;
+  const len = Math.sqrt(len2), e = CERT_ON_LEG / len;
+  if (t < -e || t > 1 + e) return false;
+  return Math.abs(px * dz - pz * dx) / len <= CERT_ON_LEG;
 }
 
 // routeClearFrom for the rest of a walker's route. A walk found clear keeps a memo
@@ -1103,7 +1249,7 @@ function reskirt(state, p, now) {
     else skirtMemos.set(task, {route, clear: skirtMemo(state, route, task.seg)});
     return;
   }
-  task.route = out;
+  task.route = toRoute(out);
   task.seg = 2;
   setVelocity(state, p, task, now);
 }
@@ -1515,21 +1661,66 @@ function farmRows(state, p, b, target) {
 const nearScratch = [];
 function nearestOf(state, world, types, p, k, h) {
   nearScratch.length = 0;
-  for (const t of types) {
-    const list = world.byType.get(t);
-    if (!list) continue;
-    for (const b of list) {
-      const d = (b.x - p.x) ** 2 + (b.z - p.z) ** 2;
-      if (nearScratch.length < k) nearScratch.push({b, d});
-      else {
-        let worst = 0;
-        for (let i = 1; i < nearScratch.length; i++) if (nearScratch[i].d > nearScratch[worst].d) worst = i;
-        if (d < nearScratch[worst].d) nearScratch[worst] = {b, d};
+  const near = typeGrid(world, types);
+  if (!near || !nearestByGrid(near, p, k)) {
+    nearScratch.length = 0;
+    for (const t of types) {
+      const list = world.byType.get(t);
+      if (!list) continue;
+      for (const b of list) {
+        const d = (b.x - p.x) ** 2 + (b.z - p.z) ** 2;
+        if (nearScratch.length < k) nearScratch.push({b, d});
+        else {
+          let worst = 0;
+          for (let i = 1; i < nearScratch.length; i++) if (nearScratch[i].d > nearScratch[worst].d) worst = i;
+          if (d < nearScratch[worst].d) nearScratch[worst] = {b, d};
+        }
       }
     }
   }
   if (!nearScratch.length) return null;
   return buildingTarget(state, pickQuiet(state, p, nearScratch, crowdTolerance(p, h)));
+}
+
+// The buildings of these types as a grid (null when so few that a scan is as quick),
+// kept with the world index.
+function typeGrid(world, types) {
+  const key = types.join();
+  const grids = (world.grids ??= new Map());
+  if (grids.has(key)) return grids.get(key);
+  const list = types.flatMap((t) => world.byType.get(t) ?? []);
+  const near = list.length > NEAR_SCAN ? {list, grid: pointGrid(list.map((b) => b.x), list.map((b) => b.z), list.length, 32)} : null;
+  grids.set(key, near);
+  return near;
+}
+
+// nearestOf's k nearest by the grid, into nearScratch. The scan keeps the k smallest
+// distances, and which of several buildings at the k-th distance it keeps depends on
+// the order it met them: when there is such a tie this gives up (false), and the scan
+// decides. Otherwise the k are the same buildings (pickQuiet does not care in what order).
+function nearestByGrid(near, p, k) {
+  const {list, grid} = near;
+  const all = [];
+  let worstD = -1;
+  ringSearch(grid, p.x, p.z, (i) => {
+    const b = list[i];
+    const d = (b.x - p.x) ** 2 + (b.z - p.z) ** 2;
+    all.push(d);
+    if (nearScratch.length < k) {
+      nearScratch.push({b, d});
+      if (nearScratch.length === k) worstD = Math.max(...nearScratch.map((c) => c.d));
+    } else if (d < worstD) {
+      let worst = 0;
+      for (let j = 1; j < k; j++) if (nearScratch[j].d > nearScratch[worst].d) worst = j;
+      nearScratch[worst] = {b, d};
+      worstD = -1;
+      for (let j = 0; j < k; j++) if (nearScratch[j].d > worstD) worstD = nearScratch[j].d;
+    }
+  }, (bound2) => nearScratch.length === k && worstD < bound2);
+  if (nearScratch.length < k) return true;
+  let within = 0;
+  for (const d of all) if (d <= worstD) within++;
+  return within === k;
 }
 
 // Crowd-aware choice. Each candidate scores its distance, a stable per-walker taste
@@ -1651,7 +1842,7 @@ function startTask(state, ctx, p, kind, target, now, keep = null) {
     tz: target.z,
     tail: target.tail ?? null,
     seat: target.seat ?? null,
-    route: [],
+    route: new Float32Array(0),
     seg: 0,
     elapsed: 0,
     dwell: 0,
@@ -1752,16 +1943,17 @@ function setRoute(state, p, task, route, reachable = true) {
   // A copy: planner routes are shared through its cache. Each walker keeps to its own
   // side of the path's centre line.
   // Last, legs that cut the corner of a drawn plinth, step or wing go round it.
-  task.route = skirtOutlines(state, roundRoute(state, laneOffset(state, p.id, alongDecks(state, Array.from(route), laneFraction(p.id)))), deckKeep(state));
+  const walk = skirtOutlines(state, roundRoute(state, laneOffset(state, p.id, alongDecks(state, Array.from(route), laneFraction(p.id)))), deckKeep(state));
   // A gathering's claimed spot is where this route goes (given up if it cannot be reached).
   if (task.claim && !reachable) task.claim = 0;
   if (!task.claim) task.spot = null;
   // The last step off the street (into a field) is checked again: something may have
   // been built there since the task began.
-  const n = task.route.length;
-  if (task.tail && reachable && n >= 2 && !segmentBlocked(state, task.route[n - 2], task.route[n - 1], task.tail[0], task.tail[1])) {
-    task.route.push(task.tail[0], task.tail[1]);
+  const n = walk.length;
+  if (task.tail && reachable && n >= 2 && !segmentBlocked(state, walk[n - 2], walk[n - 1], task.tail[0], task.tail[1])) {
+    walk.push(task.tail[0], task.tail[1]);
   }
+  task.route = toRoute(walk);
   task.seg = 0;
   task.waiting = false;
 }
