@@ -139,8 +139,6 @@
 .ui[data-layout="phone"] .metric-val { font-size: var(--fs-15); }
 .ui[data-layout="phone"] .metric-cap { display: none; }
 .ui[data-layout="phone"] .topbar-end { border: 0; padding: 0; }
-/* Account access stays in Settings on phones, leaving room for town metrics. */
-.ui[data-layout="phone"] .topbar-end .account-entry { display: none; }
 @media (max-width: 1180px) { .ui[data-layout="desk"] .metric[data-key="homes"] { display: none; } }
 @media (max-width: 860px) { .ui[data-layout="tablet"] .brand h1 { font-size: 19px; } .ui[data-layout="tablet"] .metric[data-key="homes"] { display: none; } }
 /* Narrow tablets: numbers only, so the place chip and settings keep their room. */
