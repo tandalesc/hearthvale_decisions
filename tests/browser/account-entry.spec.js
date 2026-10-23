@@ -53,14 +53,16 @@ test('verified paid checkout return shows account management',async({page})=>{
   await expect(page.locator('.mm-account-tier')).toHaveText('Hearthvale Plus');
   await expect(page.locator('.mm-account')).toHaveText('Manage account');
   await page.keyboard.press('Escape');
-  const tier = page.getByRole('button', {name: 'Hearthvale Plus', exact: true});
-  await tier.click();
+  // The tier is a plain label; the account button opens the account.
+  await expect(page.getByRole('button', {name: 'Hearthvale Plus', exact: true})).toHaveCount(0);
+  const account = page.locator('.mm-account');
+  await account.click();
   await expect(page.getByText('Your current tier: Hearthvale Plus.')).toBeVisible();
-  await expect(page.locator('.account-features li')).toHaveText(['10× and 20× speed', 'Live decisions for your townspeople', 'Richer writing in the Council and town notes']);
+  await expect(page.locator('.account-features li')).toHaveText(['10× and 20× speed', 'Automatic cloud backup for up to 10 towns', 'Live decisions for your townspeople', 'Richer writing in the Council and town notes']);
   await expect(page.getByRole('button', {name: 'Manage subscription'})).toBeVisible();
   await expect(page.getByRole('button', {name: 'Continue to checkout'})).toHaveCount(0);
   await page.keyboard.press('Escape');
-  await expect(tier).toBeFocused();
+  await expect(account).toBeFocused();
 });
 
 test('email code resumes after app reload and signs in within the same browser', async ({page}) => {
