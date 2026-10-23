@@ -174,10 +174,16 @@ export function createGround() {
   let embankRef = null, embankLen = -1;
   let version = 0;
   let dirty = null; // {i0, j0, i1, j1} sample rect awaiting upload
-  // A whole-texture upload is pending (first upload, or after a rebuild).
-  // Partial update ranges must never ride on it: Three would upload only the
-  // ranges into fresh storage and leave the rest of the texture zero.
+  // A whole-texture upload is queued and has not reached the GPU yet (first
+  // upload, or after a rebuild). Partial update ranges must never ride on it:
+  // Three would upload only the ranges into fresh storage and leave the rest
+  // of the texture zero (no ground at all: the chunks read river offset 0 and
+  // discard every fragment). It stays set until Three has really uploaded the
+  // texture (onUpdate), not just until the next flush: frames can flush
+  // without drawing (the first frame waits while materials compile), and the
+  // texture only uploads when something drawn samples it.
   let fullPending = true;
+  texture.onUpdate = () => { fullPending = false; };
 
   const uniforms = {
     tGround: { value: texture },
@@ -361,14 +367,16 @@ export function createGround() {
 
   /**
    * Upload pending changes (call once per frame): one texSubImage2D row range
-   * per dirty row. Three's update ranges count 4 components per pixel, so
-   * ranges are given in pixels x 4 regardless of the RG format.
+   * per dirty row, or the whole texture while its full upload is still
+   * queued. Three's update ranges count 4 components per pixel, so ranges
+   * are given in pixels x 4 regardless of the RG format.
    */
   function flush() {
     if (fullPending) {
+      // The whole (live) array goes up when the texture first draws, with
+      // every change since: no ranges until then.
       texture.clearUpdateRanges();
       texture.needsUpdate = true;
-      fullPending = false;
       dirty = null;
       return true;
     }
