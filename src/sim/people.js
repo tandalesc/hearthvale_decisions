@@ -17,7 +17,7 @@ import {rng, hash32, hashUnit} from './rng.js';
 import {decide, findHook} from './hooks.js';
 import {byId, cellIndex, lookFor, nextId, BRIDGE} from './state.js';
 import {monthIndex} from './clock.js';
-import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, wallMemo, wallsStillClear, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG, walkerSegmentBlocked, walkerLegOutlined, structuralWaterAt, growActiveBox, ORIGIN_X, ORIGIN_Z, CELL, GRID_W, GRID_H} from './roads.js';
+import {doorPoint, frontCell, cellCenter, footprints, footprintKey, nearestOpen, routeStillValid, routeClearFrom, wallMemo, wallsStillClear, structuralGrid, cellOf, recordCrossingBand, outlineClear, skirtOutlines, skirtMemo, skirtStillClear, walkerGrid, standPoint, FLAG, walkerSegmentBlocked, walkerLegOutlined, structuralWaterAt, growActiveBox, legCertified, changedTilesSince, footprintGen, tilesTouched, memoTouched, tileBox, ORIGIN_X, ORIGIN_Z, CELL, GRID_W, GRID_H} from './roads.js';
 import {halfWidth, wearBucket} from '../render/paths.js';   // the drawn path widths (pure, no renderer state)
 import {findRoute, cellsToWaypoints} from '../navigation.js';
 import {projectSite} from './buildings.js';
@@ -1022,6 +1022,9 @@ export function accessPoint(b, state = null) {
 // the nearest open cell, and routes that now cross one are planned again.
 // The last footprint key walkers were checked against is kept in the state, so a
 // restored town behaves exactly like the original.
+// A walk found clear may also hold a certificate (walkCertificate): while it holds, the
+// route checks below are known to find nothing, so they are not run. Certificates live
+// outside the state (never saved), like the memos: a restored town checks in full once.
 function checkFootprints(state, now) {
   checkDecks(state);
   const key = footprintKey(state);
@@ -1030,6 +1033,12 @@ function checkFootprints(state, now) {
   state.walkerFootprintKey = key;
   const {walls: blocked} = footprints(state);
   const roads = state.roads;
+  // The tiles changed since the last check, and this check's number.
+  const seen = footprintChecks.get(state);
+  const changed = seen ? changedTilesSince(state, seen.gen) : null;
+  const check = (seen?.check ?? 0) + 1;
+  const now0 = footprintGen(state);
+  footprintChecks.set(state, {gen: now0.gen, check});
   for (const p of state.people) {
     const c = cellIndex(roads, p.x, p.z);
     if (c >= 0 && blocked[c]) {
@@ -1044,6 +1053,13 @@ function checkFootprints(state, now) {
       if (p.task) replan(p, now);
       continue;
     }
+    // A walk whose certificate holds is clear where the walker stands as well (it is on
+    // a certified leg), so nothing below would find anything.
+    const task = p.task;
+    if (changed && !first && task && !task.waiting && task.seg < task.route.length && certHolds(certificates.get(task), p, task, changed, check)) {
+      certShadow?.(state, p, deckKeep(state));
+      continue;
+    }
     // On open ground, but a building just drawn here reaches over the spot (its plinth
     // or steps): a step aside, clear of it, and on from there.
     if (!first && !p.indoor && !p.task?.seat && !outlineClear(state, p.x, p.z)) {
@@ -1054,10 +1070,93 @@ function checkFootprints(state, now) {
       if (p.task) replan(p, now);
       continue;
     }
-    if (first || !p.task || p.task.waiting || p.task.seg >= p.task.route.length) continue;
-    if (!routeStillClear(state, p)) replan(p, now);
-    else reskirt(state, p, now);
+    if (first || !task || task.waiting || task.seg >= task.route.length) continue;
+    const route = task.route;
+    if (!routeStillClear(state, p)) {
+      replan(p, now);
+      continue;
+    }
+    reskirt(state, p, now);
+    if (p.task === task && task.route === route && !task.waiting) walkCertificate(state, p, task, check, now0);
   }
+}
+
+const footprintChecks = new WeakMap();   // state -> {gen, check}: the last footprint check
+// Tests: called for each walker a certificate let off, to run the full checks on it.
+let certShadow = null;
+export function shadowCertificates(fn) { certShadow = fn; }
+const certificates = new WeakMap();      // task -> certificate (walkCertificate)
+
+// A certificate for a walk just checked and found clear, with both memos taken: from
+// where the walker stands, its legs up to CERT_REACH ahead are clear of walls and drawn
+// pieces as lines (roads.js legCertified). Then while the walker is still on one of
+// them, the same route, and no tile under those legs or the memos' changed, every check
+// checkFootprints runs on its route gives what it gave now: the memos hold (nothing
+// they cover changed) and the leg from where it stands is part of a certified one.
+const CERT_REACH = 24;
+const CERT_ON_LEG = 1e-7;   // how far off its leg's line a walker may be (rounding only)
+function walkCertificate(state, p, task, check, gens) {
+  const route = task.route, seg = task.seg;
+  const walls = wallMemos.get(task), skirt = skirtMemos.get(task);
+  const old = certificates.get(task);
+  const tiles = old?.tiles ?? [];
+  tiles.length = 0;
+  if (!walls || walls.route !== route || !skirt || skirt.route !== route || !legCertified(footprints(state), p.x, p.z, route[seg], route[seg + 1], tiles)) {
+    if (old) certificates.delete(task);
+    return;
+  }
+  const fp = footprints(state);
+  let last = seg;
+  for (let k = seg, reach = Math.hypot(route[seg] - p.x, route[seg + 1] - p.z); k + 3 < route.length && reach < CERT_REACH; k += 2) {
+    if (!legCertified(fp, route[k], route[k + 1], route[k + 2], route[k + 3], tiles)) break;
+    reach += Math.hypot(route[k + 2] - route[k], route[k + 3] - route[k + 1]);
+    last = k + 2;
+  }
+  const box = tileBox(tiles);
+  const cert = old ?? {};
+  cert.route = route;
+  cert.length = route.length;
+  cert.seg0 = seg;
+  cert.seg1 = last;
+  cert.x0 = p.x;
+  cert.z0 = p.z;
+  cert.tiles = tiles;
+  cert.tx0 = box.tx0; cert.tz0 = box.tz0; cert.tx1 = box.tx1; cert.tz1 = box.tz1;
+  cert.check = check;
+  cert.tileGen = gens.tileGen;
+  cert.wallGen = gens.wallGen;
+  cert.wallMemo = walls;
+  cert.skirtMemo = skirt;
+  if (!old) certificates.set(task, cert);
+}
+
+// Does the certificate still hold for this walker at check number `check`? It must have
+// held (or been made) at the check before, against the same tile arrays, with none of
+// its tiles changed since (changed: roads.js changedTilesSince), nor any its memos'
+// legs sample, and the walker on one of its legs of the same route, with both memos
+// still the ones it was made with.
+function certHolds(cert, p, task, changed, check) {
+  if (!cert || cert.check !== check - 1 || cert.tileGen !== changed.tileGen || cert.wallGen !== changed.wallGen) return false;
+  const route = task.route, seg = task.seg;
+  if (route !== cert.route || route.length !== cert.length || seg < cert.seg0 || seg > cert.seg1) return false;
+  const walls = wallMemos.get(task), skirt = skirtMemos.get(task);
+  if (walls !== cert.wallMemo || skirt !== cert.skirtMemo || walls.memo.from > seg || skirt.clear.from > seg) return false;
+  const ax = seg === cert.seg0 ? cert.x0 : route[seg - 2], az = seg === cert.seg0 ? cert.z0 : route[seg - 1];
+  if (!onLeg(p.x, p.z, ax, az, route[seg], route[seg + 1])) return false;
+  if (tilesTouched(changed, cert.tiles, cert.tx0, cert.tz0, cert.tx1, cert.tz1) || memoTouched(changed, walls.memo) || memoTouched(changed, skirt.clear)) return false;
+  cert.check = check;
+  return true;
+}
+
+// Is (x, z) on the segment a -> b, to within CERT_ON_LEG?
+function onLeg(x, z, ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az, len2 = dx * dx + dz * dz;
+  const px = x - ax, pz = z - az;
+  if (len2 === 0) return px * px + pz * pz <= CERT_ON_LEG * CERT_ON_LEG;
+  const t = (px * dx + pz * dz) / len2;
+  const len = Math.sqrt(len2), e = CERT_ON_LEG / len;
+  if (t < -e || t > 1 + e) return false;
+  return Math.abs(px * dz - pz * dx) / len <= CERT_ON_LEG;
 }
 
 // routeClearFrom for the rest of a walker's route. A walk found clear keeps a memo
