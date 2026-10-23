@@ -494,6 +494,24 @@ export function coarseTravelField(grid, sources, { blocked = 20 } = {}) {
   return { label, dist, CW, labelOf };
 }
 
+// Can a cell path still be walked on this grid: every cell after the first and before
+// the last passable, and no diagonal step past a blocked corner (searchJob's rules)?
+export function pathOpen(grid, cells) {
+  const { cost, W } = grid;
+  const n = cells.length;
+  for (let k = 1; k < n - 1; k++) if (!Number.isFinite(cost[cells[k]])) return false;
+  for (let k = 1; k < n; k++) {
+    const a = cells[k - 1], b = cells[k];
+    const ax = a % W, bx = b % W;
+    if (ax === bx || b - a === bx - ax) continue;
+    const az = (a - ax) / W, bz = (b - bx) / W;
+    if (!Number.isFinite(cost[az * W + bx]) || !Number.isFinite(cost[bz * W + ax])) return false;
+  }
+  return true;
+}
+const FIELD_AGE = 4;
+const DEMAND_HALF = 4096;
+
 export function followField(field, from) {
   const { next, goal } = field;
   if (from === goal) return Int32Array.of(goal);
@@ -906,12 +924,13 @@ function legClear(grid, ax, az, bx, bz, okA, okB) {
 // cached per grid bucket, and served from flow fields once a destination is
 // popular. Only one search runs at a time per queue, sliced by time budget.
 export class RouteScheduler {
-  constructor({ clock = () => performance.now(), maxPending = 2048, maxCache = 4096, maxFields = 12, fieldThreshold = 16, maxNodes = 60000 } = {}) {
+  constructor({ clock = () => performance.now(), maxPending = 2048, maxCache = 4096, maxFields = 24, fieldThreshold = 32, maxNodes = 60000 } = {}) {
     Object.assign(this, { clock, maxPending, maxCache, maxFields, fieldThreshold, maxNodes });
     this.grid = null;
     this.cache = new Map();
     this.fields = new Map();
     this.demand = new Map();
+    this.requests = 0;
     this.jobs = new Map();
     this.queue = [];
     this.fieldQueue = [];
@@ -930,23 +949,30 @@ export class RouteScheduler {
       this.scratch = createScratch(size);
       this.fieldScratch = createScratch(size);
     }
-    this.fields.clear();
-    this.fieldQueue = [];
-    this.currentField = null;
-    if (prev && grid.footprintsOnly && prev.bucket === grid.bucket) this.pruneBlocked();
-    else { this.cache.clear(); this.demand.clear(); }
+    // Routes and flow fields outlive a grid change (docs/design/crowd-scale.md §4.1):
+    // a cached route is kept while its cells stay passable, and a field's routes are
+    // checked so as they are followed. Their costs may be a few months stale; whether
+    // they can be walked is always the new grid's. A field being worked out goes on
+    // (on the grid it started with) and is checked like an old one. (Fields age by
+    // requests: noteDemand.)
+    if (prev && prev.W === grid.W && prev.H === grid.H) {
+      this.pruneBlocked();
+      if (this.currentField) this.currentFieldStale = true;
+      for (const f of this.fields.values()) f.stale = true;
+    } else {
+      this.cache.clear();
+      this.demand.clear();
+      this.fields.clear();
+      this.fieldQueue = [];
+      this.currentField = null;
+    }
     this.restartJobs();
   }
 
   // Drops cached routes that now pass through a blocked cell.
   pruneBlocked() {
-    const cost = this.grid.cost;
     for (const [key, result] of this.cache) {
-      const cells = result.cells;
-      if (!cells) { this.cache.delete(key); continue; }
-      for (let k = 1; k < cells.length - 1; k++) {
-        if (!Number.isFinite(cost[cells[k]])) { this.cache.delete(key); break; }
-      }
+      if (!result.cells || !pathOpen(this.grid, result.cells)) this.cache.delete(key);
     }
   }
 
@@ -969,7 +995,7 @@ export class RouteScheduler {
     const field = this.fields.get(to);
     if (field) {
       const cells = followField(field, from);
-      if (cells) {
+      if (cells && (!field.stale || pathOpen(this.grid, cells))) {
         this.stats.fieldHits++;
         callback(this.store(key, from, to, cells));
         return true;
@@ -985,10 +1011,38 @@ export class RouteScheduler {
     return true;
   }
 
+  // A goal asked for fieldThreshold times (since demand last halved) gets a field: a
+  // whole-grid search, worth a few hundred routes. With the fields full, only a goal
+  // in more demand than the least asked-for field's displaces it.
   noteDemand(to) {
+    // Every DEMAND_HALF requests, demand halves (fields follow where people go now) and
+    // the fields age: the oldest past FIELD_AGE is worked out again on today's costs.
+    if (++this.requests % DEMAND_HALF === 0) {
+      for (const [goal, n] of this.demand) if (n < 2) this.demand.delete(goal); else this.demand.set(goal, n >> 1);
+      let oldest = null;
+      for (const f of this.fields.values()) {
+        f.age = (f.age ?? 0) + 1;
+        if (f.age >= FIELD_AGE && (!oldest || f.age > oldest.age)) oldest = f;
+      }
+      if (oldest && !this.fieldQueue.includes(oldest.goal)) this.fieldQueue.push(oldest.goal);
+    }
     const n = (this.demand.get(to) ?? 0) + 1;
     this.demand.set(to, n);
-    if (n === this.fieldThreshold && !this.fields.has(to)) this.fieldQueue.push(to);
+    if (n < this.fieldThreshold || this.fields.has(to) || this.fieldQueue.includes(to)) return;
+    if (this.fields.size + this.fieldQueue.length >= this.maxFields) {
+      const weakest = this.weakestField();
+      if (!weakest || (this.demand.get(weakest.goal) ?? 0) * 2 >= n) return;
+    }
+    this.fieldQueue.push(to);
+  }
+
+  weakestField() {
+    let w = null, wn = Infinity;
+    for (const f of this.fields.values()) {
+      const n = this.demand.get(f.goal) ?? 0;
+      if (n < wn) { w = f; wn = n; }
+    }
+    return w;
   }
 
   store(key, from, to, cells) {
@@ -1011,7 +1065,7 @@ export class RouteScheduler {
       const job = this.queue[k];
       if (job.to !== field.goal || job === this.current) continue;
       const cells = followField(field, job.from);
-      if (!cells) continue;
+      if (!cells || (field.stale && !pathOpen(this.grid, cells))) continue;
       this.queue.splice(k, 1);
       this.stats.fieldHits++;
       this.finish(job, cells);
@@ -1039,13 +1093,16 @@ export class RouteScheduler {
       const goal = this.fieldQueue.shift();
       if (goal === undefined) return false;
       this.currentField = flowFieldJob(this.grid, this.fieldScratch, goal);
+      this.currentFieldStale = false;
     }
     const r = this.currentField.next();
     if (r.done) {
       this.currentField = null;
       const field = r.value;
+      if (this.currentFieldStale) field.stale = true;
+      field.demand = this.demand.get(field.goal) ?? 0;
       this.fields.set(field.goal, field);
-      while (this.fields.size > this.maxFields) this.fields.delete(this.fields.keys().next().value);
+      while (this.fields.size > this.maxFields) this.fields.delete(this.weakestField().goal);
       this.stats.fields++;
       this.drainWithField(field);
     }

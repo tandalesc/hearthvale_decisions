@@ -1,7 +1,7 @@
 // Main-thread route planner. Keeps a route cache in front of a navigation
 // worker (or a cooperative scheduler when workers are unavailable), writes
 // finished routes into walker tasks, and records river-crossing demand.
-import { RouteScheduler, cellsToWaypoints } from './navigation.js';
+import { RouteScheduler, cellsToWaypoints, pathOpen } from './navigation.js';
 import { terrainSeed, terrainVersion, terrainWaters } from './terrain.js';
 import { countDeckTrips } from './sim/bridges.js';
 import { navGrid, cellOf, cellCenter, nearestOpen, recordCrossingBand, WALKER_SCALE, footprints } from './sim/roads.js';
@@ -14,6 +14,7 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
   const cache = new Map();
   const waiting = new Map();
   const stats = { mode: 'cooperative', pending: 0, completed: 0, cacheHits: 0, requests: 0, rejected: 0 };
+  Object.defineProperty(stats, 'scheduler', { get: () => (engine ? null : fallback.stats), enumerable: true });
   let engine = null, grid = null, lastState = null, nextId = 0;
   let ticked = false; // tick() keeps the grid current (see enqueue)
 
@@ -39,7 +40,9 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
     const g = navGrid(state, { fresh });
     if (grid && g.key === grid.key) return g;
     const footprintsOnly = !!grid && g.bucket === grid.bucket;
-    if (footprintsOnly) prune(cache, g.cost);
+    // Cached routes outlive the change while they can still be walked (navigation.js
+    // RouteScheduler.setGrid): their costs may be stale, their cells never are.
+    if (grid && grid.W === g.W && grid.H === g.H) prune(cache, g);
     else cache.clear();
     grid = g;
     // The worker's crossing analysis needs this town's river (terrain seed).
@@ -271,12 +274,6 @@ function remember(cache, key, value, max) {
   while (cache.size > max) cache.delete(cache.keys().next().value);
 }
 
-function prune(cache, cost) {
-  for (const [key, result] of cache) {
-    const cells = result.cells;
-    if (!cells) { cache.delete(key); continue; }
-    for (let k = 1; k < cells.length - 1; k++) {
-      if (!Number.isFinite(cost[cells[k]])) { cache.delete(key); break; }
-    }
-  }
+function prune(cache, grid) {
+  for (const [key, result] of cache) if (!result.cells || !pathOpen(grid, result.cells)) cache.delete(key);
 }
