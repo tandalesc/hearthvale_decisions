@@ -28,6 +28,13 @@ async function loadView() {
         ? sim.createState(Number(params.get('seed')), params.has('arch') ? { archetype: params.get('arch') } : {})
         : sim.loadFixture ? await sim.loadFixture(fixture) : sim.fixtureState(fixture);
       if (params.has('seed') && Number(params.get('years')) > 0) sim.fastForward(state, Number(params.get('years')));
+      // &crowd=k: every household k times its size, everyone walking (crowd-scale.md).
+      if (params.has('crowd')) {
+        const k = Number(params.get('crowd'));
+        sim.setIndividualCap(state, null);
+        for (const h of state.households) h.size = Math.max(1, Math.round(h.size * k));
+        sim.setIndividualCap(state, null);
+      }
       const view = createRenderView(state, { rowFloats: 20 });
       window.__state = state;
       const speed = Number(params.get('speed') ?? 1);
