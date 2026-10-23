@@ -1,7 +1,7 @@
 // Main-thread route planner. Keeps a route cache in front of a navigation
 // worker (or a cooperative scheduler when workers are unavailable), writes
 // finished routes into walker tasks, and records river-crossing demand.
-import { RouteScheduler, cellsToWaypoints, pathOpen } from './navigation.js';
+import { RouteScheduler, cellsToWaypoints, pathOpen, newlyClosed, pathBox, boxMeets } from './navigation.js';
 import { terrainSeed, terrainVersion, terrainWaters } from './terrain.js';
 import { countDeckTrips } from './sim/bridges.js';
 import { navGrid, cellOf, cellCenter, nearestOpen, recordCrossingBand, WALKER_SCALE, footprints } from './sim/roads.js';
@@ -46,7 +46,7 @@ export function createRoutePlanner({ worker = true, maxPending = 16384, maxCache
     const footprintsOnly = !!grid && g.bucket === grid.bucket;
     // Cached routes outlive the change while they can still be walked (navigation.js
     // RouteScheduler.setGrid): their costs may be stale, their cells never are.
-    if (grid && grid.W === g.W && grid.H === g.H) prune(cache, g);
+    if (grid && grid.W === g.W && grid.H === g.H) prune(cache, g, newlyClosed(grid, g));
     else cache.clear();
     grid = g;
     // The worker's crossing analysis needs this town's river (terrain seed).
@@ -278,6 +278,11 @@ function remember(cache, key, value, max) {
   while (cache.size > max) cache.delete(cache.keys().next().value);
 }
 
-function prune(cache, grid) {
-  for (const [key, result] of cache) if (!result.cells || !pathOpen(grid, result.cells)) cache.delete(key);
+// Only routes near a cell that closed can have stopped being walkable.
+function prune(cache, grid, closed) {
+  if (!closed.n) return;
+  for (const [key, result] of cache) {
+    if (!result.cells) { cache.delete(key); continue; }
+    if (boxMeets(pathBox(result.cells, grid.W), closed) && !pathOpen(grid, result.cells)) cache.delete(key);
+  }
 }

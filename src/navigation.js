@@ -494,6 +494,45 @@ export function coarseTravelField(grid, sources, { blocked = 20 } = {}) {
   return { label, dist, CW, labelOf };
 }
 
+// The cells passable on grid a and closed on grid b (same size), as the box they span
+// (cells, inclusive) and how many: {n, x0, z0, x1, z1}. Paths that keep out of that
+// box (and a cell round it, for corners) can be walked on b as on a.
+export function newlyClosed(a, b) {
+  const ca = a.cost, cb = b.cost, W = b.W;
+  let n = 0, x0 = Infinity, z0 = Infinity, x1 = -1, z1 = -1;
+  for (let i = 0; i < cb.length; i++) {
+    if (cb[i] !== Infinity || ca[i] === Infinity) continue;
+    n++;
+    const x = i % W, z = (i - x) / W;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (z < z0) z0 = z;
+    if (z > z1) z1 = z;
+  }
+  return { n, x0, z0, x1, z1 };
+}
+
+// A cell path's box (cells, inclusive), kept on the path array.
+const pathBoxes = new WeakMap();
+export function pathBox(cells, W) {
+  let box = pathBoxes.get(cells);
+  if (box) return box;
+  let x0 = Infinity, z0 = Infinity, x1 = -1, z1 = -1;
+  for (let k = 0; k < cells.length; k++) {
+    const x = cells[k] % W, z = (cells[k] - x) / W;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (z < z0) z0 = z;
+    if (z > z1) z1 = z;
+  }
+  box = { x0, z0, x1, z1 };
+  pathBoxes.set(cells, box);
+  return box;
+}
+
+// Might a path with this box meet the closed cells (a cell of margin for corners)?
+export const boxMeets = (b, c) => c.n > 0 && b.x1 >= c.x0 - 1 && b.x0 <= c.x1 + 1 && b.z1 >= c.z0 - 1 && b.z0 <= c.z1 + 1;
+
 // Can a cell path still be walked on this grid: every cell after the first and before
 // the last passable, and no diagonal step past a blocked corner (searchJob's rules)?
 export function pathOpen(grid, cells) {
@@ -956,7 +995,7 @@ export class RouteScheduler {
     // (on the grid it started with) and is checked like an old one. (Fields age by
     // requests: noteDemand.)
     if (prev && prev.W === grid.W && prev.H === grid.H) {
-      this.pruneBlocked();
+      this.pruneBlocked(newlyClosed(prev, grid));
       if (this.currentField) this.currentFieldStale = true;
       for (const f of this.fields.values()) f.stale = true;
     } else {
@@ -969,10 +1008,14 @@ export class RouteScheduler {
     this.restartJobs();
   }
 
-  // Drops cached routes that now pass through a blocked cell.
-  pruneBlocked() {
+  // Drops cached routes that now pass through a blocked cell (only those near a cell
+  // that closed are looked at).
+  pruneBlocked(closed = null) {
+    if (closed && !closed.n) return;
     for (const [key, result] of this.cache) {
-      if (!result.cells || !pathOpen(this.grid, result.cells)) this.cache.delete(key);
+      if (!result.cells) { this.cache.delete(key); continue; }
+      if (closed && !boxMeets(pathBox(result.cells, this.grid.W), closed)) continue;
+      if (!pathOpen(this.grid, result.cells)) this.cache.delete(key);
     }
   }
 
