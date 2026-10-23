@@ -24,6 +24,7 @@ import {projectSite} from './buildings.js';
 import {alongBridge, deckSurfaceY, DECK_VERGE} from './bridges.js';
 import {seatsOf} from './seats.js';
 import {rebuildDensity, densityAt} from './density.js';
+import {pointGrid, ringSearch} from './near.js';
 import {gatheringActivity, layoutOf, occasionFor, occasionSpot, wanderRoute, kinReset, kinAdd, ACTIVITIES, deckSpot, RAIL_MIN_HALF, railStand} from './gatherings.js';
 // A passer-by keeps this far (centre to centre) from a rail stander: half a body's
 // width plus half its depth.
@@ -161,22 +162,58 @@ export function assignBuilders(state) {
     const h = byId(state, 'households', p.householdId);
     return h && (h.trade === 'craft' || h.trade === 'labour' || h.trade === 'none');
   });
+  // Nearest first, the earlier candidate on a tie: by a grid of where they stand, once
+  // there are enough of them for that to pay.
+  const nearest = candidates.length > NEAR_SCAN ? nearestCandidate(candidates) : null;
+  let left = candidates.length;
   for (const pr of open) {
     const site = projectSite(state, pr);
     if (!site || !Number.isFinite(site.x)) continue;
     const want = Math.min(6, 2 + Math.floor((pr.workRequired ?? 30) / 40));
-    while (pr.workers.length < want && candidates.length) {
-      let best = -1, bestD = Infinity;
-      for (let i = 0; i < candidates.length; i++) {
-        const c = candidates[i];
-        const d = (c.x - site.x) ** 2 + (c.z - site.z) ** 2;
-        if (d < bestD) { bestD = d; best = i; }
+    while (pr.workers.length < want && left) {
+      let p;
+      if (nearest) p = nearest(site.x, site.z);
+      else {
+        let best = -1, bestD = Infinity;
+        for (let i = 0; i < candidates.length; i++) {
+          const c = candidates[i];
+          const d = (c.x - site.x) ** 2 + (c.z - site.z) ** 2;
+          if (d < bestD) { bestD = d; best = i; }
+        }
+        [p] = candidates.splice(best, 1);
       }
-      const [p] = candidates.splice(best, 1);
+      left--;
       pr.workers.push(p.id);
       assigned.add(p.id);
     }
   }
+}
+
+// Below this many points a plain scan is as quick as a grid. (Tests set it to check
+// the grid gives the scan's answers.)
+let NEAR_SCAN = 48;
+export function setNearScan(n) { NEAR_SCAN = n; }
+
+// The scan of assignBuilders as a search: (x, z) -> the candidate nearest it, the
+// earliest in the list on a tie, taken out of the running. Squared distances are
+// worked out exactly as the scan does.
+function nearestCandidate(list) {
+  const n = list.length;
+  const xs = new Float64Array(n), zs = new Float64Array(n);
+  for (let i = 0; i < n; i++) { xs[i] = list[i].x; zs[i] = list[i].z; }
+  const grid = pointGrid(xs, zs, n, 24);
+  const taken = new Uint8Array(n);
+  return (x, z) => {
+    let best = -1, bestD = Infinity;
+    ringSearch(grid, x, z, (i) => {
+      if (taken[i]) return;
+      const c = list[i];
+      const d = (c.x - x) ** 2 + (c.z - z) ** 2;
+      if (d < bestD || (d === bestD && i < best)) { bestD = d; best = i; }
+    }, (bound2) => best >= 0 && bestD < bound2);
+    taken[best] = 1;
+    return list[best];
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1614,21 +1651,66 @@ function farmRows(state, p, b, target) {
 const nearScratch = [];
 function nearestOf(state, world, types, p, k, h) {
   nearScratch.length = 0;
-  for (const t of types) {
-    const list = world.byType.get(t);
-    if (!list) continue;
-    for (const b of list) {
-      const d = (b.x - p.x) ** 2 + (b.z - p.z) ** 2;
-      if (nearScratch.length < k) nearScratch.push({b, d});
-      else {
-        let worst = 0;
-        for (let i = 1; i < nearScratch.length; i++) if (nearScratch[i].d > nearScratch[worst].d) worst = i;
-        if (d < nearScratch[worst].d) nearScratch[worst] = {b, d};
+  const near = typeGrid(world, types);
+  if (!near || !nearestByGrid(near, p, k)) {
+    nearScratch.length = 0;
+    for (const t of types) {
+      const list = world.byType.get(t);
+      if (!list) continue;
+      for (const b of list) {
+        const d = (b.x - p.x) ** 2 + (b.z - p.z) ** 2;
+        if (nearScratch.length < k) nearScratch.push({b, d});
+        else {
+          let worst = 0;
+          for (let i = 1; i < nearScratch.length; i++) if (nearScratch[i].d > nearScratch[worst].d) worst = i;
+          if (d < nearScratch[worst].d) nearScratch[worst] = {b, d};
+        }
       }
     }
   }
   if (!nearScratch.length) return null;
   return buildingTarget(state, pickQuiet(state, p, nearScratch, crowdTolerance(p, h)));
+}
+
+// The buildings of these types as a grid (null when so few that a scan is as quick),
+// kept with the world index.
+function typeGrid(world, types) {
+  const key = types.join();
+  const grids = (world.grids ??= new Map());
+  if (grids.has(key)) return grids.get(key);
+  const list = types.flatMap((t) => world.byType.get(t) ?? []);
+  const near = list.length > NEAR_SCAN ? {list, grid: pointGrid(list.map((b) => b.x), list.map((b) => b.z), list.length, 32)} : null;
+  grids.set(key, near);
+  return near;
+}
+
+// nearestOf's k nearest by the grid, into nearScratch. The scan keeps the k smallest
+// distances, and which of several buildings at the k-th distance it keeps depends on
+// the order it met them: when there is such a tie this gives up (false), and the scan
+// decides. Otherwise the k are the same buildings (pickQuiet does not care in what order).
+function nearestByGrid(near, p, k) {
+  const {list, grid} = near;
+  const all = [];
+  let worstD = -1;
+  ringSearch(grid, p.x, p.z, (i) => {
+    const b = list[i];
+    const d = (b.x - p.x) ** 2 + (b.z - p.z) ** 2;
+    all.push(d);
+    if (nearScratch.length < k) {
+      nearScratch.push({b, d});
+      if (nearScratch.length === k) worstD = Math.max(...nearScratch.map((c) => c.d));
+    } else if (d < worstD) {
+      let worst = 0;
+      for (let j = 1; j < k; j++) if (nearScratch[j].d > nearScratch[worst].d) worst = j;
+      nearScratch[worst] = {b, d};
+      worstD = -1;
+      for (let j = 0; j < k; j++) if (nearScratch[j].d > worstD) worstD = nearScratch[j].d;
+    }
+  }, (bound2) => nearScratch.length === k && worstD < bound2);
+  if (nearScratch.length < k) return true;
+  let within = 0;
+  for (const d of all) if (d <= worstD) within++;
+  return within === k;
 }
 
 // Crowd-aware choice. Each candidate scores its distance, a stable per-walker taste
