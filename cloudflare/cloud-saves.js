@@ -1,9 +1,9 @@
 // Private R2 cloud saves. All entry points run inside one account's Durable Object.
 const DAY = 86400000;
-export const MAX_CLOUD_BYTES = 5 * 1024 * 1024;
-const MAX_INFLATED_BYTES = 30 * 1024 * 1024;
+export const MAX_CLOUD_BYTES = 16 * 1024 * 1024;
+const MAX_INFLATED_BYTES = 64 * 1024 * 1024;
 const MAX_SAVES_PER_DAY = 800;
-const MAX_UPLOAD_BYTES_PER_DAY = 512 * 1024 * 1024;
+const MAX_UPLOAD_BYTES_PER_DAY = 2 * 1024 * 1024 * 1024;
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const PREFIX = 'cloud-saves/v1/';
@@ -231,7 +231,7 @@ export async function handleCloudState(object, request) {
     const limit=request.headers.get('x-cloud-limit')==='10'?10:1;
     if((!current || current.deleted) && count>=limit) return fail(409,'limit','Cloud town limit reached');
     const bytes=await boundedBytes(request,MAX_CLOUD_BYTES);
-    if(!bytes) return fail(413,'size','Save exceeds 5 MiB compressed');
+    if(!bytes) return fail(413,'size','Save exceeds 16 MiB compressed');
     if(!await validGzip(bytes)) return fail(400,'invalid','Invalid or oversized gzip save');
     const now=Date.now(); if(!rate(cat,now,bytes.length)) return fail(429,'rate','Daily save limit reached');
     const rev=base+1, key=keyFor(account,id,rev,token);

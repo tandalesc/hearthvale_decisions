@@ -26,6 +26,7 @@ for (const choice of ['hear', 'not_now']) {
     assert.equal(s.docket.length, 1);
     assert.equal(card.data.petitioners.length, 3);
     assert.match(card.title, /farmers.*makers.*merchants.*petition the council/i);
+    assert.deepEqual(card.asker, {name: 'A farmer', role: 'with the makers and the merchants'});
     assert.deepEqual(card.subjects, factions.map((f) => subject(f)));
     assert.equal(card.proseRevision, 2, 'each added group invalidates the shared narration');
     assert.deepEqual(card.options.map((o) => o.key), ['hear', 'not_now']);
@@ -103,6 +104,13 @@ test('old pending same-grievance cards coalesce on monthly pass and invalidate p
     'a petitioner whose mood fell sharply may return early');
   assert.ok(subjectBlocked(s, [subject('crafters')], {mood: 0.25}),
     'another petitioner retains their own mood threshold');
+});
+
+test('a saved grouped petition with the old placeholder asker names a speaker on restore', () => {
+  const [s, card] = grouped();
+  card.asker = {name: 'The petitioners', role: 'petitioner'};
+  governanceSystem.restore(s);
+  assert.deepEqual(s.docket[0].asker, {name: 'A farmer', role: 'with the makers and the merchants'});
 });
 
 test('restoring a saved town coalesces pending petitions before any simulation time passes', () => {

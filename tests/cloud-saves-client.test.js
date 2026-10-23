@@ -33,7 +33,7 @@ function setup({name = 'Device', cloud = null, account = 'alice', now = Date.now
       return true;
     },
   };
-  const catalog = scope => ({towns: [...(remote.get(scope)?.values() ?? [])].map(t => ({id: t.id, revision: t.revision, saveId: t.saveId, name: t.name})), recoverable: [], limit: 10, maxBytes: 5 * 1024 * 1024});
+  const catalog = scope => ({towns: [...(remote.get(scope)?.values() ?? [])].map(t => ({id: t.id, revision: t.revision, saveId: t.saveId, name: t.name})), recoverable: [], limit: 10, maxBytes: 16 * 1024 * 1024});
   const backend = async (url, options) => {
     const scope = options.headers['X-Cloud-Account'];
     calls.push({url, options, scope});

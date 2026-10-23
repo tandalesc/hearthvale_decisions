@@ -62,7 +62,7 @@ test('cloud saves enforce account isolation, CAS, retry idempotency, quota, and 
 test('cloud save rejects oversized and invalid streamed gzip, daily alarm writes recoverable catalog', {timeout:30000},async()=>{
  const f=await setup();try {
   const {request,save,cookieA,bucket,mf}=f;
-  assert.equal((await save(cookieA,ids.town,0,ids.one,new Uint8Array(5*1024*1024+1))).status,413);
+  assert.equal((await save(cookieA,ids.town,0,ids.one,new Uint8Array(16*1024*1024+1))).status,413);
   assert.equal((await save(cookieA,ids.town,0,ids.one,new Uint8Array([1,2,3]))).status,400);
   assert.equal((await save(cookieA,ids.town,0,ids.one)).status,200);
   const ns=await mf.getDurableObjectNamespace('ACCOUNT_STATE');

@@ -37,7 +37,7 @@ test('real gzip and IndexedDB sync, conflict controls and deleted-town recovery 
       if(method==='PUT') {const old=remote.get(id);if(Number(options.headers['If-Match'])!==(old?.meta.revision||0))return Response.json({code:'conflict',error:'Town changed'},{status:409});const meta={...JSON.parse(decodeURIComponent(options.headers['X-Town-Meta'])),id,revision:(old?.meta.revision||0)+1,saveId:options.headers['X-Save-Id'],savedAt:new Date().toISOString()};remote.set(id,{meta,blob:options.body});return Response.json({town:meta});}
       if(method==='DELETE'){const old=remote.get(id);recoverable=[{...old.meta,revision:old.meta.revision+1}];remote.delete(id);return Response.json({deleted:true});}
       if(id){const row=remote.get(id);return new Response(row.blob,{headers:{'X-Town-Meta':encodeURIComponent(JSON.stringify(row.meta))}});}
-      return Response.json({towns:[...remote.values()].map(v=>v.meta),recoverable,limit:1,maxBytes:5*1024*1024});
+      return Response.json({towns:[...remote.values()].map(v=>v.meta),recoverable,limit:1,maxBytes:16*1024*1024});
     }});
     await cloud.flush('local');
     const id=(await store.read('local')).meta.cloud.scope.id;
@@ -66,7 +66,7 @@ test('real gzip and IndexedDB sync, conflict controls and deleted-town recovery 
 test('authenticated Manage Towns shows cloud recovery on a phone without horizontal overflow',async({page})=>{
   await page.setViewportSize({width:390,height:844});
   await page.route('**/api/session',route=>route.fulfill({json:{authenticated:true,tier:'free',email:'player@example.test',cloudAccountId:'scope',billingEnabled:false}}));
-  await page.route('**/api/cloud/towns',route=>route.fulfill({json:{towns:[{id:'11111111-1111-4111-8111-111111111111',name:'Oakstead',year:8,people:85,savedAt:new Date().toISOString(),revision:2}],recoverable:[{id:'22222222-2222-4222-8222-222222222222',name:'Old Birchstead',revision:3}],limit:1,maxBytes:5*1024*1024}}));
+  await page.route('**/api/cloud/towns',route=>route.fulfill({json:{towns:[{id:'11111111-1111-4111-8111-111111111111',name:'Oakstead',year:8,people:85,savedAt:new Date().toISOString(),revision:2}],recoverable:[{id:'22222222-2222-4222-8222-222222222222',name:'Old Birchstead',revision:3}],limit:1,maxBytes:16*1024*1024}}));
   await page.goto('/?renderer=stub');
   await page.locator('[data-go="play"]').click();
   await page.locator('[data-go="towns"]').click();
