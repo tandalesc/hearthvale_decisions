@@ -16,7 +16,7 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
 
   const full = new Map();
   const next = new Map();
-  let cards = [], active = null, phone = false, lastSig = '';
+  let cards = [], active = null, phone = false, lastSig = '', visible = false, requested = null;
 
   pager.querySelector('.prev').addEventListener('click', () => step(-1));
   pager.querySelector('.next').addEventListener('click', () => step(1));
@@ -62,6 +62,10 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
     const ids = cards.map((c) => c.id);
     if (!ids.includes(active)) active = ids[0] ?? null;
     const current = cards.find((c) => c.id === active);
+    if (visible && current && requested !== current.id) {
+      requested = current.id;
+      Promise.resolve(ctx.requestCardProse?.(current.id)).catch(() => {});
+    }
     const others = phone ? [] : cards.filter((c) => c.id !== active);
     const desired = current ? [fullNode(current), ...others.map(nextNode)] : [];
     let leaving = false;
@@ -143,6 +147,7 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
       render(0);
       stack.querySelector('.card:not(.is-next) .option')?.focus({preventScroll: false});
     },
+    setVisible(value) { visible = value; if (!value) { requested = null; ctx.cancelCardProse?.(); } else render(); },
     get count() { return cards.length; },
     get active() { return active; },
     // Show a different set of cards at once (a filter changed): no fold-away

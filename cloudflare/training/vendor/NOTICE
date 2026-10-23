@@ -1,0 +1,4 @@
+Decision student training sources copied without modification from twm-decision-student,
+2026-10-23, authored by the contributors to that project. Licensed Apache-2.0;
+see LICENSE. Only decision model/data/confidence and training/export/evaluation
+scripts are included. No training data or checkpoints are included.

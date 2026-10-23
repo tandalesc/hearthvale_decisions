@@ -246,14 +246,14 @@ function narrateResponse(text) {
     {status: 200, headers: {'content-type': 'text/event-stream'}});
 }
 
-test('client streams tokens and caches per facts', async () => {
+test('client accepts final legacy narration without displaying unvalidated token fragments', async () => {
   let calls = 0;
   const client = createNarratorClient({fetcher: async () => { calls++; return narrateResponse('Edda is tired. You refused the wage floor.'); }});
   const tokens = [];
   const sources = [];
   const text = await client.narrate(baseFacts(), {onToken: (t) => tokens.push(t), onMeta: (m) => sources.push(m.source)});
   assert.equal(text, 'Edda is tired. You refused the wage floor.');
-  assert.ok(tokens.length > 1);
+  assert.equal(tokens.length, 1);
   assert.deepEqual(sources, ['model']);
   const again = await client.narrate(baseFacts(), {onMeta: (m) => sources.push(m.source)});
   assert.equal(again, text);
@@ -536,7 +536,7 @@ test('prose writer: retries without response_format, and 503 when upstream is do
   assert.equal(d.failed.status, 503);
 });
 
-test('prose keeper stores llm prose, keeps retrying when the service is away', async () => {
+test('prose keeper only requests selected cards and retries on explicit demand', async () => {
   const state = fixtureState('town');
   const card = cardsNeedingProse(state)[0];
   const stored = [];
@@ -551,14 +551,16 @@ test('prose keeper stores llm prose, keeps retrying when the service is away', a
   };
   const keeper = createProseKeeper({fetcher, actions, now: () => clock});
   await keeper.tick(state);
+  assert.equal(stored.length, 0, 'ticks never generate prose');
+  await keeper.requestCard(state, card.id);
   assert.equal(stored.length, 0, 'nothing stored while the service is away');
   up = true;
-  await keeper.tick(state);
+  await keeper.requestCard(state, card.id);
   assert.notEqual(stored[0]?.id, card.id, 'the failed card waits for its retry time');
   clock += 31000;
-  for (let i = 0; i < state.docket.length + 1; i++) await keeper.tick(state);
-  assert.ok(stored.some((s) => s.id === card.id && s.prose.source === 'llm'));
-  assert.equal(keeper.stats().llm, stored.length);
+  await keeper.requestCard(state, card.id);
+  assert.ok(stored.some((s) => s.id === card.id && s.prose.source === 'template'), 'a generic why rejected by the detail check is labelled as template');
+  assert.equal(keeper.stats().template, stored.length);
 });
 
 // ---------------------------------------------------------------------------
@@ -651,7 +653,7 @@ test('whyLines puts rulings and story first and leaves out the subject line', ()
   assert.match(whyLines(baseFacts()).at(-1), /^It is spring of year 42/);
 });
 
-test('prose keeper writes a year line through sim-governance\'s action', async () => {
+test('prose keeper never generates annual chronicle in background', async () => {
   const state = fixtureState('town');
   for (const c of state.docket) c.needsProse = false;   // only the chronicle is left to do
   const entry = state.chronicle.entries.filter((e) => e.kind === 'year').at(-1);
@@ -664,8 +666,8 @@ test('prose keeper writes a year line through sim-governance\'s action', async (
     return new Response(JSON.stringify({prose: {text: 'The fair came, and the town was glad.'}, source: 'llm'}));
   };
   await createProseKeeper({fetcher}).tick(state);
-  assert.deepEqual(entry.prose, {text: 'The fair came, and the town was glad.', source: 'llm'});
-  assert.equal(entry.needsProse, false);
+  assert.equal(entry.prose, undefined);
+  assert.equal(entry.needsProse, true);
 });
 
 test('kept notes go to state.notes through sim-core', async () => {
@@ -699,4 +701,101 @@ test('end page: each town of the valley gets its own line, checked on its own', 
   assert.equal(checkEndProse(facts, {eras, closing}).prose.centres.length, 2, 'missing town lines fall back too');
   assert.deepEqual(endFallback(facts).centres.map((c) => c.text), facts.centres.map((c) => c.line));
   assert.ok(STORY_KINDS.includes('displaced'));
+});
+
+import {narrateAnthropic, readAnthropicDeltas, validateNarrationFacts} from '../cloudflare/narration.js';
+test('Anthropic stream parser handles split events and rejects upstream errors', async () => {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream({start(c) { for (const s of ['event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}\n', '\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n']) c.enqueue(encoder.encode(s)); c.close(); }});
+  const parts = [];
+  for await (const part of readAnthropicDeltas(body)) parts.push(part);
+  assert.deepEqual(parts, ['Hi']);
+  const errorBody = new Response('data: {"type":"error"}\n\n').body;
+  await assert.rejects(async () => { for await (const part of readAnthropicDeltas(errorBody)) void part; }, /provider error/);
+});
+test('Anthropic card narration always retains canonical option text', async () => {
+  const state = fixtureState('town');
+  const facts = cardFacts(state, cardsNeedingProse(state)[0].id);
+  let calls = 0;
+  const fetcher = async (url, init) => {
+    calls++;
+    const request = JSON.parse(init.body);
+    assert.equal(request.model, 'claude-haiku-5-5');
+    assert.equal(request.max_tokens, 180);
+    assert.deepEqual(request.thinking, {type:'disabled'});
+    assert.equal(request.output_config.effort, 'low');
+    assert.equal(init.redirect, 'manual');
+    const text = JSON.stringify({why: 'We ask this now.', options: {do: 'Everything is free.'}});
+    return new Response(`data: ${JSON.stringify({type:'content_block_delta',delta:{type:'text_delta',text}})}\n\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n`);
+  };
+  const prose = await narrateAnthropic(facts, {ANTHROPIC_API_KEY:'test'}, {fetcher});
+  assert.deepEqual(prose.prose.options, Object.fromEntries(facts.options.map((o) => [o.key,o.tradeoff ?? ''])));
+  assert.equal(calls, 1);
+  assert.throws(() => validateNarrationFacts({facts, prompt:'override'}));
+});
+
+test('hosted Anthropic envelope is consumed and saved by demand client', async () => {
+  const state = fixtureState('town');
+  const card = cardsNeedingProse(state)[0];
+  const stored = [];
+  const upstream = async () => new Response(`data: ${JSON.stringify({type:'content_block_delta',delta:{type:'text_delta',text:JSON.stringify({why:'We ask this now.'})}})}\n\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n`);
+  const keeper = createProseKeeper({
+    fetcher: async (url, init) => {
+      const facts = validateNarrationFacts(JSON.parse(init.body));
+      return Response.json(await narrateAnthropic(facts, {ANTHROPIC_API_KEY:'test'}, {fetcher:upstream}));
+    },
+    actions: (name) => name === 'setCardProse' ? (state,id,prose) => stored.push({id,prose}) : null,
+  });
+  await keeper.requestCard(state,card.id);
+  assert.equal(stored.length,1);
+  assert.equal(stored[0].id,card.id);
+  assert.deepEqual(stored[0].prose.options,Object.fromEntries(cardFacts(state,card.id).options.map((o)=>[o.key,o.tradeoff ?? ''])));
+});
+
+test('Anthropic parser rejects truncated valid-looking text and exhausted output', async () => {
+  for (const suffix of ['', 'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n\ndata: {"type":"message_stop"}\n\n']) {
+    const body = new Response('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"A full sentence."}}\n\n' + suffix).body;
+    await assert.rejects(async () => { for await (const delta of readAnthropicDeltas(body)) void delta; }, /Incomplete narration/);
+  }
+  const huge = new Response('event: ping\ndata: ' + 'x'.repeat(70000)).body;
+  await assert.rejects(async () => { for await (const delta of readAnthropicDeltas(huge)) void delta; }, /too large/);
+});
+
+test('live Haiku response is bounded to two sentences and validates without touching effects', async () => {
+  const state=fixtureState('town');
+  const facts=cardFacts(state,cardsNeedingProse(state)[0].id);
+  const why="I think we need a proper hall, as the moot house is cramped for all of us now. You approved the Festival Society last year, so a summer fair could follow it nicely. Still, I lean toward the hall, since the clerks of Water Hill are keen on it.";
+  const stream=`data: ${JSON.stringify({type:'content_block_delta',delta:{type:'text_delta',text:JSON.stringify({why})}})}\n\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n`;
+  const result=await narrateAnthropic(facts,{ANTHROPIC_API_KEY:'test'},{fetcher:async()=>new Response(stream)});
+  assert.equal(result.source,'llm');
+  assert.equal(result.prose.why.match(/[.!?]/g).length,2);
+  assert.ok(result.prose.why.split(/\s+/).length<=40);
+});
+
+import {partialCardWhy,checkHostedCardProse,narrationKey as hostedNarrationKey} from '../cloudflare/narration.js';
+test('partial JSON why decoder waits for split escapes and handles unicode', () => {
+  assert.equal(partialCardWhy('{"why":"A \\u00'),null);
+  assert.equal(partialCardWhy('{"why":"A \\u00e9 and \\"quote\\".'),'A é and "quote".');
+  assert.equal(partialCardWhy('{"why":"An unfinished escape \\'),null);
+});
+test('safe leading sentence salvage keeps strict guards and avoids generic example-word false positives', () => {
+  const state=fixtureState('town'),facts=cardFacts(state,cardsNeedingProse(state)[0].id);
+  const valid='The clerks of Water Hill lean for this upgrade, and you approved forming the Festival Society in year 29 after a bumper harvest.';
+  const long=valid+' '+('Extra unsupported words '.repeat(20))+'.';
+  assert.equal(checkHostedCardProse(facts,long).used.why,'llm');
+  assert.equal(checkHostedCardProse(facts,'Ivo says this now.').used.why,'template');
+  assert.equal(checkHostedCardProse({...facts,place:{district:'Old Ford'}},'Since the bumper harvest in year 29, the merchants of Old Ford lean for this festival fund, and the labourers lean for it too.').used.why,'llm');
+  assert.notEqual(hostedNarrationKey(facts),JSON.stringify(facts));
+});
+test('provider previews validated complete prose with backpressure and final fallback is authoritative', async () => {
+  const state=fixtureState('town'),facts=cardFacts(state,cardsNeedingProse(state)[0].id);
+  const valid='The clerks of Water Hill lean for this upgrade, and you approved forming the Festival Society in year 29 after a bumper harvest.';
+  const previews=[];let waiting=false;
+  const parts=['{"why":"The clerks of Water Hill lean', ' for this upgrade, and you approved forming the Festival Society in year 29 after a bumper harvest.', '" BROKEN}'];
+  const stream=parts.map(text=>`data: ${JSON.stringify({type:'content_block_delta',delta:{type:'text_delta',text}})}\n\n`).join('')+'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n';
+  const result=await narrateAnthropic(facts,{ANTHROPIC_API_KEY:'test'},{fetcher:async()=>new Response(stream),onPreview:async preview=>{assert.equal(waiting,false);waiting=true;await Promise.resolve();previews.push(preview);waiting=false;}});
+  assert.deepEqual(previews,[{text:valid,field:'why'}]);
+  assert.equal(result.source,'template');
+  const abort=new AbortController();abort.abort();
+  await assert.rejects(narrateAnthropic(facts,{ANTHROPIC_API_KEY:'test'},{signal:abort.signal,fetcher:async()=>new Response(stream),onPreview:async()=>assert.fail('aborted preview')}),{name:'AbortError'});
 });

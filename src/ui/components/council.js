@@ -250,6 +250,7 @@ export function createCouncil(ctx) {
     indexSig = headSig = '';
     if (!open) {
       open = true;
+      docket.setVisible(true);
       el.hidden = false;
       ctx.onOpen?.();
       if (ctx.root.dataset.layout !== 'phone') animate(el, [{opacity: 0, transform: 'translateY(8px) scale(.99)'}, {opacity: 1, transform: 'none'}], {duration: 200});
@@ -261,6 +262,7 @@ export function createCouncil(ctx) {
   function close() {
     if (!open) return;
     open = false;
+    docket.setVisible(false);
     if (ctx.root.dataset.layout !== 'phone') el.hidden = true;
     ctx.onClose?.();
   }

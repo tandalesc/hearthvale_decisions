@@ -1,54 +1,78 @@
-# Sketch only: nothing has been deployed.
-#
-#   npm run build && npx wrangler dev -c cloudflare/wrangler.toml
-#   npx wrangler deploy -c cloudflare/wrangler.toml
-#
-# Secrets (never in this file): npx wrangler secret put API_KEY -c cloudflare/wrangler.toml
-#                               npx wrangler secret put SESSION_SECRET -c cloudflare/wrangler.toml
-# Local values go in cloudflare/.dev.vars (gitignored).
-
+# See docs/hosting.md. Secrets belong in Wrangler or cloudflare/.dev.vars.
 name = "hearthvale"
 main = "worker.js"
-compatibility_date = "2026-10-01"
+compatibility_date = "2026-10-23"
+routes = [{ pattern = "hearthvale.shishirtandale.com", custom_domain = true }]
 
-# The vite build. Files are served without running the Worker; only /api/* reaches worker.js.
 [assets]
 directory = "../dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*"]
+run_worker_first = ["/api/*", "/students/*"]
 
-# Workers AI, for the narrator (called through the AI Gateway named below).
-[ai]
-binding = "AI"
+[observability]
+enabled = true
+redact_query_string = true
 
-# The decision service on the LAN, through a Cloudflare Tunnel. Create it with
-#   npx wrangler vpc service create hearthvale-decisions --type http --tunnel-id <TUNNEL_ID> --hostname <host> --http-port 4000
-# The hostname lives in Cloudflare, not in the repo.
-[[vpc_services]]
-binding = "DECISIONS"
-service_id = "<VPC_SERVICE_ID>"
-remote = true
+[triggers]
+crons = ["0 7 * * *"]
 
-# Per-player limit on upstream decision requests (approximate, per location).
-[[ratelimits]]
-name = "PLAYER_LIMIT"
-namespace_id = "1001"
+# Onboard a sending domain in Cloudflare Email Service for player sign-in mail.
+# Local development simulates delivery; production uses the native binding.
+[[send_email]]
+name = "EMAIL"
 
-  [ratelimits.simple]
-  limit = 30
-  period = 10
-
-# One object holds the day's question count for the whole service.
 [[durable_objects.bindings]]
-name = "DAILY_CAP"
-class_name = "DailyCap"
+name = "ACCOUNT_STATE"
+class_name = "AccountState"
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["DailyCap"]
+[[durable_objects.bindings]]
+name = "LEARNING_COORDINATOR"
+class_name = "LearningCoordinator"
+
+[[durable_objects.bindings]]
+name = "LEARNING_CONTAINER"
+class_name = "LearningContainer"
+
+[exports.AccountState]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.LearningCoordinator]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.LearningContainer]
+type = "durable-object"
+storage = "sqlite"
+
+[[r2_buckets]]
+binding = "STUDENT_ARTIFACTS"
+bucket_name = "hearthvale-students"
+
+[[containers]]
+class_name = "LearningContainer"
+scheduling_policy = "durable_object"
+
+[containers.images.base]
+dockerfile = "./training/Dockerfile"
+build_context = ".."
 
 [vars]
-AI_GATEWAY_ID = "hearthvale"
-NARRATOR_MODEL = "@cf/google/gemma-4-26b-a4b-it"
-DECISIONS_DAILY_CAP = "5000000"
+ANTHROPIC_MODEL = "claude-haiku-5-5"
+DECISIONS_TEACHER_MODEL = "d1"
+PAID_NARRATIONS_MONTHLY = "120"
+PAID_TEACHER_MONTHLY = "1000"
+GLOBAL_NARRATIONS_MONTHLY = "10000"
+GLOBAL_TEACHER_MONTHLY = "100000"
+AUTH_EMAIL_DAILY_CAP = "1000"
+NOVEL_DAILY_CAP = "10000"
+LEARNING_DAILY_LABEL_CAP = "10000"
+LEARNING_MIN_ROWS = "50"
+LEARNING_MAX_REPORTS = "20000"
+LEARNING_MAX_JOB_ROWS = "10000"
+# Set this to the deployed HTTPS origin before enabling training dispatch.
+# LEARNING_PUBLIC_ORIGIN = "https://hearthvale.example.com"
+# EMAIL_FROM = "hello@example.com"
+# STRIPE_PRICE_MONTH = "price_..." # USD 1.00 recurring monthly
+# STRIPE_PRICE_YEAR = "price_..."  # USD 10.00 recurring yearly

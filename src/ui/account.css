@@ -1,0 +1,32 @@
+.account-paper { box-sizing: border-box; width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 38px 36px 28px; overflow: auto; border: 1px solid var(--line-2, #c7ccb8); border-radius: 20px; background: var(--paper, #fafbf2); color: var(--ink, #2f3f2f); box-shadow: 0 24px 90px #18251f40; font: 15px/1.55 var(--font-ui, system-ui); }
+/* Avoid double-tap zoom while preserving dialog scrolling and pinch zoom. */
+.account-paper { touch-action: manipulation; }
+.account-paper::backdrop { background: #17251d65; backdrop-filter: blur(5px); }
+.account-content { display: flex; flex-direction: column; gap: 16px; }
+.account-content h2 { margin: 0; font: 500 32px/1.1 var(--font-display, Georgia, serif); letter-spacing: -.5px; }
+.account-content p { margin: 0; }
+.account-eyebrow { color: var(--ink-2, #5a6a55); font-size: 11px; font-weight: 650; letter-spacing: 1.8px; text-transform: uppercase; }
+.account-intro { color: var(--ink-2, #5a6a55); }
+.account-close { position: absolute; top: 10px; right: 14px; width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: inherit; font: 26px/1 Georgia,serif; cursor: pointer; }
+.account-close:hover { background: var(--paper-3, #e9ebdb); }
+.account-form { display: grid; gap: 9px; margin-top: 5px; }
+.account-form label { font-size: 12px; font-weight: 650; }
+.account-email { box-sizing: border-box; width: 100%; padding: 12px 14px; border: 1px solid var(--line-2, #c7ccb8); border-radius: 9px; background: var(--paper-card, #fffef9); color: inherit; font: inherit; }
+/* iOS zooms focused text fields below 16px, including the one-time-code field. */
+.account-email { font-size: 16px; }
+.account-paper :focus-visible { outline: 2px solid var(--ink, #2f3f2f); outline-offset: 3px; }
+.account-content .btn { min-height: 44px; border-radius: 9px; padding: 10px 16px; cursor: pointer; font: 600 13px/1.4 var(--font-ui, system-ui); }
+.account-content .btn-primary { border: 1px solid var(--ink, #2f3f2f); background: var(--ink, #2f3f2f); color: var(--paper, #fafbf2); }
+.account-content .btn-secondary { border: 1px solid var(--line-2, #c7ccb8); background: transparent; color: inherit; }
+.account-content button:disabled, .account-content input:disabled { opacity: .6; cursor: wait; }
+.account-status:empty { display: none; }
+.account-status { color: var(--ink-2, #5a6a55); font-size: 13px; }
+.account-status.is-error { color: var(--danger, #9e493c); }
+.account-foot { padding-top: 14px; border-top: 1px solid var(--line, #dde0cf); color: var(--ink-2, #5a6a55); font-size: 11px; text-align: center; }
+.account-features { padding-left: 20px; margin: 0 0 4px; display: grid; gap: 6px; }
+.account-plans { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.account-plan { padding: 16px 12px; border: 1px solid var(--line-2, #c7ccb8); border-radius: 12px; background: var(--paper-card, #fffef9); color: inherit; text-align: left; cursor: pointer; }
+.account-plan[aria-pressed="true"] { border: 2px solid var(--ink, #2f3f2f); padding: 15px 11px; background: var(--paper-2, #f2f3e6); }
+.account-plan b { display: block; font: 500 30px/1.2 var(--font-display, Georgia, serif); }
+.account-plan span { display: block; font-size: 12px; margin-top: 5px; }
+@media(max-width: 480px) { .account-paper { padding: 34px 22px 24px; border-radius: 16px; } .account-content h2 { font-size: 29px; } }

@@ -582,13 +582,15 @@ function grievanceCard(state, faction, grievance, groupName = null) {
   const category = GRIEVANCE_CATEGORY[grievance] ?? 'civic';
   // A group that comes back asks harder: new words, and a firmer push on the body.
   const again = timesAsked(state, `petition:${faction.id}:${grievance}`) > 0;
+  const mood = moodBand(faction.mood);
+  const concern = `${again ? 'They' : who} are generally ${mood}${mood === 'content' || mood === 'glad' ? ', but' : ' and'} ${again ? 'still ' : ''}say ${GRIEVANCE_TEXT[grievance]}.`;
   const fix = (t) => t.replace(/^the /, 'The ');
   return docket.makeCard(state, {
     kind: 'petition', from: 'moot', templateId: `grievance:${grievance}`, category,
     title: fix(again ? `${who} petition the council again` : `${who} petition the council`),
     why: fix(again
-      ? `${who} have come before. They are ${moodBand(faction.mood)}. They still say ${GRIEVANCE_TEXT[grievance]}. This time they want a plan, not a promise.`
-      : `${who} are ${moodBand(faction.mood)}. They say ${GRIEVANCE_TEXT[grievance]}. They want to be heard.`),
+      ? `${who} have come before. ${concern} This time they want a plan, not a promise.`
+      : `${concern} They want to be heard.`),
     asker: {name: `A ${faction.name.toLowerCase().replace(/s$/, '')}`, role: 'petitioner'}, urgency: again ? 2 : 1, cost: 0,
     helps: faction.trades, hurts: [],
     data: {faction: faction.id, grievance, mood: Math.round(faction.mood * 100) / 100, again},

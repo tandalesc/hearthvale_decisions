@@ -138,7 +138,7 @@ export function cardView(state, card) {
     subjects: card.subjects ?? [],
     category: card.category,
     title: card.title,
-    why: card.prose?.why ?? card.why,
+    why: card.why,
     templateWhy: card.why,
     prose: card.prose ?? null,
     needsProse: !!card.needsProse,
@@ -152,7 +152,7 @@ export function cardView(state, card) {
     options: card.options.map((o) => ({
       key: o.key,
       label: o.label,
-      tradeoff: card.prose?.options?.[o.key] ?? o.tradeoff,
+      tradeoff: o.tradeoff,
       templateTradeoff: o.tradeoff,
       cost: o.cost ?? 0,
       ...(o.upkeep ? {upkeep: o.upkeep} : {}),

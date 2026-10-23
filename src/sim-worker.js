@@ -52,13 +52,13 @@ const ops = {
     // opts.student: the decision students directory (manifest.json and bundles);
     // their kinds are answered here, one version per town.
     let students = null;
+    if (decisions) decisions = createLocalAnswerer({client: decisions, entitlement: opts.entitlement, report: {}});
     if (decisions && opts.student) {
-      decisions = createLocalAnswerer({client: decisions, report: {}});
-      students = createStudentVersions({answerer: decisions, base: opts.student, pinned: opts.studentPin ?? null});
+      students = createStudentVersions({answerer: decisions, base: opts.student, manifestURL: new URL('/api/students/manifest', self.location.href).href, fallbackBase: new URL('/students/', self.location.href).href, pinned: opts.studentPin ?? null});
       await students.start();
     }
     session = createSimSession({
-      sim, lib, routes, decisions, students,
+      sim, lib, routes, decisions, students, entitlement: opts.entitlement,
       narrator: {facts: narrativeFacts, peekNote, keepNote, touchNote},
       startProse: opts.prose === false ? null : startProseKeeper,
       pace: opts.pace ?? sim.pace ?? 1,
@@ -99,6 +99,13 @@ const ops = {
   'decisions.configure': (s) => session.decisions.configure(s),
   'decisions.setEnabled': (on) => session.decisions.setEnabled(on),
   'decisions.stats': () => session.decisions.stats(),
+  cancelCardProse: () => session.cancelCardProse(),
+  // Provider I/O must not occupy the serial simulation-message queue: snapshots,
+  // ticks and cancellation need to keep running while narration arrives.
+  requestCardProse: (id) => {
+    session.requestCardProse(id).catch(() => {});
+    return true;
+  },
   'notes.set': (ref, key, text) => session.notes.set(ref, key, text),
   'notes.touch': (ref) => session.notes.touch(ref),
   dev: (name, args) => plain(session.dev(name, args)),

@@ -399,7 +399,16 @@ const CLAIMS_RULING = /\bwe (put off|refused|approved|turned down|let lapse|dela
 function whyProblem(text, facts) {
   if (STIFF.test(text)) return `stiff phrasing: ${text.match(STIFF)[0]}`;
   if (CLAIMS_RULING.test(text)) return 'claims your rulings as theirs';
-  if (sentencesOf(text).some((x) => contentTokens(x).size >= 3 && overlapWithTemplate(x, EXAMPLE_WHYS) >= 0.5)) return 'copies an example card';
+  // Shared town names and ordinary words are not copied prose. Require a
+  // consecutive phrase from an example that the supplied facts do not contain.
+  const exampleWords = EXAMPLE_WHYS.toLowerCase().match(/[a-z']+/g) ?? [];
+  const factText = (JSON.stringify(facts).toLowerCase().match(/[a-z']+/g) ?? []).join(' ');
+  const textWords = text.toLowerCase().match(/[a-z']+/g) ?? [];
+  const examples = exampleWords.join(' ');
+  for (let i = 0; i <= textWords.length - 6; i++) {
+    const phrase = textWords.slice(i, i + 6).join(' ');
+    if (examples.includes(phrase) && !factText.includes(phrase)) return 'copies an example card';
+  }
   // 'Ivo thinks we should...' from Ivo himself. Role names ('The town crier') do not count.
   const name = facts.asker?.name?.split(' ')[0];
   if (name && name.length > 2 && !/^(the|a|an)$/i.test(name) && new RegExp(`\\b${name}\\b`).test(text)) return 'speaks of themselves by name';

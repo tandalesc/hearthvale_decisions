@@ -13,3 +13,12 @@ local.env
 data/distill/
 data/novel/
 data/loop/
+data/strike-training/
+__pycache__/
+*.pyc
+
+# Local tooling and generated migration previews
+.DS_Store
+.codex/
+.agents/
+legacy-migration/migration-*.png

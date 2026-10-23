@@ -39,20 +39,20 @@ export function createSettings(ctx) {
     const tab = TABS.some((t) => t.id === p.settingsTab) ? p.settingsTab : TABS[0].id;
     const panels = {
       game: `
+        ${ctx.openAccount ? `<fieldset><legend>Your account</legend>
+          <p class="settings-account-copy">${ctx.entitlement?.()?.tier === 'paid' ? 'Hearthvale Plus is active. Thank you for supporting the town.' : 'Free play includes a complete town and ongoing learning updates. Hearthvale Plus adds faster play and richer Council writing.'}</p>
+          <button type="button" class="btn btn-secondary" data-act="account">${ctx.entitlement?.()?.authenticated ? 'Manage account' : 'Sign in'}</button>
+        </fieldset>` : ''}
         <fieldset><legend>Play</legend>
           ${field('Title cards', 'Full-screen cards for a new age, a new body or a disaster. They pause the town.', seg('moments', p.moments, [['fast', 'While sped up'], ['always', 'Always'], ['never', 'Never']]))}
           ${field('Decision model', 'The student that answers most of the town\'s questions in this browser.', '<b class="model-ver" style="font:500 13px var(--font-mono)">–</b>')}
         </fieldset>
         <fieldset><legend>Your town</legend>
-          <p style="margin:0 0 8px;font-size:var(--fs-13);color:var(--ink-2)">The town saves itself every 30 seconds on this device. Your other towns wait on the main menu. Export a copy to keep a town safe or move it.</p>
+          <p style="margin:0 0 8px;font-size:var(--fs-13);color:var(--ink-2)">The town saves itself every 30 seconds on this device.</p>
           ${ctx.seedCode?.() ? `<div class="field"><span>Valley<small>Share this code to grow the same valley.</small></span><span class="seed-row"><span class="seed-code">${esc(ctx.seedCode())}</span><button class="btn btn-secondary" data-act="copy-seed">Copy</button></span></div>` : ''}
-          <div class="field"><span>Start from a seed<small>A code, a number or any word.</small></span><span class="seed-row"><input type="text" data-seed maxlength="40" placeholder="Riverbend" aria-label="Seed for a new valley"><button class="btn btn-secondary" data-act="seed-town">Start</button></span></div>
           <div class="btn-row">
             <button class="btn btn-primary" data-act="save">${icon('save')}Save now</button>
-            <button class="btn btn-secondary" data-act="export">Export</button>
-            <label class="btn btn-secondary">${icon('upload')}Import<input type="file" accept="application/json" class="sr-only" data-act="import"></label>
             <button class="btn btn-secondary" data-act="menu">Main menu</button>
-            <button class="btn btn-ghost" data-act="new">Start a new town</button>
           </div>
         </fieldset>`,
       display: `
@@ -142,15 +142,10 @@ export function createSettings(ctx) {
         return;
       }
       const act = e.target.closest('button[data-act]')?.dataset.act;
+      if (act === 'account') { close(); ctx.openAccount?.(); return; }
       if (act === 'save') ctx.save(true);
       if (act === 'clean') ctx.hideInterface?.();
-      if (act === 'export') ctx.exportSave();
-      if (act === 'new') ctx.newTown();
       if (act === 'menu') ctx.toMenu?.();
-      if (act === 'seed-town') {
-        const seed = el.querySelector('[data-seed]').value.trim();
-        if (seed) ctx.newTown({seed});
-      }
       if (act === 'copy-seed') {
         const btn = e.target.closest('button');
         navigator.clipboard?.writeText(ctx.seedCode()).then(() => { btn.textContent = 'Copied'; }, () => { btn.textContent = 'Copy failed'; });
@@ -161,9 +156,6 @@ export function createSettings(ctx) {
       if (!r) return;
       const v = Number(e.target.value);
       ctx.prefs.set(r, v);
-    });
-    el.addEventListener('change', (e) => {
-      if (e.target.dataset.act === 'import' && e.target.files?.[0]) ctx.importSave(e.target.files[0]);
     });
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.stopPropagation(); close(); }

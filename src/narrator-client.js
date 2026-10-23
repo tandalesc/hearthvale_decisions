@@ -13,7 +13,7 @@
 // whyLines(facts, {limit}) gives the plain fact lines for the "Why?" disclosure, most telling first.
 
 import {validateFacts, materialText, whyOrder, whenText, optionPhrase, chanceWord, TRADE_WORDS, SEASONS} from './narrative-schema.js';
-import {validateProseFacts, FALLBACKS} from './narrative-prose.js';
+import {validateProseFacts, FALLBACKS, CHECKS} from './narrative-prose.js';
 import {
   narrativeFacts, materialKey, entityRef, cardFacts, chronicleFacts, cardsNeedingProse, yearEntriesNeedingProse, summaryNeedsProse,
 } from './sim/narrative-facts.js';
@@ -64,7 +64,12 @@ export function createNarratorClient({endpoint = '/api/narrate', fetcher = (...a
 
   // -> {text, source}; streams tokens to onToken on the way.
   async function request(facts, {signal, onToken, onMeta}, retried = false) {
-    let response;
+    let response, announcedSource = null, previewText = null;
+    const emitMeta = (meta) => {
+      const source = noteSource(meta.source);
+      if (source !== announcedSource) { announcedSource = source; onMeta?.({...meta, source}); }
+    };
+    const emitToken = (delta, text) => { previewText = text; onToken?.(delta, text); };
     try {
       response = await fetcher(endpoint, {
         method: 'POST', signal,
@@ -85,8 +90,15 @@ export function createNarratorClient({endpoint = '/api/narrate', fetcher = (...a
       return fallback(facts, {onToken, onMeta});
     }
     try {
-      const text = await readStream(response.body, {onToken, onMeta, signal});
-      if (text) return {text, source: 'model'};
+      const result = response.headers?.get?.('content-type')?.includes('application/json')
+        ? await response.json()
+        : await readNarrationStream(response.body, {onToken: emitToken, onMeta: emitMeta, signal, snapshotsOnly: true, field: 'text'});
+      if (typeof result?.text === 'string' && result.text) {
+        const source = noteSource(result.source ?? 'model');
+        emitMeta({source});
+        if (result.text !== previewText) emitToken(result.text, result.text);
+        return {text: result.text, source};
+      }
     } catch (error) {
       if (signal?.aborted) throw abortError();
     }
@@ -108,34 +120,53 @@ function deliver(text, source, {onToken, onMeta}) {
   return text;
 }
 
-// Reads the narrator's SSE stream. -> the final note, or null on an error event.
-async function readStream(body, {onToken, onMeta, signal}) {
+const noteSource = (source) => source === 'template' ? 'fallback' : source === 'llm' ? 'model' : source;
+
+// Preview snapshots are display-only. Only a terminal payload can be cached or
+// persisted; a truncated or failed stream never promotes its draft to a result.
+export async function readNarrationStream(body, {onToken, onMeta, signal, snapshotsOnly = false, field = null} = {}) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  let buffer = '', soFar = '';
+  let buffer = '', soFar = '', source = 'model', bytes = 0;
   const onAbort = () => reader.cancel().catch(() => {});
   signal?.addEventListener('abort', onAbort, {once: true});
   try {
     for (;;) {
+      if (signal?.aborted) throw abortError();
       const {value, done} = await reader.read();
-      if (done) return soFar.trim() || null;
-      buffer += decoder.decode(value, {stream: true});
+      if (signal?.aborted) throw abortError();
+      if (done) return null;
+      bytes += value.byteLength;
+      if (bytes > 262144) return null;
+      buffer = (buffer + decoder.decode(value, {stream: true})).replace(/\r\n/g, '\n');
+      if (buffer.length > 65536) return null;
       let at;
       while ((at = buffer.indexOf('\n\n')) >= 0) {
         const block = buffer.slice(0, at);
         buffer = buffer.slice(at + 2);
-        const name = /^event: (.+)$/m.exec(block)?.[1] ?? 'message';
-        const raw = /^data: (.*)$/m.exec(block)?.[1];
-        let data = null;
-        try { data = raw ? JSON.parse(raw) : null; } catch { continue; }
-        if (name === 'meta') onMeta?.({source: data?.cached ? 'cache' : 'model'});
-        else if (name === 'message' && typeof data?.t === 'string') { soFar += data.t; onToken?.(data.t, soFar); }
-        else if (name === 'done') return typeof data?.text === 'string' ? data.text : soFar;
-        else if (name === 'error') return null;
+        const name = /^event: ?(.+)$/m.exec(block)?.[1] ?? 'message';
+        const raw = block.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).replace(/^ /, '')).join('\n');
+        let data;
+        try { data = JSON.parse(raw); } catch { continue; }
+        if (name === 'meta') {
+          source = data?.source ?? (data?.cached ? 'cache' : 'model');
+          onMeta?.({...data, source});
+        } else if ((name === 'delta' || name === 'message') && typeof data?.t === 'string') {
+          if (snapshotsOnly && data.replace !== true) continue;
+          if (field && data.field !== field) continue;
+          const next = data.replace === true ? data.t : soFar + data.t;
+          if (next.length > 16000) return null;
+          soFar = next;
+          onToken?.(data.t, soFar);
+        } else if (name === 'done' || name === 'fallback') {
+          if (!data || (typeof data.text !== 'string' && !data.prose)) return null;
+          return {...data, source: data.source ?? source};
+        } else if (name === 'error') return null;
       }
     }
   } finally {
     signal?.removeEventListener('abort', onAbort);
+    await reader.cancel().catch(() => {});
   }
 }
 
@@ -297,60 +328,20 @@ export async function noteFor(state, query, {signal, onToken, onMeta, peek = nul
 }
 
 // ---------------------------------------------------------------------------
-// Background prose for docket cards and the chronicle
-//
-//   const keeper = startProseKeeper(() => state)     // once, after the game starts
-//   keeper.stop()
-//
-// Once a second it looks for one card (or year line, or the end page) that still
-// wants prose, asks /api/narrate for it, and stores the answer through the sim's
-// actions: setCardProse(state, cardId, {why, options, source}),
-// setChronicleProse(state, {year, text, source}) and setSummaryProse(state, {eras,
-// closing, source}). One request at a time, so taps on people stay quick.
-// source is 'llm' or 'template' (the model's text was refused, or the facts could
-// not be sent). When the service is away, the item is retried later and the
-// template text simply stays on screen. Prose is cosmetic: the sim never reads it.
+// Demand-driven card flavour. Ticks never generate prose; a visible selected
+// card requests its own note and stores it through the simulation save action.
 // ---------------------------------------------------------------------------
 
 const PROSE_RETRY_MS = 30000;
-const PROSE_YEARS_BACK = 3;
 
 export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) => globalThis.fetch(...a), now = () => Date.now(), actions = findAction} = {}) {
-  let busy = false;
   let pausedUntil = 0;
   const retryAt = new Map();   // item key -> time
   const counts = {llm: 0, template: 0, failed: 0};
 
   const ready = (key) => (retryAt.get(key) ?? 0) <= now();
 
-  // The next thing that wants prose, with its facts and how to store the answer.
-  function nextJob(state) {
-    const setCard = actions('setCardProse');
-    if (setCard) {
-      for (const card of cardsNeedingProse(state)) {
-        const key = `card:${card.id}`;
-        if (!ready(key)) continue;
-        return {key, kind: 'card', facts: () => cardFacts(state, card.id), store: (prose, source) => setCard(state, card.id, {...prose, source})};
-      }
-    }
-    const setYear = actions('setChronicleProse');
-    if (setYear) {
-      for (const entry of yearEntriesNeedingProse(state)) {
-        const year = entry.year - 1;
-        if (state.time.year - year > PROSE_YEARS_BACK) break;
-        const key = `year:${year}`;
-        if (!ready(key)) continue;
-        return {key, kind: 'chronicle', facts: () => chronicleFacts(state, {year}), store: (prose, source) => setYear(state, {year, text: prose.text, source})};
-      }
-    }
-    const setSummary = actions('setSummaryProse');
-    if (setSummary && summaryNeedsProse(state) && ready('end')) {
-      return {key: 'end', kind: 'chronicle', facts: () => chronicleFacts(state, {end: true}), store: (prose, source) => setSummary(state, {...prose, source})};
-    }
-    return null;
-  }
-
-  async function run(job) {
+  async function run(job, signal, onToken) {
     let facts;
     try {
       facts = validateProseFacts(job.facts());
@@ -359,49 +350,82 @@ export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) =
     }
     let response;
     try {
-      response = await fetcher(endpoint, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({kind: job.kind, facts})});
+      response = await fetcher(endpoint, {method: 'POST', signal, headers: {'Content-Type': 'application/json', Accept: 'text/event-stream'}, body: JSON.stringify({kind: job.kind, facts})});
     } catch {
+      if (signal?.aborted) return null;
       pausedUntil = now() + PROSE_RETRY_MS;
       return false;
     }
     if (response.status === 400) return {prose: FALLBACKS[facts.type](facts), source: 'template'};
     if (!response.ok) return false;
     try {
-      const body = await response.json();
-      if (body?.prose && (body.source === 'llm' || body.source === 'template')) return {prose: body.prose, source: body.source};
+      const body = response.headers?.get?.('content-type')?.includes('text/event-stream')
+        ? await readNarrationStream(response.body, {signal, onToken, snapshotsOnly: true, field: 'why'})
+        : await response.json();
+      if (body?.prose && (body.source === 'llm' || body.source === 'template')) {
+        const checked = CHECKS[facts.type](facts, body.prose);
+        if (checked.ok) return {prose: checked.prose, source: facts.type === 'card' && checked.used?.why !== 'llm' ? 'template' : body.source};
+      }
     } catch {
       // A broken reply: treat as a failure and retry later.
     }
     return false;
   }
 
-  // Start at most one request; resolves when it has been stored (or given up).
-  async function tick(state) {
-    if (busy || !state || now() < pausedUntil) return;
-    const job = nextJob(state);
-    if (!job) return;
-    busy = true;
-    try {
-      const result = await run(job);
-      if (result) {
-        job.store(result.prose, result.source);
-        counts[result.source]++;
-      } else {
-        counts.failed++;
-        retryAt.set(job.key, now() + (result === null ? PROSE_RETRY_MS * 10 : PROSE_RETRY_MS));
-      }
-    } finally {
-      busy = false;
-    }
+  const inflight = new Map();
+  const previews = new Map();
+  const previewOwners = new Map();
+  // No clock-driven work. The open view explicitly requests one card.
+  async function requestCard(state, id, {signal} = {}) {
+    const card = cardsNeedingProse(state).find((c) => c.id === id);
+    const store = actions('setCardProse');
+    const key = `card:${id}`;
+    if (!card || !store || !ready(key) || now() < pausedUntil || signal?.aborted) return;
+    const previous = inflight.get(key);
+    if (previous && !previous.signal?.aborted) return previous.promise;
+    const job = {kind: 'card', facts: () => cardFacts(state, id)};
+    const entry = {signal, promise: null};
+    inflight.set(key, entry);
+    previews.set(id, {why: '', pending: true});
+    previewOwners.set(id, entry);
+    const clearPreview = () => {
+      if (previewOwners.get(id) !== entry) return;
+      previews.delete(id);
+      previewOwners.delete(id);
+    };
+    signal?.addEventListener('abort', clearPreview, {once: true});
+    const pending = run(job, signal, (_delta, text) => {
+      if (!signal?.aborted && previewOwners.get(id) === entry) previews.set(id, {why: text, pending: true});
+    }).then((result) => {
+      if (signal?.aborted || inflight.get(key) !== entry) return;
+      if (result) { store(state, id, {...result.prose, source: result.source}); counts[result.source]++; }
+      else { counts.failed++; retryAt.set(key, now() + PROSE_RETRY_MS); }
+    }).finally(() => {
+      if (inflight.get(key) === entry) inflight.delete(key);
+      clearPreview();
+      signal?.removeEventListener('abort', clearPreview);
+    });
+    entry.promise = pending;
+    return pending;
   }
-
-  return {tick, stats: () => ({...counts, busy, paused: now() < pausedUntil})};
+  return {tick: async () => {}, requestCard, peekCard: (id) => previews.get(id), stats: () => ({...counts, busy: inflight.size > 0, paused: now() < pausedUntil})};
 }
 
-export function startProseKeeper(getState, {intervalMs = 1000, ...options} = {}) {
+export function startProseKeeper(getState, options = {}) {
   const keeper = createProseKeeper(options);
-  const timer = setInterval(() => { keeper.tick(getState()).catch(() => {}); }, intervalMs);
-  return {...keeper, stop: () => clearInterval(timer)};
+  let controller = null, selected = null, pending = null;
+  const cancel = () => { controller?.abort(); controller = null; selected = null; pending = null; };
+  return {...keeper,
+    requestCard(id) {
+      if (id === selected && pending) return pending;
+      cancel();
+      selected = id;
+      controller = new AbortController();
+      pending = keeper.requestCard(getState(), id, {signal: controller.signal});
+      return pending;
+    },
+    cancel, stop: cancel,
+  };
 }
 
 // The shared client the inspector uses.

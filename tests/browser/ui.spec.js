@@ -220,40 +220,34 @@ test('keys: space pauses, digits set speed, C opens and closes the Council, Esca
   await expect(page.locator('.dk')).toBeHidden();
 });
 
-test('one speed button steps 1× → 3× → 5× → 10× → 20× → 1×, beside pause', async ({page}) => {
+test('speed popup selects each paid speed beside pause and keyboard shortcuts still work', async ({page}) => {
+  await page.route('**/api/session', route => route.fulfill({json: {tier: 'paid', authenticated: true, email: 'player@example.test', billingEnabled: true}}));
   await open(page, {fixture: 'town', paused: false, stub: true});
   const seg = page.locator('.timestrip .seg');
   await expect(seg.locator('button')).toHaveCount(2);
-  const step = seg.locator('.speed');
-  await expect(step).toHaveText('1×');
-  await step.click();
-  expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
-  await expect(step).toHaveText('3×');
-  await step.click();
-  expect(await hv(page, () => window.hearthvale.speed())).toBe(5);
-  await step.click();
-  expect(await hv(page, () => window.hearthvale.speed())).toBe(10);
-  await expect(step).toHaveText('10×');
-  await step.click();
-  expect(await hv(page, () => window.hearthvale.speed())).toBe(20);
-  await expect(step).toHaveText('20×');
-  await step.click();
-  expect(await hv(page, () => window.hearthvale.speed())).toBe(1);
-  // The number keys reach every speed.
+  const speed = seg.locator('.speed');
+  await expect(speed).toHaveText('1×');
+  for (const value of [3, 5, 10, 20, 1]) {
+    await speed.click();
+    await page.getByRole('menu', {name: 'Town speed'}).getByRole('menuitemradio', {name: `${value}×`, exact: true}).click();
+    expect(await hv(page, () => window.hearthvale.speed())).toBe(value);
+    await expect(speed).toHaveText(`${value}×`);
+  }
   await page.keyboard.press('5');
   expect(await hv(page, () => window.hearthvale.speed())).toBe(20);
   await page.keyboard.press('4');
   expect(await hv(page, () => window.hearthvale.speed())).toBe(10);
   await page.keyboard.press('1');
-  // Paused, it shows the speed it will resume at, and a click starts the town again.
   await seg.locator('.pause').click();
   expect(await hv(page, () => window.hearthvale.speed())).toBe(0);
-  await expect(step).toHaveText('1×');
-  await step.click();
+  await expect(speed).toHaveText('1×');
+  await speed.click();
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(0);
+  await page.getByRole('menuitemradio', {name: '3×', exact: true}).click();
   expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
 });
 
-test('settings: display, sound, pacing and model status persist', async ({page}) => {
+test('settings: display and accessibility persist, with the student shown under Game', async ({page}) => {
   const errors = await open(page, {fixture: 'town', stub: true});
   await page.locator('.settings-btn').click();
   await expect(page.locator('.settings')).toBeVisible();
@@ -265,18 +259,18 @@ test('settings: display, sound, pacing and model status persist', async ({page})
   expect(await hv(page, () => document.documentElement.dataset.motion)).toBe('reduced');
   await page.locator('[data-pref="textSize"] [data-value="large"]').click();
   expect(await hv(page, () => document.documentElement.dataset.text)).toBe('large');
-  await page.locator('.settings [role="tab"][data-tab="model"]').click();
-  await page.locator('[data-decision="mode"]').selectOption('manual');
-  await page.locator('[data-decision="cap"]').fill('42');
-  await page.locator('[data-decision="cap"]').dispatchEvent('change');
-  await expect(page.locator('.settings .status-title')).not.toHaveText('Checking…', {timeout: 8000});
-  await expect(page.locator('.decision-stats')).toContainText('Answered a second');
+  await page.locator('.settings [role="tab"][data-tab="game"]').click();
+  await expect(page.locator('.model-ver')).toBeVisible();
+  await expect(page.locator('.settings [data-act="menu"]')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('.settings')).toHaveCount(0);
   await page.reload();
   await page.waitForFunction(() => window.hearthvale?.app);
   expect(await hv(page, () => document.documentElement.dataset.theme)).toBe('night');
-  expect(await hv(page, () => JSON.parse(localStorage.getItem('hearthvale-decision-settings')))).toEqual({mode: 'manual', cap: 42});
+  expect(await hv(page, () => document.documentElement.dataset.text)).toBe('large');
+  await page.locator('.settings-btn').click();
+  await page.locator('.settings [role="tab"][data-tab="access"]').click();
+  await expect(page.locator('[data-pref="motion"] [data-value="reduced"]')).toHaveAttribute('aria-checked', 'true');
   expect(errors).toEqual([]);
 });
 
@@ -444,26 +438,23 @@ test('a new card opens nothing and keeps focus; the Council stays where the play
   await expect(page.locator('.dock [data-body="council"] .badge')).toHaveText('4');
 });
 
-test('starting a new town asks first, then begins at year 0 with a hamlet', async ({page}) => {
-  test.setTimeout(60000);
-  await page.addInitScript(() => localStorage.setItem('hearthvale-ui', JSON.stringify({moments: 'never'})));
-  await open(page, {paused: false, stub: true});
-  await hv(page, () => window.hearthvale.setSpeed(5));
-  await expect.poll(() => hv(page, async () => (await window.hearthvale.snapshot()).time.year), {timeout: 30000}).toBeGreaterThan(0);
+test('town management lives on the main menu rather than in Settings', async ({page}) => {
+  await open(page, {stub: true});
   await page.locator('.settings-btn').click();
-  await page.locator('[data-act="save"]').click();
-  await page.locator('.settings [data-act="new"]').click();
-  await expect(page.locator('.confirm-layer')).toBeVisible();
-  await expect(page.locator('.confirm-layer')).toContainText('Start a new town?');
-  await page.locator('.confirm-layer [data-act="cancel"]').click();
-  await expect(page.locator('.confirm-layer')).toHaveCount(0);
-  expect(await hv(page, async () => (await window.hearthvale.snapshot()).time.year)).toBeGreaterThan(0);
-  await page.locator('.settings-btn').click();
-  await page.locator('.settings [data-act="new"]').click();
-  await Promise.all([page.waitForNavigation(), page.locator('.confirm-layer [data-act="start"]').click()]);
-  await page.waitForFunction(() => window.hearthvale?.app);
-  expect(await hv(page, async () => (await window.hearthvale.snapshot()).time.year)).toBe(0);
-  expect(await page.locator('.metric[data-key="people"] .metric-val').textContent()).toBe('28');
+  const settings = page.locator('.settings');
+  await expect(settings.locator('[data-act="new"], [data-act="seed-town"], [data-act="export"], [data-act="import"]')).toHaveCount(0);
+  await expect(settings).not.toContainText('Your other towns wait on the main menu.');
+  await settings.locator('[data-act="save"]').click();
+  await Promise.all([page.waitForNavigation(), settings.locator('[data-act="menu"]').click()]);
+  await expect(page.locator('.mm')).toBeVisible();
+  await expect(page.locator('.mm [data-act="import"]')).toHaveCount(0);
+  await page.locator('.mm [data-go="play"]').click();
+  await page.locator('.mm [data-go="towns"]').click();
+  await expect(page.locator('.mm [data-act="export"]')).toBeVisible();
+  await page.locator('.mm .mm-back').click();
+  await expect(page.locator('.mm')).toHaveAttribute('data-screen','play');
+  await page.locator('.mm [data-go="new"]').click();
+  await expect(page.locator('#mm-seed')).toBeVisible();
 });
 
 test('real sim: tapping a building opens the inspector with a header, a note and its reasons', async ({page}) => {

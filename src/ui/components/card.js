@@ -112,7 +112,9 @@ export function createCard(card, ctx, {position, total} = {}) {
       <span class="card-from">${icon(ctx.bodyIcon(card.from))}<span>${esc(fromName)}</span>${card.urgency >= 2 ? ' · <span class="urgent">urgent</span>' : ''}</span>
     </div>
     <h3 class="card-title" id="t-${esc(card.id)}">${esc(card.title)}</h3>
-    <p class="card-why"${card.prose?.why || card.why ? '' : ' hidden'}>${esc(card.prose?.why ?? card.why ?? '')}</p>
+    <p class="card-why"${card.why ? '' : ' hidden'}>${esc(card.why ?? '')}</p>
+    <span class="sr-only card-prose-status" role="status" aria-live="polite"></span>
+    <p class="card-flavour"${card.prose?.why && card.prose.why !== card.why ? '' : ' hidden'}>${esc(card.prose?.why !== card.why ? card.prose?.why ?? '' : '')}</p>
     ${asker?.name ? `<div class="asker"><span class="avatar" style="--avatar:${tint(asker.name)}">${esc(initials(asker.name))}</span><span>Asked by <b>${esc(asker.name)}</b>${asker.role ? `, ${esc(asker.role)}` : ''}</span></div>` : ''}
     ${card.costLine ? `<div class="cost-line">${icon('coin')}<span>${esc(card.costLine)}</span></div>` : ''}
     ${card.note ? `<p class="card-note">${esc(card.note)}</p>` : ''}
@@ -163,9 +165,9 @@ export function createCard(card, ctx, {position, total} = {}) {
     detailsBtn.setAttribute('aria-expanded', String(open));
   });
 
-  // Prose from the narrator may arrive later. Swap it in with a soft
-  // cross-fade, but never under a player who is already reading the card.
-  let touched = false, latest = card, proseSig = sigOf(card);
+  // Final background prose waits until reopening a touched card; an active
+  // stream always replaces or clears its own draft when it finishes.
+  let touched = false, latest = card, proseSig = sigOf(card), wasStreaming = false;
   const touch = () => { touched = true; };
   el.addEventListener('pointerdown', touch);
   el.addEventListener('pointerenter', touch);
@@ -174,8 +176,8 @@ export function createCard(card, ctx, {position, total} = {}) {
   el.addEventListener('touchmove', touch, {passive: true});
   const applyProse = (next, fade) => {
     proseSig = sigOf(next);
-    const why = el.querySelector('.card-why');
-    const text = next.prose?.why ?? next.why ?? '';
+    const why = el.querySelector('.card-flavour');
+    const text = next.prose?.why !== next.why ? next.prose?.why ?? '' : '';
     const trades = [...el.querySelectorAll('[data-option] .opt-trade')];
     const changes = [[why, text], ...trades.map((t) => {
       const o = options.find((x) => x.key === t.closest('[data-option]').dataset.option);
@@ -190,7 +192,20 @@ export function createCard(card, ctx, {position, total} = {}) {
   bindAdvice(el, ctx, () => latest);
   el.__update = (next) => {
     latest = next ?? latest;
-    if (sigOf(latest) !== proseSig && !touched) applyProse(latest, true);
+    const flavour = el.querySelector('.card-flavour');
+    const streaming = latest.streamingProse?.pending === true;
+    if (streaming) {
+      if (!wasStreaming) setText(el.querySelector('.card-prose-status'), '');
+      const text = latest.streamingProse.why ?? '';
+      setText(flavour, text);
+      flavour.hidden = !text;
+      flavour.setAttribute('aria-busy', 'true');
+    } else {
+      if (wasStreaming || (sigOf(latest) !== proseSig && !touched)) applyProse(latest, !wasStreaming);
+      flavour.removeAttribute('aria-busy');
+      if (wasStreaming) setText(el.querySelector('.card-prose-status'), latest.prose?.why ? 'Town note ready.' : 'Town note unavailable.');
+    }
+    wasStreaming = streaming;
     updateCard(el, latest, major, ctx);
     // An adviser's staged answer (Let it stand / Change), or what they would do.
     const host = el.querySelector('.advice-host');
@@ -205,14 +220,14 @@ export function createCard(card, ctx, {position, total} = {}) {
   // Called when the card is shown again: pending prose lands now.
   el.__reopen = () => {
     touched = false;
-    if (sigOf(latest) !== proseSig) applyProse(latest, false);
+    if (!latest.streamingProse?.pending && sigOf(latest) !== proseSig) applyProse(latest, false);
   };
   el.__update(card);
   return el;
 }
 
 function proseFor(card, option) {
-  return card.prose?.options?.[option.key] ?? option.tradeoff ?? '';
+  return option.tradeoff ?? '';
 }
 
 function sigOf(card) {

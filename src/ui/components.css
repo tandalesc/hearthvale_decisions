@@ -130,6 +130,8 @@
 .metric.is-warn .metric-val { color: var(--rust); }
 .metric.is-new { animation: reveal-in 420ms var(--ease-back) both; }
 .topbar-end { display: flex; align-items: center; gap: 2px; padding-left: 4px; border-left: 1px solid var(--line); }
+.topbar-end .account-entry { padding: 6px 8px; min-height: 36px; font-size: var(--fs-13); white-space: nowrap; }
+.settings-account-copy { margin: 0 0 12px; color: var(--ink-2); font-size: var(--fs-13); }
 
 .ui[data-layout="phone"] .brand-text { display: none; }
 .ui[data-layout="phone"] .crest { display: none; }
@@ -145,6 +147,8 @@
 .ui[data-layout="phone"] .metric-val { font-size: var(--fs-15); }
 .ui[data-layout="phone"] .metric-cap { display: none; }
 .ui[data-layout="phone"] .topbar-end { border: 0; padding: 0; }
+/* Account access stays in Settings on phones, leaving room for town metrics. */
+.ui[data-layout="phone"] .topbar-end .account-entry { display: none; }
 @media (max-width: 1180px) { .ui[data-layout="desk"] .metric[data-key="homes"] { display: none; } }
 @media (max-width: 860px) { .ui[data-layout="tablet"] .brand h1 { font-size: 19px; } .ui[data-layout="tablet"] .metric[data-key="homes"] { display: none; } }
 /* Narrow tablets: numbers only, so the place chip and settings keep their room. */
@@ -767,7 +771,7 @@ button.bud-row:hover { background: var(--paper-3); }
 }
 .seg button[aria-pressed="true"] { background: var(--paper-card); color: var(--ink); box-shadow: var(--shadow-s); }
 .seg button.pause[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
-/* One speed button that steps 1× → 3× → 5×; quiet while paused. */
+/* One speed button opens the menu; quiet while paused. */
 .seg button.speed { min-width: 52px; font-variant-numeric: tabular-nums; }
 .seg button.speed[aria-pressed="false"] { color: var(--muted); }
 /* The device cannot keep up with this speed: the title says what it reaches. */

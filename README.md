@@ -21,7 +21,7 @@ Over a century and a half, footpaths harden into streets. A second village grows
 
 The game borrows an old idea about how people think: one mind that is slow and deliberate, and another that is quick and everyday.
 
-**You are the slow mind.** You read the docket, weigh what each group of the town wants, and rule. **The town is the quick mind.** Thousands of small decisions happen without you: where to walk, whether to move, when to expand the bakery, whether to join the strike. Those everyday choices come from a decision model running on a local GPU. It weighs a household's savings, the price of bread, the rules in force and the mood of the street, all at once.
+**You are the slow mind.** You read the docket, weigh what each group of the town wants, and rule. **The town is the quick mind.** Thousands of small decisions happen without you: where to walk, whether to move, when to expand the bakery, whether to join the strike. A small student model answers those everyday questions in your browser. It weighs a household's savings, the price of bread, the rules in force and the mood of the street, all at once.
 
 Neither mind is in charge. Your rules shape what the town finds easy, and the town's behaviour shapes what lands on your desk next.
 
@@ -109,6 +109,8 @@ Then open <http://127.0.0.1:5173>. You need a browser with WebGL 2.
 The local decision model and narrator are optional. To connect them, copy `local.env.example` to `local.env` and add your key. The key stays on your machine's server and never reaches the browser.
 
 Most of the town's questions are answered right in your browser by a small student model trained to copy the decision model, so the town keeps its character even without one. Open the game with `?student=0` to turn the students off. How they were built and how closely they match is in [the decision students paper](docs/design/decision-students-paper.html) ([PDF](docs/design/decision-students-paper.pdf)).
+
+The hosted configuration keeps browser decisions and approved student updates free. The $1/month or $10/year plan adds 10×/20× speed and limited on-demand writing and live teacher decisions. See [hosting and setup](docs/hosting.md) for Cloudflare, private API keys, Stripe and the nightly cloud training pipeline. Disabling the student does not enable free hosted teacher calls.
 
 **A few controls:** drag to look around and scroll to zoom. `Space` pauses, `C` opens or closes the docket, `F` toggles full screen, and `H` hides the interface so you can just watch.
 

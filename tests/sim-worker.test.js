@@ -57,7 +57,7 @@ function startWorker() {
 async function workerRun(fixture) {
   const w = startWorker();
   try {
-    await w.call('setup', {routes: {worker: false, fixedClock: true}, decisions: false, prose: false, model: false, budgetMs: Infinity, pace: PACE});
+    await w.call('setup', {entitlement: {tier: 'paid'}, routes: {worker: false, fixedClock: true}, decisions: false, prose: false, model: false, budgetMs: Infinity, pace: PACE});
     const mirror = createRenderMirror({rowFloats: 20});
     const opened = await w.call('init', {kind: 'fixture', name: fixture}, 0);
     assert.ok(opened.info, 'the town opened');

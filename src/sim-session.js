@@ -2,7 +2,8 @@
 // planner, the decision client, the prose keeper, player actions, saves). Both hosts use
 // it (src/sim-host.js): the inline host calls it on the main thread, and the sim worker
 // (src/sim-worker.js) calls it for each message. Every call here is synchronous except
-// init, and runs between ticks, never inside one.
+// init and narration requests; state writes run between ticks, never inside one.
+import {entitledSpeed, isPaid} from './entitlements.js';
 import {uiSnapshot, inspectBundle} from './sim-snapshot.js';
 import {metaFromSave} from './save-meta.js';
 
@@ -14,7 +15,7 @@ import {metaFromSave} from './save-meta.js';
 // startProse: narrator-client's startProseKeeper, run while the model is on
 // budgetMs:  real time a step may take before no new tick starts (Infinity: none)
 export function createSimSession({sim, narrator = null, routes = null, decisions: client = null, startProse = null, budgetMs = 10, pace = 1, rowFloats = 20, lib = null,
-  students = null} = {}) {
+  students = null, entitlement = {tier: 'free'}} = {}) {
   let state = null;
   let view = null;
   let modelEnabled = true;
@@ -80,8 +81,11 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
         }
         if (!s) return {error: 'fixture'};
       }
+      // A new town may reuse card IDs; cancel the old town's drafts and requests.
+      proseKeeper?.stop();
+      proseKeeper = null;
       state = s;
-      // Decision students: new towns take the latest version, saves keep theirs.
+      // Every town records this play session's published student version.
       await students?.pin(state);
       view = sim.createRenderView ? sim.createRenderView(state, {rowFloats}) : null;
       syncProse();
@@ -102,6 +106,7 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
 
     // Real seconds owed to the sim at `speed`; `now` is the main thread's frame clock (ms).
     step(owed, now, speed) {
+      speed = entitledSpeed(speed, entitlement);
       services.now = now;
       services.rate = speed * pace;
       if (!(speed > 0 && owed > 0) || !state) return {ticks: 0, ms: 0};
@@ -137,6 +142,13 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
     ui(req) {
       if (!state) return null;
       const snap = uiSnapshot(sim, state, req, narrator);
+      // Narration previews belong only to the UI snapshot, never the saved town.
+      if (isPaid(entitlement) && proseKeeper?.peekCard && Array.isArray(snap.docket)) {
+        snap.docket = snap.docket.map(card => {
+          const preview = proseKeeper.peekCard(card.id);
+          return preview ? {...card, streamingProse: preview} : card;
+        });
+      }
       if (client) snap.decisionStats = client.stats();
       return snap;
     },
@@ -158,6 +170,9 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
         syncProse();
       },
     },
+
+    cancelCardProse: () => proseKeeper?.cancel?.(),
+    requestCardProse: (id) => (isPaid(entitlement) ? proseKeeper?.requestCard?.(id) : null) ?? Promise.resolve(null),
 
     notes: {
       set: (ref, key, text) => { if (state) narrator?.keepNote?.(state, ref, key, text); },

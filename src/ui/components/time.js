@@ -1,17 +1,22 @@
 // Time controls (design-visual §8.7): pause, and one speed button that
-// steps 1× → 3× → 5× → 10× → 20×, a thin era progress bar toward the next age, the
+// opens a speed menu, a thin era progress bar toward the next age, the
 // season, and a sound toggle. 'strip' variant lives in the desktop time
 // strip; 'peek' in the phone sheet (the Council and every other view sit in
 // the sheet's view strip below it).
+import {allowedSpeeds} from '../../entitlements.js';
 import {h, setAttr, setText} from '../dom.js';
 import {icon} from '../icons.js';
 import {SEASON_ICONS, SEASONS} from '../format.js';
 
+// Keep the pure nextSpeed helper usable in Node tests.
+if (typeof document !== 'undefined') import('./time-menu.css');
+
 export const SPEEDS = [1, 3, 5, 10, 20];
 
 // The speed after s, round to 1× again after the fastest.
-export function nextSpeed(s) {
-  return SPEEDS[(SPEEDS.indexOf(s) + 1) % SPEEDS.length];
+export function nextSpeed(s, entitlement) {
+  const speeds = allowedSpeeds(entitlement);
+  return speeds[(speeds.indexOf(s) + 1) % speeds.length];
 }
 
 const toggleLag = (el, on) => el.classList.toggle('lagging', on);
@@ -20,11 +25,86 @@ function speedSeg(ctx) {
   const seg = h('div.seg', {role: 'group', 'aria-label': 'Speed'});
   const pause = h('button.pause', {type: 'button', title: 'Pause (Space)'});
   pause.addEventListener('click', () => ctx.setSpeed(ctx.speed() === 0 ? ctx.lastSpeed() : 0));
-  // Steps to the next speed; when paused it also starts the town again.
-  const step = h('button.speed', {type: 'button', title: 'Change speed (1 to 5)'});
-  step.addEventListener('click', () => ctx.setSpeed(nextSpeed(ctx.speed() || ctx.lastSpeed())));
+  const step = h('button.speed', {type: 'button', title: 'Choose speed', 'aria-haspopup': 'menu', 'aria-expanded': 'false'});
+  let menu = null, controller = null;
+  function close(restoreFocus = false) {
+    if (!menu) return;
+    controller.abort();
+    if (menu.matches(':popover-open')) menu.hidePopover();
+    menu.remove();
+    menu = null;
+    step.setAttribute('aria-expanded', 'false');
+    step.removeAttribute('aria-controls');
+    if (restoreFocus) step.focus();
+  }
+  function updateMenu() {
+    if (!menu) return;
+    const available = allowedSpeeds(ctx.entitlement?.());
+    const current = ctx.speed() || ctx.lastSpeed() || 1;
+    for (const item of menu.querySelectorAll('[role="menuitemradio"]')) {
+      const speed = Number(item.dataset.value);
+      item.setAttribute('aria-checked', String(speed === current));
+      item.setAttribute('aria-disabled', String(!available.includes(speed)));
+      item.querySelector('.speed-menu-mark').textContent = speed === current ? '✓' : '';
+      item.querySelector('.speed-menu-plan').textContent = available.includes(speed) ? '' : 'Plus';
+    }
+  }
+  function open() {
+    menu = h('div.speed-menu', {id: `speed-menu-${Math.random().toString(36).slice(2)}`, role: 'menu', 'aria-label': 'Town speed', popover: 'manual', 'data-open': ''});
+    menu.append(h('p.speed-menu-title', {role: 'presentation'}, 'Town speed'));
+    for (const speed of SPEEDS) {
+      const item = h('button.speed-menu-option', {type: 'button', role: 'menuitemradio', tabindex: '-1', dataset: {value: speed}},
+        h('span.speed-menu-mark', {'aria-hidden': 'true'}), h('span', null, `${speed}×`), h('span.speed-menu-plan'));
+      item.addEventListener('click', () => {
+        if (!allowedSpeeds(ctx.entitlement?.()).includes(speed)) {
+          return;
+        }
+        ctx.setSpeed(speed);
+        close(true);
+      });
+      menu.append(item);
+    }
+    if (!allowedSpeeds(ctx.entitlement?.()).includes(10) && ctx.openAccount) {
+      const upgrade = h('button.speed-menu-upgrade', {type: 'button', role: 'menuitem', tabindex: '-1'}, 'Explore Plus');
+      upgrade.addEventListener('click', () => { close(true); ctx.openAccount({view: 'plans'}); });
+      menu.append(upgrade);
+    }
+    document.body.append(menu);
+    updateMenu();
+    menu.showPopover?.();
+    const anchor = step.getBoundingClientRect(), bounds = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(anchor.left, window.innerWidth - bounds.width - 8))}px`;
+    menu.style.top = `${Math.max(8, anchor.top - bounds.height - 8)}px`;
+    step.setAttribute('aria-expanded', 'true');
+    step.setAttribute('aria-controls', menu.id);
+    controller = new AbortController();
+    const {signal} = controller;
+    document.addEventListener('pointerdown', (event) => {
+      if (!menu.contains(event.target) && !step.contains(event.target)) close();
+    }, {capture: true, signal});
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true); }
+      else if (event.key === 'Tab') close(true);
+    }, {capture: true, signal});
+    window.addEventListener('resize', () => close(), {signal});
+    menu.addEventListener('keydown', (event) => {
+      const items = [...menu.querySelectorAll('[role="menuitemradio"], [role="menuitem"]')];
+      const index = items.indexOf(document.activeElement);
+      let next;
+      if (event.key === 'ArrowDown') next = (index + 1) % items.length;
+      if (event.key === 'ArrowUp') next = (index - 1 + items.length) % items.length;
+      if (event.key === 'Home') next = 0;
+      if (event.key === 'End') next = items.length - 1;
+      if (next != null) { event.preventDefault(); items[next].focus(); }
+    });
+    menu.querySelector('[aria-checked="true"]')?.focus();
+  }
+  step.addEventListener('click', () => menu ? close(true) : open());
+  step.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); if (!menu) open(); }
+  });
   seg.append(pause, step);
-  return seg;
+  return {el: seg, updateMenu};
 }
 
 function eraSummary(era) {
@@ -38,7 +118,7 @@ function eraSummary(era) {
 
 export function createTime(ctx, variant = 'strip') {
   const el = h('div.time', {'data-variant': variant});
-  const seg = speedSeg(ctx);
+  const {el: seg, updateMenu} = speedSeg(ctx);
   if (variant === 'strip') {
     const era = h('button.era-progress', {type: 'button', 'aria-haspopup': 'dialog'});
     era.innerHTML = '<span class="label"><b class="era-name"></b><span class="era-next"></span></span><span class="track"><i></i></span>';
@@ -55,6 +135,7 @@ export function createTime(ctx, variant = 'strip') {
   return {
     el,
     update({speed, top, era, muted}) {
+      updateMenu();
       const [pause, step] = seg.children;
       const want = speed === 0 ? 'play' : 'pause';
       if (pause.dataset.icon !== want) {
@@ -77,7 +158,7 @@ export function createTime(ctx, variant = 'strip') {
       if (step.dataset.lag !== lagKey) {
         step.dataset.lag = lagKey;
         toggleLag(step, lagging);
-        step.title = lagging ? `Running at about ${lagKey}× on this device. Change speed (1 to 5)` : 'Change speed (1 to 5)';
+        step.title = lagging ? `Running at about ${lagKey}× on this device. Choose speed` : 'Choose speed';
         step.setAttribute('aria-label', lagging ? `Speed ${shown} times, running at about ${lagKey} times. Change speed` : `Speed ${shown} times. Change speed`);
       }
       const sum = eraSummary(era);
