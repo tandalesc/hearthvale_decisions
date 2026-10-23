@@ -284,8 +284,7 @@
 /* ---------- Foot and status ---------- */
 .mm-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding-top: 18px; margin-top: 6px; }
 .mm-account { min-height: 44px; margin-left: -12px; padding: 8px 12px; font-size: var(--fs-15); }
-.mm-account-tier { min-height: 44px; margin-left: auto; text-align: right; font-size: var(--fs-13); color: var(--ink-2); }
-.mm-account-tier:hover { text-decoration: underline; text-underline-offset: 3px; }
+.mm-account-tier { display: inline-flex; align-items: center; min-height: 44px; margin-left: auto; font-size: var(--fs-13); color: var(--ink-2); }
 .mm-account-tier[hidden] { display: none; }
 .mm-screen > nav { margin-top: 20px; }
 

@@ -255,7 +255,7 @@ test('a streamed quote replaces the explanation, and a player selection survives
   await expect(page.locator('.card-why')).toBeHidden();
   await expect(page.locator('.card-flavour')).toBeVisible();
   await expect(page.locator('.card-quote-text')).toHaveCSS('font-style','italic');
-  await expect(page.locator('.card-quote-text')).toHaveCSS('font-weight','600');
+  await expect(page.locator('.card-quote-text')).toHaveCSS('font-weight','400');
   expect(await page.locator('.card-quote-text').evaluate(el=>getComputedStyle(el,'::before').content)).toContain('“');
   const toggle=page.getByRole('button',{name:'Show game explanation'});
   await toggle.focus();await page.keyboard.press('Enter');

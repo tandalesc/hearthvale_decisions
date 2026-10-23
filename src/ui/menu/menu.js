@@ -106,7 +106,7 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
         <p class="mm-tagline">A town that grows into a city over 150 years, and remembers every choice you made along the way.</p>
       </header>
       <div class="mm-body"></div>
-      ${openAccount ? '<footer class="mm-foot"><button type="button" class="btn btn-ghost mm-account" data-act="account">Sign in</button><button type="button" class="mm-account-tier" data-act="account" aria-haspopup="dialog" title="View your tier and benefits" hidden></button></footer>' : ''}
+      ${openAccount ? '<footer class="mm-foot"><button type="button" class="btn btn-ghost mm-account" data-act="account">Sign in</button><span class="mm-account-tier" hidden></span></footer>' : ''}
     </main>
     <p class="mm-status" role="status" aria-live="polite"></p>`;
   document.body.append(root);
