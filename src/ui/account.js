@@ -49,7 +49,7 @@ export function createAccount(initialSession) {
       });
       currentPage = page;
       const status = h('p.account-status', {role: 'status', 'aria-live': 'polite'}, notice || '');
-      const title = (eyebrow, name, intro) => [...(eyebrow ? [h('span.account-eyebrow', null, eyebrow)] : []), h('h2', {id: 'account-title', tabindex: '-1'}, name), h('p.account-intro', null, intro)];
+      const title = (name, intro) => [h('h2', {id: 'account-title', tabindex: '-1'}, name), h('p.account-intro', null, intro)];
       const button = (label, fn, primary = false) => h('button.btn', {type: 'button', class: primary ? 'btn-primary' : 'btn-secondary', onclick: fn}, label);
       const foot = h('p.account-foot', null, 'Free play needs no account. Towns stay on this device.');
       async function post(path, body) {
@@ -69,7 +69,7 @@ export function createAccount(initialSession) {
       }
       content.replaceChildren();
       if (page === 'sent') {
-        content.append(...title('', 'Check your email', `We sent a code and sign-in link to ${emailValue}. Enter the code here to stay in this app.`));
+        content.append(...title('Check your email', `We sent a code and sign-in link to ${emailValue}. Enter the code here to stay in this app.`));
         const code = h('input.account-email', {id: 'account-code', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', pattern: '[0-9]{6}', maxlength: '12', required: true, placeholder: '123456'});
         code.addEventListener('input', () => { code.value = code.value.replace(/[^0-9]/g, '').slice(0, 6); });
         const form = h('form.account-form', null, h('label', {for: 'account-code'}, '6-digit sign-in code'), code, h('button.btn.btn-primary', {type: 'submit'}, 'Sign in'));
@@ -87,7 +87,7 @@ export function createAccount(initialSession) {
         return;
       }
       if (page === 'signin') {
-        content.append(...title('', 'Sign in with email', 'Get a sign-in code and link in your inbox.'));
+        content.append(...title('Sign in with email', 'Get a sign-in code and link in your inbox.'));
         const email = h('input.account-email', {id: 'account-email', type: 'email', required: true, autocomplete: 'email', placeholder: 'you@example.com', value: emailValue});
         const submit = h('button.btn.btn-primary', {type: 'submit'}, 'Send me a sign-in email');
         const form = h('form.account-form', null, h('label', {for: 'account-email'}, 'Email address'), email, submit);
@@ -100,7 +100,7 @@ export function createAccount(initialSession) {
         return;
       }
       if (page === 'plans') {
-        content.append(...title('A little more Hearthvale', 'Hearthvale Plus', 'More room to follow your town as it grows.'));
+        content.append(...title('Hearthvale Plus', 'More room to follow your town as it grows.'));
         content.append(benefits());
         const billingTerms = h('p.account-status', null, interval === 'year' ? '$10 billed yearly. Renews automatically. Cancel anytime.' : '$1 billed monthly. Renews automatically. Cancel anytime.');
         const plans = h('div.account-plans', {role: 'group', 'aria-label': 'Choose a plan'});
@@ -125,7 +125,7 @@ export function createAccount(initialSession) {
         return;
       }
       const paid = session.tier === 'paid';
-      content.append(...title('Your account', paid ? 'Hearthvale Plus' : 'Make yourself at home', session.email || 'You are signed in.'));
+      content.append(...title(paid ? 'Hearthvale Plus' : 'Make yourself at home', session.email || 'You are signed in.'));
       if (paid) {
         content.append(h('p', null, 'Your current tier: Hearthvale Plus.'), benefits());
         if (session.billingEnabled) content.append(button('Manage subscription', () => run(async () => location.assign((await post('/api/billing/portal', {})).url), 'Opening your subscription…'), true));
@@ -139,7 +139,7 @@ export function createAccount(initialSession) {
 // A normal entry button for surfaces that want to mount one directly.
 export function mountAccount(session, {container = document.body} = {}) {
   const account = createAccount(session);
-  const button = h('button.btn.btn-secondary.account-entry', {type: 'button', onclick: () => account.open()}, session.authenticated ? 'Your account' : 'Sign in');
+  const button = h('button.btn.btn-secondary.account-entry', {type: 'button', onclick: () => account.open()}, session.authenticated ? 'Manage account' : 'Sign in');
   container.append(button);
   return button;
 }

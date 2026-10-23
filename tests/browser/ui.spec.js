@@ -153,9 +153,9 @@ test('phone: the sheet peeks, opens to the Council with full-width options, and 
   await settle(page);
   expect(await hv(page, () => window.hearthvale.app.sheet.index)).toBe(2);
   await expect(page.locator('.sheet-peek .seg')).toBeInViewport();
-  await expect(page.locator('.dk .pager .eyebrow')).toHaveText('1 of 6');
+  await expect(page.locator('.dk .pager .pager-count')).toHaveText('1 of 6');
   await page.locator('.dk .pager .next').click();
-  await expect(page.locator('.dk .pager .eyebrow')).toHaveText('2 of 6');
+  await expect(page.locator('.dk .pager .pager-count')).toHaveText('2 of 6');
   const option = page.locator('.dk .card:not(.is-next) .option').first();
   await option.scrollIntoViewIfNeeded();
   const box = await option.boundingBox();

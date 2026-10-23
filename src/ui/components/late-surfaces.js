@@ -83,7 +83,7 @@ export function previewSection() {
       const next = JSON.stringify([lines, eras]);
       if (next === sig) return;
       sig = next;
-      el.innerHTML = `<div class="preview-card"><div class="eyebrow">How will the chronicle read?</div>
+      el.innerHTML = `<div class="preview-card">
         ${eras.map((e) => `<p class="preview-era"><b>${esc(e.name ?? e.title ?? '')}</b> ${esc(e.text)}</p>`).join('')}
         ${lines.map((s) => `<p>${esc(s)}</p>`).join('')}
         <div class="preview-meta">${num(summary.people)} people · ${num(summary.rules)} rules · ${(summary.institutions ?? []).filter((b) => b.status !== 'dissolved').length} bodies</div></div>`;

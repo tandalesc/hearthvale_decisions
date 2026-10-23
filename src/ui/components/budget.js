@@ -56,11 +56,10 @@ export function createBudgetCard(card, ctx) {
     el.classList.toggle('is-advised', !!c.advice?.act);
     el.classList.remove('is-changing');
     el.innerHTML = `
-      <div class="card-eyebrow">
-        <span class="eyebrow">A budget</span>
+      <h3 class="card-title" id="t-${esc(c.id)}">Budget for year ${b.year}</h3>
+      <div class="card-meta">
         <span class="card-from">${icon(ctx.bodyIcon(c.from))}<span>${esc(name)}</span></span>
       </div>
-      <h3 class="card-title" id="t-${esc(c.id)}">Budget for year ${b.year}</h3>
       <div class="bud-ask"><span>Asks <b>${num(b.asked)}</b></span>${deltaChip(b.delta)}</div>
       <p class="bud-last">${esc(last)}</p>
       <ul class="bud-lines" aria-label="What it asks for">${lines}</ul>

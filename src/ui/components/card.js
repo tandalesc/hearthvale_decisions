@@ -5,10 +5,6 @@ import {esc, h, setText, toggleClass} from '../dom.js';
 import {icon} from '../icons.js';
 import {inMonths, num, theName} from '../format.js';
 
-const KIND_LABEL = {
-  proposal: 'A proposal', petition: 'A petition', event: 'Something happened',
-  demand: 'A demand', debate: 'A debate', report: 'A report', budget: 'A budget',
-};
 import {createBudgetCard, budgetNextText} from './budget.js';
 import {adviceBanner, bindAdvice} from './advisers.js';
 import {isMinorKey} from '../model.js';
@@ -95,7 +91,7 @@ function renderOpinion(el, op) {
 }
 
 // Build a full card. ctx: {factionName, bodyName, bodyIcon, coin(), unlocks(), onRule(card, option, node)}
-export function createCard(card, ctx, {position, total} = {}) {
+export function createCard(card, ctx) {
   if (card.kind === 'budget' && card.budget) return createBudgetCard(card, ctx);
   const el = h('article.card', {'data-kind': card.kind ?? 'proposal', 'aria-labelledby': `t-${card.id}`});
   const report = card.kind === 'report';
@@ -104,14 +100,12 @@ export function createCard(card, ctx, {position, total} = {}) {
   const minor = report ? [] : options.filter(isMinor);
   const fromName = ctx.bodyName(card.from);
   const asker = card.asker;
-  const counter = total > 1 ? ` · ${position} of ${total}` : '';
 
   el.innerHTML = `
-    <div class="card-eyebrow">
-      <span class="eyebrow">${KIND_LABEL[card.kind] ?? 'A proposal'}${counter}</span>
+    <h3 class="card-title" id="t-${esc(card.id)}">${esc(card.title)}</h3>
+    <div class="card-meta">
       <span class="card-from">${icon(ctx.bodyIcon(card.from))}<span>${esc(fromName)}</span>${card.urgency >= 2 ? ' · <span class="urgent">urgent</span>' : ''}</span>
     </div>
-    <h3 class="card-title" id="t-${esc(card.id)}">${esc(card.title)}</h3>
     <p class="card-why"${card.why ? '' : ' hidden'}>${esc(card.why ?? '')}</p>
     <span class="sr-only card-prose-status" role="status" aria-live="polite"></span>
     <p class="card-flavour"${card.prose?.why && card.prose.why !== card.why ? '' : ' hidden'}>${esc(card.prose?.why !== card.why ? card.prose?.why ?? '' : '')}</p>

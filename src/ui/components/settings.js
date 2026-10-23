@@ -39,7 +39,7 @@ export function createSettings(ctx) {
     const tab = TABS.some((t) => t.id === p.settingsTab) ? p.settingsTab : TABS[0].id;
     const panels = {
       game: `
-        ${ctx.openAccount ? `<fieldset><legend>Your account</legend>
+        ${ctx.openAccount ? `<fieldset aria-label="Account">
           <p class="settings-account-copy">${ctx.entitlement?.()?.tier === 'paid' ? 'Hearthvale Plus is active. Thank you for supporting the town.' : 'Free play includes a complete town and ongoing learning updates. Hearthvale Plus adds faster play and richer Council writing.'}</p>
           <button type="button" class="btn btn-secondary" data-act="account">${ctx.entitlement?.()?.authenticated ? 'Manage account' : 'Sign in'}</button>
         </fieldset>` : ''}
