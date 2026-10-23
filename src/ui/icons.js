@@ -55,6 +55,7 @@ const PATHS = {
   save: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19.5h14"/>',
   upload: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M5 19.5h14"/>',
   refresh: '<path d="M19.5 12A7.5 7.5 0 1 1 17 6.4"/><path d="M19.5 4v4.5H15"/>',
+  quote: '<path d="M4 13h5V7H4v6c0 3-1 4-2 5M15 13h5V7h-5v6c0 3-1 4-2 5"/>',
   details: '<path d="M8 7h12M8 12h12M8 17h12"/><path d="M4 7h.01M4 12h.01M4 17h.01"/>',
   leaf: '<path d="M5 19c0-9 6-14 15-14 0 9-5 15-14 14"/><path d="M5 19 14 10"/>',
   crest: '<path d="M18.5 4.5C10 3 4 9.5 6.5 16.5c6.5 5 13.5-.5 12-12z"/><path d="m4.5 20 9.5-10"/>',

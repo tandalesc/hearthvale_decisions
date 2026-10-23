@@ -8,7 +8,7 @@ import {inMonths, num, theName} from '../format.js';
 import {createBudgetCard, budgetNextText} from './budget.js';
 import {adviceBanner, bindAdvice} from './advisers.js';
 import {isMinorKey} from '../model.js';
-import {animate} from '../motion.js';
+import {createCardNarration} from './card-narration.js';
 const AVATAR_TINTS = ['#e3ead3', '#efe2c8', '#d9ebec', '#f3dfd4', '#e6e0ef', '#e9e4cf'];
 
 export function isMinor(option) {
@@ -106,9 +106,7 @@ export function createCard(card, ctx) {
     <div class="card-meta">
       <span class="card-from">${icon(ctx.bodyIcon(card.from))}<span>${esc(fromName)}</span>${card.urgency >= 2 ? ' · <span class="urgent">urgent</span>' : ''}</span>
     </div>
-    <p class="card-why"${card.why ? '' : ' hidden'}>${esc(card.why ?? '')}</p>
-    <span class="sr-only card-prose-status" role="status" aria-live="polite"></span>
-    <p class="card-flavour"${card.prose?.why && card.prose.why !== card.why ? '' : ' hidden'}>${esc(card.prose?.why !== card.why ? card.prose?.why ?? '' : '')}</p>
+    <div class="card-narration-slot"></div>
     ${asker?.name ? `<div class="asker"><span class="avatar" style="--avatar:${tint(asker.name)}">${esc(initials(asker.name))}</span><span>Asked by <b>${esc(asker.name)}</b>${asker.role ? `, ${esc(asker.role)}` : ''}</span></div>` : ''}
     ${card.costLine ? `<div class="cost-line">${icon('coin')}<span>${esc(card.costLine)}</span></div>` : ''}
     ${card.note ? `<p class="card-note">${esc(card.note)}</p>` : ''}
@@ -159,47 +157,13 @@ export function createCard(card, ctx) {
     detailsBtn.setAttribute('aria-expanded', String(open));
   });
 
-  // Final background prose waits until reopening a touched card; an active
-  // stream always replaces or clears its own draft when it finishes.
-  let touched = false, latest = card, proseSig = sigOf(card), wasStreaming = false;
-  const touch = () => { touched = true; };
-  el.addEventListener('pointerdown', touch);
-  el.addEventListener('pointerenter', touch);
-  el.addEventListener('focusin', touch);
-  el.addEventListener('wheel', touch, {passive: true});
-  el.addEventListener('touchmove', touch, {passive: true});
-  const applyProse = (next, fade) => {
-    proseSig = sigOf(next);
-    const why = el.querySelector('.card-flavour');
-    const text = next.prose?.why !== next.why ? next.prose?.why ?? '' : '';
-    const trades = [...el.querySelectorAll('[data-option] .opt-trade')];
-    const changes = [[why, text], ...trades.map((t) => {
-      const o = options.find((x) => x.key === t.closest('[data-option]').dataset.option);
-      return [t, proseFor(next, o ?? {})];
-    })].filter(([node, value]) => node && node.textContent !== value);
-    for (const [node, value] of changes) {
-      node.textContent = value;
-      node.hidden = !value;
-      if (fade) animate(node, [{opacity: 0}, {opacity: 1}], {duration: 400});
-    }
-  };
+  let latest = card;
+  const narration = createCardNarration(card);
+  el.querySelector('.card-narration-slot').replaceWith(narration.el);
   bindAdvice(el, ctx, () => latest);
   el.__update = (next) => {
     latest = next ?? latest;
-    const flavour = el.querySelector('.card-flavour');
-    const streaming = latest.streamingProse?.pending === true;
-    if (streaming) {
-      if (!wasStreaming) setText(el.querySelector('.card-prose-status'), '');
-      const text = latest.streamingProse.why ?? '';
-      setText(flavour, text);
-      flavour.hidden = !text;
-      flavour.setAttribute('aria-busy', 'true');
-    } else {
-      if (wasStreaming || (sigOf(latest) !== proseSig && !touched)) applyProse(latest, !wasStreaming);
-      flavour.removeAttribute('aria-busy');
-      if (wasStreaming) setText(el.querySelector('.card-prose-status'), latest.prose?.why ? 'Town note ready.' : 'Town note unavailable.');
-    }
-    wasStreaming = streaming;
+    narration.update(latest);
     updateCard(el, latest, major, ctx);
     // An adviser's staged answer (Let it stand / Change), or what they would do.
     const host = el.querySelector('.advice-host');
@@ -211,21 +175,12 @@ export function createCard(card, ctx) {
       el.classList.remove('is-changing');
     }
   };
-  // Called when the card is shown again: pending prose lands now.
-  el.__reopen = () => {
-    touched = false;
-    if (!latest.streamingProse?.pending && sigOf(latest) !== proseSig) applyProse(latest, false);
-  };
   el.__update(card);
   return el;
 }
 
 function proseFor(card, option) {
   return option.tradeoff ?? '';
-}
-
-function sigOf(card) {
-  return JSON.stringify(card.prose ?? null);
 }
 
 function updateCard(el, card, major, ctx) {
