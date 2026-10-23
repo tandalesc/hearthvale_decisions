@@ -1246,9 +1246,16 @@ export function createPeople(ctx) {
     }
     const dirty = view.peopleDirty;
     if (dirty && dirty.end > dirty.start) {
-      buffer.addUpdateRange(dirty.start * stride, (dirty.end - dirty.start) * stride);
+      if (dirty.list) {
+        // Only the rows written: uploaded as runs of nearby rows, a few dozen at most.
+        const rows = dirty.list.slice(0, dirty.count).sort();
+        uploadRuns(rows);
+        markFades(array, rows, frame.time);
+      } else {
+        buffer.addUpdateRange(dirty.start * stride, (dirty.end - dirty.start) * stride);
+        markFades(array, rangeRows(dirty.start, Math.min(dirty.end, prevScale.length)), frame.time);
+      }
       buffer.needsUpdate = true;
-      markFades(array, dirty.start, Math.min(dirty.end, prevScale.length), frame.time);
     }
     view.peopleDirty = null;
 
@@ -1305,12 +1312,38 @@ export function createPeople(ctx) {
     });
   }
 
+  // Sorted rows to upload, as ranges: rows closer than RUN_GAP join one range, and past
+  // MAX_RUNS ranges the gaps widen, so a scattered set stays a few bufferSubData calls.
+  const RUN_GAP = 8, MAX_RUNS = 48;
+  function uploadRuns(rows) {
+    let gap = RUN_GAP;
+    for (;;) {
+      let runs = 0;
+      for (let k = 0; k < rows.length; runs++) {
+        let j = k;
+        while (j + 1 < rows.length && rows[j + 1] - rows[j] <= gap) j++;
+        k = j + 1;
+      }
+      if (runs <= MAX_RUNS) break;
+      gap *= 2;
+    }
+    for (let k = 0; k < rows.length;) {
+      let j = k;
+      while (j + 1 < rows.length && rows[j + 1] - rows[j] <= gap) j++;
+      buffer.addUpdateRange(rows[k] * stride, (rows[j] - rows[k] + 1) * stride);
+      k = j + 1;
+    }
+  }
+  const rangeRows = (start, end) => Int32Array.from({ length: Math.max(0, end - start) }, (_, k) => start + k);
+
   /** Note rows that just went indoors or came out (door fade) or turned (heading ease). */
-  function markFades(array, start, end, now) {
+  function markFades(array, rows, now) {
     const f = fadeAttr.array;
     const tr = turnAttr.array;
     let lo = Infinity, hi = -1, tlo = Infinity, thi = -1;
-    for (let i = start; i < end; i++) {
+    for (let k = 0; k < rows.length; k++) {
+      const i = rows[k];
+      if (i >= prevScale.length) continue;
       const o = i * stride;
       const s = array[o + 14];
       const prev = prevScale[i];

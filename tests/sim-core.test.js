@@ -394,6 +394,8 @@ test('decide uses pooled answers when a system offers them, local priors otherwi
   assert.equal(sampleDist([0, 0, 1], 0.2), 2);
 });
 
+const range = (d) => ({start: d.start, end: d.end});
+
 // What the renderer does after reading a sync.
 const consume = (view) => {
   view.peopleDirty = null;
@@ -405,7 +407,8 @@ test('render view: rows, extrapolation, dirty ranges and building events', () =>
   const view = createRenderView(s);
   view.sync(s, {now: 10, speed: 1});
   assert.equal(view.peopleCount, s.people.length);
-  assert.deepEqual({...view.peopleDirty}, {start: 0, end: s.people.length});
+  assert.deepEqual(range(view.peopleDirty), {start: 0, end: s.people.length});
+  assert.equal(view.peopleDirty.count, s.people.length);
   assert.equal(view.buildingEvents.length, s.buildings.length);
   assert.ok(view.buildingEvents.every((e) => e.kind === 'add'));
   assert.equal(view.bridges.length, s.buildings.filter((b) => b.type === 'bridge' && !b.collapsed).length, 'every standing bridge (a fallen one is not drawn)');
@@ -421,7 +424,7 @@ test('render view: rows, extrapolation, dirty ranges and building events', () =>
     for (let k = 0; k < view.rowFloats; k++) if (view.people[o + k] !== rows[o + k]) same = false;
     if (!same) assert.ok(view.rowFloats > 16 && rows[o + 16] > 10 && rows[o + 16] <= 10.016, `row ${i} renewed with no corner due`);
   }
-  if (view.peopleDirty) assert.ok(view.peopleDirty.end - view.peopleDirty.start < view.peopleCount / 10, 'nothing changed, little to upload');
+  if (view.peopleDirty) assert.ok(view.peopleDirty.count < view.peopleCount / 10, 'nothing changed, little to upload');
   assert.equal(view.buildingEvents.length, 0);
 
   runTicks(s, 30);
@@ -432,7 +435,7 @@ test('render view: rows, extrapolation, dirty ranges and building events', () =>
   const i = s.people.findIndex((p) => p.speed > 0 && p.task && p.task.route.length - p.task.seg >= 2);
   assert.ok(i >= 0);
   const p = s.people[i];
-  const o = i * view.rowFloats;
+  const o = view.rowOf(p.id) * view.rowFloats;
   const rev = p.rev;
   stepTick(s, 0.1);
   if (p.rev === rev) {
@@ -460,7 +463,7 @@ test('render view: rows, extrapolation, dirty ranges and building events', () =>
 
   // A speed change rewrites every row; pausing zeroes velocities.
   view.sync(s, {now: 15, speed: 0});
-  assert.deepEqual({...view.peopleDirty}, {start: 0, end: s.people.length});
+  assert.equal(view.peopleDirty.count, s.people.length);
   for (let k = 0; k < view.peopleCount; k++) assert.equal(view.people[k * view.rowFloats + 3], 0);
 });
 

@@ -58,3 +58,42 @@ test('walker rows preserve ground, bridge and ford heights across motion and row
     assert.equal(view.people[4], 0);
   }
 });
+
+test('each walker keeps its row: a swap-remove moves no row, and only rows written are listed', () => {
+  const s = createState(4817);
+  const view = createRenderView(s);
+  view.sync(s, {now: 1, speed: 1});
+  view.peopleDirty = null;
+  const n = s.people.length;
+  assert.ok(n > 20);
+  const rowOf = new Map(s.people.map((p) => [p.id, view.rowOf(p.id)]));
+  // Remove the third walker as syncIndividuals does (the last takes its place).
+  const gone = s.people[2];
+  s.people[2] = s.people.at(-1);
+  s.people.pop();
+  view.sync(s, {now: 1.01, speed: 1});
+  for (const p of s.people) assert.equal(view.rowOf(p.id), rowOf.get(p.id), `walker ${p.id} kept row`);
+  const r = rowOf.get(gone.id);
+  assert.equal(view.rowOf(gone.id), -1);
+  assert.equal(view.peopleIds[r], -1);
+  assert.equal(view.people[r * view.rowFloats + 14], 0, 'the freed row is hidden');
+  const d = view.peopleDirty;
+  assert.ok(d && Array.from(d.list.subarray(0, d.count)).includes(r));
+  assert.ok(d.count < 10, `rows written: ${d.count}`);
+  view.peopleDirty = null;
+  // A newcomer takes the freed row.
+  const fresh = {...gone, id: 1e6, rev: 1};
+  s.people.push(fresh);
+  view.sync(s, {now: 1.02, speed: 1});
+  assert.equal(view.rowOf(fresh.id), r);
+  assert.equal(view.peopleIds[r], fresh.id);
+  assert.equal(view.peopleCount, n);
+  // One walker's change lists exactly its row.
+  view.peopleDirty = null;
+  view.sync(s, {now: 1.021, speed: 1});
+  view.peopleDirty = null;
+  s.people[5].rev++;
+  view.sync(s, {now: 1.022, speed: 1});
+  const list = Array.from(view.peopleDirty?.list.subarray(0, view.peopleDirty.count) ?? []);
+  assert.ok(list.includes(view.rowOf(s.people[5].id)));
+});

@@ -19,10 +19,16 @@
 //                        17-18 wx, wz      that waypoint (the corner), for exact clamping
 //                        19   onDeck       1 while the walker or its waypoint is on a bridge deck:
 //                                          use the row's y (+ vy) there, not the ground
-//   view.peopleCount, view.peopleDirty {start, end} (rows, end exclusive) | null: the union
-//                      of rows written since the consumer last set it to null.
+//   Rows are slots: each person keeps one row for as long as they walk, whatever their
+//   place in state.people (the save's tick order), and a person who leaves frees theirs
+//   (scale 0, id -1) for the next newcomer. So rows can have holes.
+//   view.peopleCount   rows in use: one past the highest live slot (holes included).
+//   view.peopleDirty   {start, end, list, count} | null: the rows written since the consumer
+//                      last set it to null. list[0..count) are those rows (each once, in no
+//                      order); start..end (end exclusive) bounds them.
 //   view.peopleVersion bumps when the Float32Array is replaced (capacity grew): re-bind it.
 //   view.peopleIds     Int32Array: the person id written in each row (-1 for none), for picking.
+//   view.rowOf(id)     the row of a person id, or -1.
 //   view.buildings     state.buildings (records as in contract §3)
 //   view.buildingEvents [{kind: 'add'|'update'|'remove', id}] appended by each sync; the
 //                      consumer empties it (length = 0) after reading. Besides b.rev bumps,
@@ -78,12 +84,21 @@ export function createRenderView(state, {capacity = 0, rowFloats = PERSON_STRIDE
     archetype: state.archetype,
     rowFloats: rowFloats === PERSON_STRIDE_EXTENDED ? PERSON_STRIDE_EXTENDED : PERSON_STRIDE,
     sync: (s, opts) => sync(view, inner, s, opts),
+    rowOf: (id) => inner.slotOf.get(id) ?? -1,
   };
   const inner = {
     rowId: new Int32Array(0),
     rowRev: new Uint32Array(0),
     rowT: new Float32Array(0),
     rowOpen: new Uint8Array(0), // 1 = the row's waypoint is a corner, not the route's end
+    rowGen: new Uint32Array(0), // the sync that last found the row's person
+    slotOf: new Map(),          // person id -> row
+    free: [],                   // rows given up, for newcomers
+    high: 0,                    // one past the highest row in use
+    peopleGen: 0,
+    slotAt: new Int32Array(0),  // state.people index -> row, as of the last sync (a hint)
+    dirtyFlag: new Uint8Array(0),
+    dirtyList: new Int32Array(0),
     speed: -1,
     cursor: 0,
     verifyCursor: 0,
@@ -96,7 +111,7 @@ export function createRenderView(state, {capacity = 0, rowFloats = PERSON_STRIDE
     embankRev: -1,
     attentionKey: '',
     centresKey: '',
-    dirty: {start: 0, end: 0},
+    dirty: {start: 0, end: 0, list: null, count: 0},
   };
   grow(view, inner, Math.max(capacity, state.people.length, 64));
   return view;
@@ -121,6 +136,16 @@ function grow(view, inner, rows) {
   const rowOpen = new Uint8Array(cap);
   rowOpen.set(inner.rowOpen.subarray(0, Math.min(inner.rowOpen.length, cap)));
   inner.rowOpen = rowOpen;
+  const rowGen = new Uint32Array(cap);
+  rowGen.set(inner.rowGen.subarray(0, Math.min(inner.rowGen.length, cap)));
+  inner.rowGen = rowGen;
+  const flag = new Uint8Array(cap);
+  flag.set(inner.dirtyFlag.subarray(0, Math.min(inner.dirtyFlag.length, cap)));
+  inner.dirtyFlag = flag;
+  const list = new Int32Array(cap);
+  list.set(inner.dirtyList.subarray(0, Math.min(inner.dirtyList.length, cap)));
+  inner.dirtyList = list;
+  inner.dirty.list = list;
   view.peopleVersion++;
 }
 
@@ -155,39 +180,103 @@ function sync(view, inner, state, opts = {}) {
 function syncPeople(view, inner, state, now, speed) {
   const people = state.people;
   const n = people.length;
-  if (n * view.rowFloats > view.people.length) {
-    grow(view, inner, n);
-    inner.speed = -1;   // force a full rewrite into the new buffer
+  if (inner.slotAt.length < n) {
+    const at = new Int32Array(Math.max(n, Math.ceil(inner.slotAt.length * 1.5))).fill(-1);
+    at.set(inner.slotAt);
+    inner.slotAt = at;
   }
+  if (n * view.rowFloats > view.people.length) grow(view, inner, n);
   const force = speed !== inner.speed;
   inner.speed = speed;
   const lag = state.time.acc ?? 0;      // sim seconds since the last tick
   const dirty = inner.dirty;
-  if (view.peopleDirty == null || force) {
-    dirty.start = n;
+  if (view.peopleDirty == null) {
+    // A new set: forget the last one's rows.
+    const flag = inner.dirtyFlag, list = inner.dirtyList;
+    for (let k = 0; k < dirty.count; k++) flag[list[k]] = 0;
+    dirty.count = 0;
+    dirty.start = Infinity;
     dirty.end = 0;
-  } else if (dirty.end > n) {
-    dirty.end = n;
   }
 
   const stride = view.rowFloats;
-  const buf = view.people;
+  const gen = ++inner.peopleGen;
+  const {slotOf, slotAt} = inner;
+  // (A newcomer can grow the arrays: they are read again after one.)
+  let buf = view.people, {rowId, rowRev, rowOpen, rowGen} = inner;
   for (let i = 0; i < n; i++) {
     const p = people[i];
+    let r = slotAt[i];
+    if (r < 0 || rowId[r] !== p.id) {
+      r = slotOf.get(p.id) ?? -1;
+      if (r < 0) {
+        r = takeSlot(view, inner, p.id);
+        buf = view.people;
+        ({rowId, rowRev, rowOpen, rowGen} = inner);
+      }
+      slotAt[i] = r;
+    }
+    rowGen[r] = gen;
     // A row also renews when its walker reaches a corner before the next tick
     // (its waypoint time has passed), so they turn it instead of waiting there.
-    const turn = speed > 0 && inner.rowOpen[i] === 1 && stride === PERSON_STRIDE_EXTENDED && buf[i * stride + 16] <= now;
-    if (!force && !turn && inner.rowId[i] === p.id && inner.rowRev[i] === p.rev) continue;
-    inner.rowOpen[i] = writeRow(buf, stride, i, p, state, now, speed, lag);
-    inner.rowId[i] = p.id;
-    inner.rowRev[i] = p.rev;
-    inner.rowT[i] = now;
-    if (i < dirty.start) dirty.start = i;
-    if (i + 1 > dirty.end) dirty.end = i + 1;
+    const turn = speed > 0 && rowOpen[r] === 1 && stride === PERSON_STRIDE_EXTENDED && buf[r * stride + 16] <= now;
+    if (!force && !turn && rowRev[r] === p.rev && rowId[r] === p.id) continue;
+    rowOpen[r] = writeRow(buf, stride, r, p, state, now, speed, lag);
+    rowId[r] = p.id;
+    rowRev[r] = p.rev;
+    inner.rowT[r] = now;
+    markRow(inner, r);
+  }
+  // Rows whose person has gone: hidden where they stood, and free for a newcomer.
+  if (slotOf.size > n) {
+    for (let r = 0; r < inner.high; r++) {
+      if (rowId[r] < 0 || rowGen[r] === gen) continue;
+      slotOf.delete(rowId[r]);
+      rowId[r] = -1;
+      rowOpen[r] = 0;
+      const o = r * stride;
+      for (let k = 3; k < 6; k++) buf[o + k] = 0;
+      buf[o + 8] = 0;
+      buf[o + 14] = 0;
+      if (stride === PERSON_STRIDE_EXTENDED) buf[o + 16] = now;
+      inner.free.push(r);
+      markRow(inner, r);
+    }
+    while (inner.high > 0 && rowId[inner.high - 1] < 0) inner.high--;
   }
   refreshStale(view, inner, state, now, speed, lag, n);
-  view.peopleCount = n;
-  view.peopleDirty = dirty.end > dirty.start ? dirty : null;
+  view.peopleCount = inner.high;
+  view.peopleDirty = dirty.count ? dirty : null;
+}
+
+// A row for a person seen for the first time: one given up by someone who left, else
+// the next after the highest in use.
+function takeSlot(view, inner, id) {
+  let r = -1;
+  while (inner.free.length) {
+    const f = inner.free.pop();
+    if (inner.rowId[f] < 0) { r = f; break; }
+  }
+  if (r < 0) {
+    while (inner.high < inner.rowId.length && inner.rowId[inner.high] >= 0) inner.high++;
+    if ((inner.high + 1) * view.rowFloats > view.people.length) grow(view, inner, inner.high + 64);
+    r = inner.high;
+  }
+  if (r + 1 > inner.high) inner.high = r + 1;
+  inner.rowId[r] = id;
+  inner.rowRev[r] = 0;
+  inner.rowOpen[r] = 0;
+  inner.slotOf.set(id, r);
+  return r;
+}
+
+function markRow(inner, r) {
+  if (inner.dirtyFlag[r]) return;
+  inner.dirtyFlag[r] = 1;
+  const d = inner.dirty;
+  d.list[d.count++] = r;
+  if (r < d.start) d.start = r;
+  if (r + 1 > d.end) d.end = r + 1;
 }
 
 // Re-anchor a slice of long-running moving rows each frame so the extrapolation never
@@ -195,15 +284,14 @@ function syncPeople(view, inner, state, now, speed) {
 function refreshStale(view, inner, state, now, speed, lag, n) {
   if (!n || speed === 0) return;
   const batch = Math.max(8, Math.ceil(n / 60));
-  const dirty = inner.dirty;
   for (let k = 0; k < batch; k++) {
     const i = inner.cursor++ % n;
     const p = state.people[i];
-    if (p.speed <= 0 || now - inner.rowT[i] < REFRESH_AGE) continue;
-    inner.rowOpen[i] = writeRow(view.people, view.rowFloats, i, p, state, now, speed, lag);
-    inner.rowT[i] = now;
-    if (i < dirty.start) dirty.start = i;
-    if (i + 1 > dirty.end) dirty.end = i + 1;
+    const r = inner.slotAt[i];
+    if (p.speed <= 0 || now - inner.rowT[r] < REFRESH_AGE) continue;
+    inner.rowOpen[r] = writeRow(view.people, view.rowFloats, r, p, state, now, speed, lag);
+    inner.rowT[r] = now;
+    markRow(inner, r);
   }
   if (inner.cursor > 1e9) inner.cursor = 0;
 }
