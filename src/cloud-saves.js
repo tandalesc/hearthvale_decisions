@@ -1,10 +1,11 @@
 import {newSlotId, metaFromSave} from './save-store.js';
 
 const INTERVAL = 120000;
-const MAX_RAW = 30 * 1024 * 1024;
+const MAX_RAW = 64 * 1024 * 1024;
+const MAX_CLOUD_BYTES = 16 * 1024 * 1024;
 const hash = async blob => [...new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))].map(x=>x.toString(16).padStart(2,'0')).join('');
 const problem = (code, message) => Object.assign(new Error(message), {code});
-const emptyCatalog = (limit=1) => ({towns:[],recoverable:[],limit,maxBytes:5*1024*1024});
+const emptyCatalog = (limit=1) => ({towns:[],recoverable:[],limit,maxBytes:MAX_CLOUD_BYTES});
 
 export async function unpackCloudSave(blob) {
   const reader = blob.stream().pipeThrough(new DecompressionStream('gzip')).getReader();
@@ -46,7 +47,7 @@ export function createCloudSaves({saves, session, fetcher = (...a)=>fetch(...a),
     const response=await request('/'+encodeURIComponent(id),{},scope);
     const meta=JSON.parse(decodeURIComponent(response.headers.get('X-Town-Meta')||''));
     const blob=await response.blob();
-    if(blob.size>5*1024*1024)throw problem('size','This cloud save is too large to open.');
+    if(blob.size>MAX_CLOUD_BYTES)throw problem('size','This cloud save is too large to open.');
     const raw=await unpackCloudSave(blob), digest=await hash(blob);guard(scope);
     return {blob,raw,meta,hash:digest};
   }

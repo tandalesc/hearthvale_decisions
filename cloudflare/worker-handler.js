@@ -34,7 +34,7 @@ export default {
   const respond=async(status,body,headers={})=>json(status,body,{'Set-Cookie':cookie(await signSession(env,account)),...headers});
   const billing=account.email?await billingState(env,account.id,'read',{key:'billing'}):null;
   const paid=Boolean(account.email&&isPaid(billing));
-  if(path==='/api/session'&&request.method==='GET') return respond(200,{tier:paid?'paid':'free',authenticated:Boolean(account.email),...(account.email?{email:account.email,cloudAccountId:await hmac(env.AUTH_SECRET,`cloud-scope:${account.id}`)}:{}),billingEnabled:billingEnabled(env),limits:{narrationsPerMonth:cap(env,'PAID_NARRATIONS_MONTHLY',120),teacherQuestionsPerMonth:cap(env,'PAID_TEACHER_MONTHLY',1000),cloudTowns:paid?10:1,cloudSaveBytes:5*1024*1024}});
+  if(path==='/api/session'&&request.method==='GET') return respond(200,{tier:paid?'paid':'free',authenticated:Boolean(account.email),...(account.email?{email:account.email,cloudAccountId:await hmac(env.AUTH_SECRET,`cloud-scope:${account.id}`)}:{}),billingEnabled:billingEnabled(env),limits:{narrationsPerMonth:cap(env,'PAID_NARRATIONS_MONTHLY',120),teacherQuestionsPerMonth:cap(env,'PAID_TEACHER_MONTHLY',1000),cloudTowns:paid?10:1,cloudSaveBytes:16*1024*1024}});
   if(path==='/api/cloud/recover'||path==='/api/cloud/towns'||path.startsWith('/api/cloud/towns/')) {
    if(!account.email) return respond(401,{error:'Sign in first'});
    const cloudAccountId=await hmac(env.AUTH_SECRET,`cloud-scope:${account.id}`);

@@ -94,12 +94,20 @@ function petitionersOf(state, card) {
     helps: card.helps ?? []}];
 }
 
-function petitionNames(members) {
+function joinNames(members) {
   const names = members.map((p) => p.name.replace(/^the /i, 'the '));
-  if (names.length === 1) return names[0].replace(/^./, (c) => c.toUpperCase());
-  const joined = names.length === 2 ? `${names[0]} and ${names[1]}` :
+  if (names.length <= 1) return names[0] ?? '';
+  return names.length === 2 ? `${names[0]} and ${names[1]}` :
     `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
-  return joined.replace(/^./, (c) => c.toUpperCase());
+}
+
+const petitionNames = (members) => joinNames(members).replace(/^./, (c) => c.toUpperCase());
+
+// One member of the first group speaks for all: "A farmer, with the makers and the merchants".
+function groupAsker(state, members) {
+  const faction = state.factions.find((f) => f.id === members[0]?.faction);
+  const name = faction ? `A ${faction.name.toLowerCase().replace(/s$/, '')}` : 'A petitioner';
+  return {name, role: `with ${joinNames(members.slice(1))}`};
 }
 
 function mergeGrievance(state, first, second) {
@@ -129,7 +137,7 @@ function mergeGrievance(state, first, second) {
   first.title = `${who} petition the council${again ? ' again' : ''}`;
   first.why = `${who} bring the same grievance: ${String(first.data.grievanceText ?? 'their concern needs attention').replace(/[.!?]+$/, '')}. ` +
     (again ? 'Some have come before; they want a plan, not a promise.' : 'They want to be heard.');
-  first.asker = {name: 'The petitioners', role: 'petitioner'};
+  first.asker = groupAsker(state, members);
   first.prose = null;
   first.needsProse = true;
   first.proseRevision = (first.proseRevision ?? 0) + 1;
@@ -144,6 +152,10 @@ export function coalesceGrievancePetitions(state) {
   for (const card of [...state.docket]) {
     const grievance = grievanceOf(card);
     if (!grievance) continue;
+    // Cards grouped before the asker fix were saved as "The petitioners, petitioner".
+    if (card.data.petitioners?.length > 1 && card.asker?.name === 'The petitioners') {
+      card.asker = groupAsker(state, card.data.petitioners);
+    }
     const first = byGrievance.get(grievance);
     if (!first) byGrievance.set(grievance, card);
     else {
