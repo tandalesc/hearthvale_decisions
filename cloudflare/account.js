@@ -1,9 +1,16 @@
+import {handleCloudState, cloudAlarm} from './cloud-saves.js';
+
 // SQLite-backed serialized account state. No in-isolate counters grant credit.
 export class AccountState {
-  constructor(ctx, env) { this.ctx = ctx; this.env = env; this.sql = ctx.storage.sql; this.sql.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)'); }
+  constructor(ctx, env) { this.ctx = ctx; this.env = env; this.sql = ctx.storage.sql; this.cloudQueue = Promise.resolve(); this.sql.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)'); }
   get(key) { const rows = [...this.sql.exec('SELECT value FROM kv WHERE key = ?', key)]; return rows.length ? JSON.parse(rows[0].value) : null; }
   put(key, value) { this.sql.exec('INSERT INTO kv VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, JSON.stringify(value)); }
   async fetch(request) {
+    if (new URL(request.url).pathname.startsWith('/cloud/')) {
+      const run = this.cloudQueue.then(() => handleCloudState(this, request));
+      this.cloudQueue = run.catch(() => {});
+      return run;
+    }
     const {op, ...args} = await request.json();
     const result = this.ctx.storage.transactionSync(() => {
       if (op === 'read') return this.get(args.key);
@@ -78,6 +85,11 @@ export class AccountState {
       throw new Error('Unknown state operation');
     });
     return Response.json(result);
+  }
+  async alarm() {
+    const run = this.cloudQueue.then(() => cloudAlarm(this));
+    this.cloudQueue = run.catch(() => {});
+    return run;
   }
 }
 export async function state(env, id, op, args = {}) {

@@ -1,5 +1,5 @@
 import {AccountState,state,reserve} from './account.js';
-import {session,signSession,cookie,digest,requestEmail,randomToken,codeHash} from './auth.js';
+import {session,signSession,cookie,digest,hmac,constantEqual,requestEmail,randomToken,codeHash} from './auth.js';
 import {billingEnabled,checkout,stripe,webhook,isPaid,billingState} from './billing.js';
 import {validateDecisionRequest,hostedDecisions} from './decision.js';
 import {validateQuestion,validateState} from '../src/decision-kinds.js';
@@ -29,12 +29,30 @@ export default {
  try {
   if(path==='/api/billing/webhook') { if(request.method!=='POST') return json(405,{error:'Method not allowed'}); await webhook(request,env,readText);return json(200,{received:true}); }
   if(path.startsWith('/api/learning/')||path.startsWith('/api/students/')||path.startsWith('/students/')) { const response=await handleLearningRequest(request,env);if(response) return response;const assetUrl=new URL(request.url);assetUrl.pathname=assetUrl.pathname.replace(/^\/api\/students\//,'/students/');return env.ASSETS.fetch(new Request(assetUrl,request)); }
-  if(request.method==='POST' && (request.headers.get('origin')!==url.origin || request.headers.get('sec-fetch-site')==='cross-site')) return json(403,{error:'Origin not allowed'});
+  if(['POST','PUT','PATCH','DELETE'].includes(request.method) && (request.headers.get('origin')!==url.origin || request.headers.get('sec-fetch-site')==='cross-site')) return json(403,{error:'Origin not allowed'});
   const account=await session(request,env);
   const respond=async(status,body,headers={})=>json(status,body,{'Set-Cookie':cookie(await signSession(env,account)),...headers});
   const billing=account.email?await billingState(env,account.id,'read',{key:'billing'}):null;
   const paid=Boolean(account.email&&isPaid(billing));
-  if(path==='/api/session'&&request.method==='GET') return respond(200,{tier:paid?'paid':'free',authenticated:Boolean(account.email),...(account.email?{email:account.email}:{}),billingEnabled:billingEnabled(env),limits:{narrationsPerMonth:cap(env,'PAID_NARRATIONS_MONTHLY',120),teacherQuestionsPerMonth:cap(env,'PAID_TEACHER_MONTHLY',1000)}});
+  if(path==='/api/session'&&request.method==='GET') return respond(200,{tier:paid?'paid':'free',authenticated:Boolean(account.email),...(account.email?{email:account.email,cloudAccountId:await hmac(env.AUTH_SECRET,`cloud-scope:${account.id}`)}:{}),billingEnabled:billingEnabled(env),limits:{narrationsPerMonth:cap(env,'PAID_NARRATIONS_MONTHLY',120),teacherQuestionsPerMonth:cap(env,'PAID_TEACHER_MONTHLY',1000),cloudTowns:paid?10:1,cloudSaveBytes:5*1024*1024}});
+  if(path==='/api/cloud/recover'||path==='/api/cloud/towns'||path.startsWith('/api/cloud/towns/')) {
+   if(!account.email) return respond(401,{error:'Sign in first'});
+   const cloudAccountId=await hmac(env.AUTH_SECRET,`cloud-scope:${account.id}`);
+   if(!constantEqual(request.headers.get('x-cloud-account')||'',cloudAccountId)) return respond(409,{error:'Account changed. Please try again.',code:'account_changed'});
+   const recover=path==='/api/cloud/recover';
+   const suffix=recover?'/recover':path.slice('/api/cloud/towns'.length);
+   if(!recover && !/^$|^\/[0-9a-f-]{36}(?:\/(?:history|restore))?$/i.test(suffix)) return json(404,{error:'Not found'});
+   const method=request.method;
+   if(!['GET','PUT','DELETE','POST'].includes(method)) return json(405,{error:'Method not allowed'});
+   const internal=new URL(`https://state.internal/cloud${suffix || '/'}`);
+   internal.searchParams.set('account',account.id);
+   internal.searchParams.set('limit',paid?'10':'1');
+   const headers=new Headers();
+   for(const name of ['content-type','content-length','if-match','x-save-id','x-town-meta']) {const value=request.headers.get(name);if(value)headers.set(name,value);}
+   headers.set('x-cloud-limit',paid?'10':'1');
+   const stub=env.ACCOUNT_STATE.get(env.ACCOUNT_STATE.idFromName(account.id));
+   return await stub.fetch(internal,{method,headers,...(['PUT','POST'].includes(method)?{body:request.body,duplex:'half'}:{})});
+  }
   if(path==='/api/auth/verify'&&request.method==='GET') {
    const token=url.searchParams.get('token'); if(!/^[a-f0-9]{64}$/.test(token||'')) return json(400,{error:'Invalid or expired link'});
    const value=await state(env,'auth','consume',{key:await digest(token)}); if(!value) return json(400,{error:'Invalid or expired link'});

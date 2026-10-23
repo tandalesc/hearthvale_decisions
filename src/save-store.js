@@ -9,6 +9,8 @@
 // slots lives on under the key 'current' and is given a record the first time
 // the towns are listed.
 
+import {metaFromSave} from './save-meta.js';
+
 const DB_NAME = 'hearthvale';
 const SAVES = 'saves';
 const META = 'meta';
@@ -105,7 +107,7 @@ export function newSlotId() {
 }
 
 // The menu's record of a town (its own module, so the sim worker can use it).
-export {metaFromSave} from './save-meta.js';
+export {metaFromSave};
 
 export function createSaveStore({legacyKey}) {
   let dbPromise = null;
@@ -150,16 +152,26 @@ export function createSaveStore({legacyKey}) {
     })());
   }
 
-  function writeSlot(id, text, meta = {}) {
+  function writeSlot(id, text, meta = {}, cloud = null) {
     const run = writing.then(async () => {
       try {
-        const blob = await gzip(text);
+        const blob = text instanceof Blob ? text : await gzip(text);
         const d = await db();
-        const old = await tx(d, META, 'readonly', (s) => s[META].get(id));
-        const now = Date.now();
-        // Keep the old picture unless a new one came with this save.
-        const record = {...old, ...meta, id, savedAt: now, createdAt: old?.createdAt ?? now, thumb: meta.thumb ?? old?.thumb ?? null};
-        await tx(d, [SAVES, META], 'readwrite', (s) => [s[SAVES].put(blob, id), s[META].put(record, id)]);
+        // Read/merge/write metadata in one transaction, including cloud links.
+        // A background upload must never be lost to a later local autosave.
+        await tx(d, [SAVES, META], 'readwrite', (s) => {
+          const read = s[META].get(id);
+          read.onsuccess = () => {
+            const old = read.result;
+            if (cloud && (old?.localRevision ?? null) !== cloud.expectedRevision) { s[META].transaction.abort(); return; }
+            const now = Date.now(), localRevision = crypto.randomUUID();
+            const record = {...old, ...meta, id, localRevision, savedAt: now, createdAt: old?.createdAt ?? now, thumb: meta.thumb ?? old?.thumb ?? null};
+            if (cloud) record.cloud = {...old?.cloud, [cloud.account]: {...cloud.link, cleanRevision: localRevision}};
+            s[SAVES].put(blob, id);
+            s[META].put(record, id);
+          };
+          return read;
+        });
         storage.set(LAST_KEY, id);
         return true;
       } catch (err) {
@@ -203,6 +215,29 @@ export function createSaveStore({legacyKey}) {
       }
     },
 
+    async read(id) {
+      await migrate();
+      const [blob, meta] = await tx(await db(), [SAVES, META], 'readonly', s => [s[SAVES].get(id), s[META].get(id)]);
+      if (blob == null || !meta) return null;
+      return {blob: typeof blob === 'string' ? await gzip(blob) : blob, meta};
+    },
+
+    async updateCloud(id, account, patch) {
+      await tx(await db(), META, 'readwrite', s => {
+        const read = s[META].get(id);
+        read.onsuccess = () => {
+          const old = read.result;
+          if (!old) return;
+          s[META].put({...old, cloud: {...old.cloud, [account]: {...old.cloud?.[account], ...patch}}}, id);
+        };
+        return read;
+      });
+    },
+
+    installCloud(id, blob, meta, account, link, expectedRevision = null) {
+      return writeSlot(id, blob, meta, {account, link, expectedRevision});
+    },
+
     /** Writes are serialised so a slow write can't land after a newer one. */
     save(id, text, meta) {
       return writeSlot(id, text, meta);
@@ -211,8 +246,11 @@ export function createSaveStore({legacyKey}) {
     async rename(id, name) {
       try {
         const d = await db();
-        const old = await tx(d, META, 'readonly', (s) => s[META].get(id));
-        if (old) await tx(d, META, 'readwrite', (s) => s[META].put({...old, name}, id));
+        await tx(d, META, 'readwrite', s => {
+          const read = s[META].get(id);
+          read.onsuccess = () => { if (read.result) s[META].put({...read.result, name, localRevision: crypto.randomUUID()}, id); };
+          return read;
+        });
       } catch { /* ignore */ }
     },
 
