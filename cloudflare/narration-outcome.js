@@ -7,7 +7,8 @@ const CATEGORIES=new Map([
  ['no concrete detail','missing_detail'],['number not in facts','unsupported_number'],
  ['name not in facts','unsupported_name'],['overstates','overstatement'],['stiff phrasing','style'],
  ['claims your rulings as theirs','ruling_ownership'],['unfinished','unfinished'],['too long','too_long'],
- ['too many words','too_long'],
+ ['too many words','too_long'],['too many sentences','too_long'],
+ ['omits a competing plan','missing_plan'],['unchanged game explanation','template_repetition'],
 ]);
 export function rejectionCategory(diagnostic) {
  const reason=diagnostic?.checked?.reasons?.why??diagnostic?.checked?.reason;

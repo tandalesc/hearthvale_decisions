@@ -420,15 +420,15 @@ test('card guardrails: structure is strict, each field falls back on its own', (
   assert.match(field((p) => ({...p, why: 'It will cost 950 coin. Spare jobs are scarce.'})), /number not in facts: 950/);
   assert.match(field((p) => ({...p, why: 'Ninety families left.'})), /number not in facts: ninety/);
   assert.equal(checkCardProse(facts, {...goodCardProse(), why: 'Spare jobs are scarce. Owners hold back. We wait. And wait.'}).prose.why,
-    'Spare jobs are scarce. Owners hold back. We wait.', 'a fourth sentence is cut, not refused');
-  assert.match(field((p) => ({...p, why: 'word '.repeat(70).trim() + '.'})), /long|words/);
+    'Spare jobs are scarce. Owners hold back. We wait. And wait.', 'the full quote survives');
+  assert.match(field((p) => ({...p, why: 'word '.repeat(90).trim() + '.'})), /long|words/);
   assert.match(field((p) => ({...p, why: 'The poor starve while we wait for jobs.'})), /overstates: starve/);
   assert.match(field((p) => ({...p, why: 'Spare jobs are scarce in Mill End.'})), /name not in facts: Mill/);
   assert.match(field((p) => ({...p, why: 'We must ensure spare jobs return.'})), /stiff phrasing: ensure/);
   assert.match(field((p) => ({...p, why: 'We put off the hall. Spare jobs are scarce.'})), /claims your rulings/);
   assert.match(field((p) => ({...p, why: 'Ivo thinks spare jobs are scarce.'})), /speaks of themselves/);
   assert.match(field((p) => ({...p, why: 'Families there work full days and still go short of spare jobs.'})), /copies an example/);
-  assert.match(field((p) => ({...p, why: 'Owners say the floor costs them hands.'})), /restates the template/);
+  assert.match(field((p) => ({...p, why: 'Owners say the floor costs them hands.'})), /unchanged game explanation/);
   assert.match(field((p) => ({...p, why: 'Things are bad. We should act soon.'})), /no concrete detail/);
   assert.match(field((p) => ({...p, options: {...p.options, do: 'This raises the wage floor for all.'}}), 'do'), /says the wage floor goes up/);
   assert.match(field((p) => ({...p, options: {...p.options, build: 'A hall, and it is free.'}}), 'build'), /costly option is free/);
@@ -721,7 +721,12 @@ test('Anthropic card narration always retains canonical option text', async () =
     calls++;
     const request = JSON.parse(init.body);
     assert.equal(request.model, 'claude-haiku-5-5');
-    assert.equal(request.max_tokens, 180);
+    assert.equal(request.max_tokens, 260);
+    const supplied = JSON.parse(request.messages[0].content.split('\n')[0]);
+    assert.equal(supplied.why, facts.why);
+    assert.deepEqual(supplied.options, facts.options.map(({key,label})=>({key,label})));
+    assert.match(request.system, /preserving the problem, stakes/);
+    assert.doesNotMatch(request.system, /Do not repeat|20–28|exactly ONE/);
     assert.deepEqual(request.thinking, {type:'disabled'});
     assert.equal(request.output_config.effort, 'low');
     assert.equal(init.redirect, 'manual');
@@ -761,15 +766,15 @@ test('Anthropic parser rejects truncated valid-looking text and exhausted output
   await assert.rejects(async () => { for await (const delta of readAnthropicDeltas(huge)) void delta; }, /too large/);
 });
 
-test('live Haiku response is bounded to two sentences and validates without touching effects', async () => {
+test('hosted quote keeps its final sentence and canonical effects', async () => {
   const state=fixtureState('town');
   const facts=cardFacts(state,cardsNeedingProse(state)[0].id);
   const why="I think we need a proper hall, as the moot house is cramped for all of us now. You approved the Festival Society last year, so a summer fair could follow it nicely. Still, I lean toward the hall, since the clerks of Water Hill are keen on it.";
   const stream=`data: ${JSON.stringify({type:'content_block_delta',delta:{type:'text_delta',text:JSON.stringify({why})}})}\n\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n`;
   const result=await narrateAnthropic(facts,{ANTHROPIC_API_KEY:'test'},{fetcher:async()=>new Response(stream)});
   assert.equal(result.source,'llm');
-  assert.equal(result.prose.why.match(/[.!?]/g).length,2);
-  assert.ok(result.prose.why.split(/\s+/).length<=40);
+  assert.equal(result.prose.why,why);
+  assert.deepEqual(result.prose.options,Object.fromEntries(facts.options.map(o=>[o.key,o.tradeoff??''])));
 });
 
 import {partialCardWhy,checkHostedCardProse,narrationKey as hostedNarrationKey} from '../cloudflare/narration.js';
@@ -778,24 +783,55 @@ test('partial JSON why decoder waits for split escapes and handles unicode', () 
   assert.equal(partialCardWhy('{"why":"A \\u00e9 and \\"quote\\".'),'A é and "quote".');
   assert.equal(partialCardWhy('{"why":"An unfinished escape \\'),null);
 });
-test('safe leading sentence salvage keeps strict guards and avoids generic example-word false positives', () => {
+test('whole-quote validation rejects invalid endings and keeps fact guards', () => {
   const state=fixtureState('town'),facts=cardFacts(state,cardsNeedingProse(state)[0].id);
-  const valid='The clerks of Water Hill lean for this upgrade, and you approved forming the Festival Society in year 29 after a bumper harvest.';
+  const valid='Our hall is cramped, but we could hold a summer fair instead. Which should come first?';
   const long=valid+' '+('Extra unsupported words '.repeat(20))+'.';
-  assert.equal(checkHostedCardProse(facts,long).used.why,'llm');
+  assert.equal(checkHostedCardProse(facts,long).used.why,'template');
+  assert.equal(checkHostedCardProse(facts,valid+' It costs 999999 coin.').used.why,'template');
   assert.equal(checkHostedCardProse(facts,'Ivo says this now.').used.why,'template');
-  assert.equal(checkHostedCardProse({...facts,place:{district:'Old Ford'}},'Since the bumper harvest in year 29, the merchants of Old Ford lean for this festival fund, and the labourers lean for it too.').used.why,'llm');
+  assert.equal(checkHostedCardProse({...facts,place:{district:'Old Ford'}},'We could build a hall or hold a summer fair in Old Ford. Which comes first?').used.why,'llm');
   assert.notEqual(hostedNarrationKey(facts),JSON.stringify(facts));
 });
 test('provider previews validated complete prose with backpressure and final fallback is authoritative', async () => {
   const state=fixtureState('town'),facts=cardFacts(state,cardsNeedingProse(state)[0].id);
-  const valid='The clerks of Water Hill lean for this upgrade, and you approved forming the Festival Society in year 29 after a bumper harvest.';
+  const valid='Our hall is cramped, but we could hold a summer fair instead. Which should come first?';
   const previews=[];let waiting=false;
-  const parts=['{"why":"The clerks of Water Hill lean', ' for this upgrade, and you approved forming the Festival Society in year 29 after a bumper harvest.', '" BROKEN}'];
+  const parts=['{"why":"Our hall is cramped, but we could hold', ' a summer fair instead. Which should come first?', '" BROKEN}'];
   const stream=parts.map(text=>`data: ${JSON.stringify({type:'content_block_delta',delta:{type:'text_delta',text}})}\n\n`).join('')+'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n';
   const result=await narrateAnthropic(facts,{ANTHROPIC_API_KEY:'test'},{fetcher:async()=>new Response(stream),onPreview:async preview=>{assert.equal(waiting,false);waiting=true;await Promise.resolve();previews.push(preview);waiting=false;}});
   assert.deepEqual(previews,[{text:valid,field:'why'}]);
   assert.equal(result.source,'template');
   const abort=new AbortController();abort.abort();
   await assert.rejects(narrateAnthropic(facts,{ANTHROPIC_API_KEY:'test'},{signal:abort.signal,fetcher:async()=>new Response(stream),onPreview:async()=>assert.fail('aborted preview')}),{name:'AbortError'});
+});
+
+const harvestChoice = () => ({
+  v: 1, type: 'card', id: 'c1', kind: 'proposal', title: 'Which first?', year: 7, season: 'summer',
+  asker: {name: 'Nell Lark', role: 'farmer', traits: ['plain-spoken', 'stubborn']},
+  why: 'One bad harvest could starve us. A granary would carry us through. There is a second plan too: a cart bridge at the old ford ford. Which comes first?',
+  trigger: ['food in store is high'], place: {district: 'Old Ford'},
+  stances: [{who: 'labourers', lean: 'for', p: 0.7, where: 'Old Ford'}],
+  past: [{year: 6, act: 'approved', what: 'fast days'}, {year: 5, act: 'approved', what: 'market gardens'}],
+  options: [
+    {key: 'x_do', label: 'A granary', effects: [{act: 'build', what: 'a granary'}], tradeoff: 'Food kept for a bad harvest.'},
+    {key: 'y_do', label: 'A cart bridge at the Old Ford ford', effects: [{act: 'build', what: 'a bridge'}], tradeoff: 'Carts can cross.'},
+  ],
+});
+test('harvest request retains its risk and both plans through provider and client validation', async () => {
+  const facts = harvestChoice();
+  validateProseFacts(facts);
+  const why = 'One bad harvest could starve us. A granary would see us through it. There is also the cart bridge at Old Ford to consider. Which should we build first?';
+  const old = 'Food in store is high this summer, and the labourers of Old Ford lean for a granary, as you approved fast days and market gardens in years six and five.';
+  assert.equal(checkHostedCardProse(facts, old).reasons.why, 'omits a competing plan');
+  assert.equal(checkHostedCardProse(facts, 'We ask for the cart bridge at Old Ford.').reasons.why, 'omits a competing plan');
+  const previews = [];
+  const parts = ['{"why":"One bad harvest could starve us. A granary would see us through it.', ' There is also the cart bridge at Old Ford to consider. Which should we build first?', '"}'];
+  const stream = parts.map(text => `data: ${JSON.stringify({type:'content_block_delta',delta:{type:'text_delta',text}})}\n\n`).join('') + 'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n';
+  const result = await narrateAnthropic(facts, {ANTHROPIC_API_KEY:'test'}, {fetcher:async()=>new Response(stream), onPreview:async p=>previews.push(p.text)});
+  assert.equal(result.source, 'llm');
+  assert.equal(result.prose.why, why);
+  assert.deepEqual(previews, [why], 'wait for both plans before replacing the explanation');
+  assert.equal(checkCardProse(facts, result.prose).prose.why, why, 'browser also preserves all four sentences');
+  assert.equal(checkHostedCardProse(facts, why + ' We wait.').used.why, 'template', 'never salvage a prefix of oversized output');
 });
