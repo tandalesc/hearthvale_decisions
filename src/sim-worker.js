@@ -99,6 +99,7 @@ const ops = {
   'decisions.configure': (s) => session.decisions.configure(s),
   'decisions.setEnabled': (on) => session.decisions.setEnabled(on),
   'decisions.stats': () => session.decisions.stats(),
+  prefetchCardProse: (ids) => session.prefetchCardProse(ids),
   cancelCardProse: () => session.cancelCardProse(),
   // Provider I/O must not occupy the serial simulation-message queue: snapshots,
   // ticks and cancellation need to keep running while narration arrives.

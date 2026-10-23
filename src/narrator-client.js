@@ -328,8 +328,8 @@ export async function noteFor(state, query, {signal, onToken, onMeta, peek = nul
 }
 
 // ---------------------------------------------------------------------------
-// Demand-driven card flavour. Ticks never generate prose; a visible selected
-// card requests its own note and stores it through the simulation save action.
+// Demand-driven card flavour. Opening Council requests its surfaced cards;
+// validated notes are stored through the simulation save action.
 // ---------------------------------------------------------------------------
 
 const PROSE_RETRY_MS = 30000;
@@ -356,8 +356,12 @@ export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) =
       pausedUntil = now() + PROSE_RETRY_MS;
       return false;
     }
+    if (signal?.aborted) return null;
     if (response.status === 400) return {prose: FALLBACKS[facts.type](facts), source: 'template'};
-    if (!response.ok) return false;
+    if (!response.ok) {
+      if (response.status === 429 || response.status >= 500) pausedUntil = now() + PROSE_RETRY_MS;
+      return false;
+    }
     try {
       const body = response.headers?.get?.('content-type')?.includes('text/event-stream')
         ? await readNarrationStream(response.body, {signal, onToken, snapshotsOnly: true, field: 'why'})
@@ -375,9 +379,11 @@ export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) =
   const inflight = new Map();
   const previews = new Map();
   const previewOwners = new Map();
-  // No clock-driven work. The open view explicitly requests one card.
+  // No clock-driven work. The open view explicitly requests its cards.
   async function requestCard(state, id, {signal} = {}) {
     const card = cardsNeedingProse(state).find((c) => c.id === id);
+    const revision = card?.proseRevision ?? 0;
+    const current = () => state.docket?.find(c => c.id === id) === card && (card.proseRevision ?? 0) === revision;
     const store = actions('setCardProse');
     const key = `card:${id}`;
     if (!card || !store || !ready(key) || now() < pausedUntil || signal?.aborted) return;
@@ -395,9 +401,9 @@ export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) =
     };
     signal?.addEventListener('abort', clearPreview, {once: true});
     const pending = run(job, signal, (_delta, text) => {
-      if (!signal?.aborted && previewOwners.get(id) === entry) previews.set(id, {why: text, pending: true});
+      if (!signal?.aborted && current() && previewOwners.get(id) === entry) previews.set(id, {why: text, pending: true});
     }).then((result) => {
-      if (signal?.aborted || inflight.get(key) !== entry) return;
+      if (signal?.aborted || !current() || inflight.get(key) !== entry) return;
       if (result) { store(state, id, {...result.prose, source: result.source}); counts[result.source]++; }
       else { counts.failed++; retryAt.set(key, now() + PROSE_RETRY_MS); }
     }).finally(() => {
@@ -413,17 +419,57 @@ export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) =
 
 export function startProseKeeper(getState, options = {}) {
   const keeper = createProseKeeper(options);
-  let controller = null, selected = null, pending = null;
-  const cancel = () => { controller?.abort(); controller = null; selected = null; pending = null; };
+  const jobs = new Map();
+  let queue = [], running = 0, generation = 0;
+  function pump() {
+    while (running < 2 && queue.length) {
+      const job = queue.shift();
+      if (jobs.get(job.id) !== job) continue;
+      job.started = true; running++;
+      const epoch = generation;
+      keeper.requestCard(getState(), job.id, {signal: job.controller.signal}).catch(() => {}).finally(() => {
+        if (jobs.get(job.id) === job) jobs.delete(job.id);
+        job.resolve();
+        if (epoch === generation) { running--; pump(); }
+      });
+    }
+  }
+  function requestCard(id, priority = true) {
+    const card = cardsNeedingProse(getState()).find(card => card.id === id);
+    const revision = card?.proseRevision ?? 0;
+    const existing = jobs.get(id);
+    if (existing && card && existing.revision === revision) {
+      if (priority && !existing.started) { queue = [existing, ...queue.filter(job => job !== existing)]; pump(); }
+      return existing.promise;
+    }
+    if (existing) {
+      existing.controller.abort(); existing.resolve(); jobs.delete(id);
+      queue = queue.filter(job => job !== existing);
+    }
+    if (!card) return Promise.resolve();
+    const job = {id, revision, controller: new AbortController(), started: false};
+    job.promise = new Promise(resolve => { job.resolve = resolve; });
+    jobs.set(id, job);
+    priority ? queue.unshift(job) : queue.push(job);
+    pump();
+    return job.promise;
+  }
+  const cancel = () => {
+    generation++;
+    for (const job of jobs.values()) { job.controller.abort(); job.resolve(); }
+    jobs.clear(); queue = []; running = 0;
+  };
   return {...keeper,
-    requestCard(id) {
-      if (id === selected && pending) return pending;
-      cancel();
-      selected = id;
-      controller = new AbortController();
-      pending = keeper.requestCard(getState(), id, {signal: controller.signal});
-      return pending;
+    requestCard,
+    prefetchCards(ids) {
+      const wanted = new Set(ids);
+      for (const [id, job] of jobs) if (!wanted.has(id)) {
+        job.controller.abort(); job.resolve(); jobs.delete(id);
+      }
+      queue = queue.filter(job => jobs.get(job.id) === job);
+      for (const id of wanted) requestCard(id, false);
     },
+    peekCard: id => keeper.peekCard(id) ?? (jobs.has(id) ? {why: '', pending: true} : undefined),
     cancel, stop: cancel,
   };
 }

@@ -47,10 +47,11 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
     card = presented(card);
     let node = full.get(card.id);
     // A node still folding away cannot come back; build it afresh.
-    if (node?.dataset.leaving) node = null;
+    if (node?.dataset.leaving || node?.dataset.revision !== String(card.proseRevision ?? 0)) node = null;
     if (!node) {
       node = createCard(card, ctx);
       node.dataset.id = card.id;
+      node.dataset.revision = String(card.proseRevision ?? 0);
       full.set(card.id, node);
     }
     node.__update(card);
@@ -59,10 +60,11 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
 
   function nextNode(card) {
     let node = next.get(card.id);
-    if (node?.dataset.leaving) node = null;
+    if (node?.dataset.leaving || node?.dataset.revision !== String(card.proseRevision ?? 0)) node = null;
     if (!node) {
       node = createNextCard(card, ctx, (id) => { active = id; render(0); ctx.sound?.('slide'); });
       node.dataset.id = card.id;
+      node.dataset.revision = String(card.proseRevision ?? 0);
       next.set(card.id, node);
     }
     return node;
@@ -72,8 +74,9 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
     const ids = cards.map((c) => c.id);
     if (!ids.includes(active)) active = ids[0] ?? null;
     const current = cards.find((c) => c.id === active);
-    if (visible && current && requested !== current.id) {
-      requested = current.id;
+    const requestKey = current && `${current.id}:${current.proseRevision ?? 0}`;
+    if (visible && current && requested !== requestKey) {
+      requested = requestKey;
       const request = {id: current.id, pending: isPaid(ctx.entitlement?.()) && !current.prose};
       waiting = request;
       let pending;
@@ -151,7 +154,7 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
     update(nextCards, {phone: isPhone = false} = {}) {
       phone = isPhone;
       cards = nextCards;
-      const sig = `${phone}|${active}|${cards.map((c) => c.id).join(',')}|${ctx.unlocks().debates}`;
+      const sig = `${phone}|${active}|${cards.map((c) => `${c.id}:${c.proseRevision ?? 0}`).join(',')}|${ctx.unlocks().debates}`;
       if (sig !== lastSig) {
         lastSig = sig;
         render(0);

@@ -20,7 +20,7 @@ import {
   INSTITUTIONS, TEMPLATES, METRICS, initGovernance, institutionsMonthly, bodyColor, bodySeat, updateAutonomy, unionCard, hallCard, institutionsYearly, dissolveBody,
   eligibleTemplates, draftCard, bodyOf, markDrafted,
 } from './institutions.js';
-import {docketMonthly, docketQuarterly, rule, addCard, setCardProse, answerBudget} from './docket.js';
+import {docketMonthly, docketQuarterly, rule, addCard, setCardProse, answerBudget, coalesceGrievancePetitions} from './docket.js';
 import {initBudgets, budgetsMonthly, budgetsYearly, strikeBudgetLine, approveAllBudgets, trimAllToFit} from './budgets.js';
 import {initAdvisers, advisersMonthly, advisersYearly, hireAdviser, dismissAdviser, setAdviserMode, redrawSlate, letStand} from './advisors.js';
 import {EVENTS, eventsMonthly, eventModifiers} from './events.js';
@@ -226,6 +226,7 @@ function restore(state) {
   initFactions(state);
   resetScheduler(state);
   forgetRetiredKinds(state);
+  coalesceGrievancePetitions(state);
   writeModifiers(state);
   initApproval(state);
 }

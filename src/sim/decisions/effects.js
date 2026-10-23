@@ -560,7 +560,8 @@ function applyPetitions(state, answers) {
       tellStory(state, faction.id, 'petition', `about ${grievance}`);
     }
     if (pressing < 0.3 || grievance === 'none') continue;
-    if (state.docket.some((c) => c.kind === 'petition' && c.data?.faction === faction.id)) continue;
+    if (state.docket.some((c) => c.kind === 'petition' &&
+      (c.data?.faction === faction.id || c.data?.petitioners?.some((p) => p.faction === faction.id)))) continue;
     // A group that was heard on this grievance waits eight years (sent away,
     // four), unless its mood has fallen hard since.
     if (subjectBlocked(state, [`petition:${faction.id}:${grievance}`], {mood: faction.mood})) continue;
@@ -593,7 +594,8 @@ function grievanceCard(state, faction, grievance, groupName = null) {
       : `${concern} They want to be heard.`),
     asker: {name: `A ${faction.name.toLowerCase().replace(/s$/, '')}`, role: 'petitioner'}, urgency: again ? 2 : 1, cost: 0,
     helps: faction.trades, hurts: [],
-    data: {faction: faction.id, grievance, mood: Math.round(faction.mood * 100) / 100, again},
+    data: {faction: faction.id, grievance, mood: Math.round(faction.mood * 100) / 100, again,
+      groupName: who, grievanceText: GRIEVANCE_TEXT[grievance]},
     subjects: [`petition:${faction.id}:${grievance}`],
     options: [
       again

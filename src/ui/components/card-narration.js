@@ -37,6 +37,7 @@ export function createCardNarration(card, {allowSummaryToggle = true} = {}) {
     placeholder.hidden = !waiting;
     quote.hidden = !showQuote;
     el.classList.toggle('has-quote', Boolean(text));
+    el.classList.toggle('has-controls', Boolean(text) && allowSummaryToggle);
     el.classList.toggle('is-loading', pending);
     el.dataset.view = waiting ? 'loading' : showQuote ? 'quote' : 'explanation';
     setAttr(body, 'aria-busy', pending ? 'true' : null);

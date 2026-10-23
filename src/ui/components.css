@@ -417,8 +417,7 @@ button.bud-row:hover { background: var(--paper-3); }
 .card-why { margin: 6px 0 0; font-size: var(--fs-15); color: var(--ink-2); text-wrap: pretty; }
 .card-narration { position: relative; margin-top: 8px; }
 .card-narration-body { min-width: 0; }
-.card-narration.has-quote .card-narration-body,
-.card-narration.is-loading .card-narration-body { padding-right: 48px; min-height: 44px; }
+.card-narration.has-controls .card-narration-body { padding-right: 48px; min-height: 44px; }
 .card-narration .card-why { margin: 0; }
 .card-narration-placeholder { display: grid; gap: 8px; padding-block: 10px; }
 .card-flavour { margin: 0; color: var(--ink); }
@@ -426,8 +425,8 @@ button.bud-row:hover { background: var(--paper-3); }
 .card-quote-text::before { content: '“'; }
 .card-quote-text::after { content: '”'; }
 .card-narration-toggle { position: absolute; right: -4px; top: -6px; color: var(--muted); }
-.card-narration-loading { position: absolute; top: 16px; right: 9px; display: flex; gap: 3px; }
-.card-narration.has-quote .card-narration-loading { top: 37px; }
+.card-narration-loading { display: flex; gap: 3px; margin-top: 8px; }
+.card-narration.has-controls .card-narration-loading { position: absolute; top: 37px; right: 9px; margin-top: 0; }
 .card-narration-loading i { width: 4px; height: 4px; border-radius: 50%; background: var(--green-2); animation: quote-pulse 1.2s ease-in-out infinite; }
 .card-narration-loading i:nth-child(2) { animation-delay: 150ms; }
 .card-narration-loading i:nth-child(3) { animation-delay: 300ms; }

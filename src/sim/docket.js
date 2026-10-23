@@ -79,6 +79,80 @@ export const cardsFrom = (state, bodyId) => state.docket.filter((c) => c.from ==
 export const surfacedCards = (state) => state.docket.filter((c) => c.surfacedMonth != null);
 export const queuedCards = (state) => state.docket.filter((c) => c.surfacedMonth == null);
 
+// Only faction complaints share a ruling. Body-formation petitions have their
+// own choices and must remain separate even when they are filed together.
+const grievanceOf = (card) => card.kind === 'petition' && !card.data?.forms && !card.data?.revive &&
+  card.data?.grievance && card.templateId === `grievance:${card.data.grievance}` ? card.data.grievance : null;
+
+function petitionersOf(state, card) {
+  if (card.data?.petitioners?.length) return card.data.petitioners;
+  const faction = card.data?.faction;
+  if (!faction) return [];
+  const name = card.data.groupName ?? card.title?.replace(/ petition the council(?: again)?$/i, '') ??
+    `The ${state.factions.find((f) => f.id === faction)?.name.toLowerCase() ?? faction}`;
+  return [{faction, name, mood: card.data.mood ?? null, again: !!card.data.again,
+    helps: card.helps ?? []}];
+}
+
+function petitionNames(members) {
+  const names = members.map((p) => p.name.replace(/^the /i, 'the '));
+  if (names.length === 1) return names[0].replace(/^./, (c) => c.toUpperCase());
+  const joined = names.length === 2 ? `${names[0]} and ${names[1]}` :
+    `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+  return joined.replace(/^./, (c) => c.toUpperCase());
+}
+
+function mergeGrievance(state, first, second) {
+  const members = [...petitionersOf(state, first)];
+  let changed = false;
+  for (const petitioner of petitionersOf(state, second)) {
+    if (members.some((p) => p.faction === petitioner.faction)) continue;
+    members.push(petitioner);
+    changed = true;
+  }
+  if (!changed) return first;
+  first.data.petitioners = members;
+  first.subjects = members.map((p) => `petition:${p.faction}:${first.data.grievance}`);
+  first.helps = [...new Set(members.flatMap((p) => p.helps ?? []))];
+  first.urgency = Math.max(first.urgency ?? 0, second.urgency ?? 0);
+  first.createdMonth = Math.min(first.createdMonth, second.createdMonth);
+  if (second.surfacedMonth != null) {
+    first.surfacedMonth = first.surfacedMonth == null ? second.surfacedMonth : Math.min(first.surfacedMonth, second.surfacedMonth);
+    first.expiresMonth = first.expiresMonth == null ? second.expiresMonth : Math.min(first.expiresMonth, second.expiresMonth);
+  }
+  const again = members.some((p) => p.again);
+  if (second.data?.again && !first.data?.again) first.options = second.options;
+  first.data.again = again;
+  first.data.grievanceText ??= second.data?.grievanceText ??
+    /\bsay ([^.]+)\./.exec(first.why ?? '')?.[1] ?? /\bsay ([^.]+)\./.exec(second.why ?? '')?.[1];
+  const who = petitionNames(members);
+  first.title = `${who} petition the council${again ? ' again' : ''}`;
+  first.why = `${who} bring the same grievance: ${String(first.data.grievanceText ?? 'their concern needs attention').replace(/[.!?]+$/, '')}. ` +
+    (again ? 'Some have come before; they want a plan, not a promise.' : 'They want to be heard.');
+  first.asker = {name: 'The petitioners', role: 'petitioner'};
+  first.prose = null;
+  first.needsProse = true;
+  first.proseRevision = (first.proseRevision ?? 0) + 1;
+  cardAdded(state, first);
+  return first;
+}
+
+// Old saves may have separate pending cards for the same grievance. Fold them
+// before a monthly/quarterly docket pass, without changing the save schema.
+export function coalesceGrievancePetitions(state) {
+  const byGrievance = new Map();
+  for (const card of [...state.docket]) {
+    const grievance = grievanceOf(card);
+    if (!grievance) continue;
+    const first = byGrievance.get(grievance);
+    if (!first) byGrievance.set(grievance, card);
+    else {
+      mergeGrievance(state, first, card);
+      removeCard(state, card);
+    }
+  }
+}
+
 // Add a card: a body may pay for it from its budget (budgets.budgetCovers); a
 // rival's live proposal turns it into a debate; urgent cards and budgets
 // surface immediately; the area's adviser stages its answer (advisors.js),
@@ -86,6 +160,12 @@ export const queuedCards = (state) => state.docket.filter((c) => c.surfacedMonth
 export function addCard(state, card) {
   if (!card) return null;
   const body = bodies.bodyOf(state, card.from);
+
+  const grievance = grievanceOf(card);
+  if (grievance) {
+    const existing = state.docket.find((c) => grievanceOf(c) === grievance);
+    if (existing) return mergeGrievance(state, existing, card);
+  }
 
   if (card.kind === 'proposal' || card.kind === 'demand') {
     const cover = budgets.budgetCovers(state, body, card);
@@ -229,6 +309,7 @@ const PRIORITY = {event: 0, demand: 1, petition: 2, debate: 3, proposal: 4, budg
 
 // Every quarter: surface queued cards, up to the caps.
 export function docketQuarterly(state) {
+  coalesceGrievancePetitions(state);
   const g = state.governance;
   const m = monthIndex(state.time);
   if (g.lastSessionMonth === m) return [];
@@ -257,6 +338,7 @@ export function docketQuarterly(state) {
 }
 
 export function docketMonthly(state) {
+  coalesceGrievancePetitions(state);
   const m = monthIndex(state.time);
   pruneStale(state);
   // Advisers' answers whose review window has passed are applied, in docket order.
@@ -358,6 +440,11 @@ function record(state, card, choice, outcome, extra = {}) {
     id: card.id, from: card.from, kind: card.kind, templateId: card.templateId, title: card.title,
     choice, outcome, year: state.time.year, month: state.time.month, category: card.category,
     policy: card.data?.policy ?? null, ...(card.data?.faction ? {faction: card.data.faction} : {}),
+    ...(card.data?.petitioners?.length ? {
+      factions: card.data.petitioners.map((p) => p.faction),
+      moods: Object.fromEntries(card.data.petitioners.map((p) =>
+        [`petition:${p.faction}:${card.data.grievance}`, p.mood])),
+    } : {}),
     ...(card.data?.workId ? {place: card.data.workId} : {}),
     ...(card.data?.demand != null ? {demand: card.data.demand} : {}),
     ...(card.data?.mood != null ? {mood: card.data.mood} : {}),
@@ -493,8 +580,9 @@ function settle(state, card, option, body, adviser = null) {
   moodShift(state, card.helps, 0.04);
   moodShift(state, card.hurts, -0.04);
   if (card.data?.faction) {
-    const f = state.factions.find((x) => x.id === card.data.faction);
-    addChronicle(state, `You heard the ${f?.name.toLowerCase() ?? 'petitioners'} and promised action.`, 'decision', {card: card.id});
+    const who = card.data.petitioners?.length > 1 ? 'petitioning groups' :
+      state.factions.find((x) => x.id === card.data.faction)?.name.toLowerCase() ?? 'petitioners';
+    addChronicle(state, `You heard the ${who} and promised action.`, 'decision', {card: card.id});
   } else if (!card.data?.policy && card.kind !== 'event' && !option.effects.some((e) => e.form || e.policy)) {
     addChronicle(state, `You chose to ${lowerFirst(option.label)}.`, 'decision', {card: card.id});
   }

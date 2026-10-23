@@ -123,3 +123,62 @@ test('immediate same-card reopen while its old SSE reader is cancelling keeps th
  await next;
  assert.equal(keeper.peekCard(card.id),undefined);
 });
+
+test('Council prefetch queues every card, limits concurrency, includes arrivals and cancels on close', async () => {
+ const state=fixtureState('town'), base=cardsNeedingProse(state)[0];
+ state.docket=['a','b','c','d'].map(id=>({...structuredClone(base),id,prose:null,needsProse:true}));
+ const calls=[], replies=new Map(), stored=[];
+ const keeper=startProseKeeper(()=>state,{fetcher:async(_url,options)=>{
+  const id=JSON.parse(options.body).facts.id;calls.push(id);
+  return new Promise(resolve=>{replies.set(id,()=>resolve(Response.json({source:'template',prose:{why:'We ask this now.',options:Object.fromEntries(base.options.map(o=>[o.key,o.tradeoff||'']))}})));options.signal.addEventListener('abort',()=>resolve(new Response('{}',{status:503})),{once:true});});
+ },actions:()=> (_state,id,prose)=>{stored.push(id);state.docket.find(c=>c.id===id).prose=prose;}});
+ keeper.prefetchCards(['a','b','c','d']);
+ assert.deepEqual(calls,['a','b']);assert.equal(keeper.peekCard('d').pending,true);
+ keeper.prefetchCards(['a','b','c','d']);assert.equal(calls.length,2,'updates deduplicate in-flight jobs');
+ const selected=keeper.requestCard('d');replies.get('a')();await turn();await turn();
+ assert.deepEqual(calls,['a','b','d'],'opening a queued card moves it ahead');
+ replies.get('b')();await turn();await turn();assert.deepEqual(calls,['a','b','d','c']);
+ state.docket.push({...structuredClone(base),id:'e',prose:null});
+ keeper.prefetchCards(['c','d','e']);assert.equal(keeper.peekCard('e').pending,true);
+ replies.get('d')();await selected;await turn();assert.equal(calls.at(-1),'e');
+ keeper.cancel();await turn();assert.equal(keeper.peekCard('c'),undefined);assert.equal(keeper.peekCard('e'),undefined);
+ assert.deepEqual(stored,['a','b','d']);
+});
+
+test('rate limiting stops the remaining Council backlog from making provider requests', async () => {
+ const state=fixtureState('town'), base=cardsNeedingProse(state)[0];
+ state.docket=['a','b','c','d'].map(id=>({...structuredClone(base),id,prose:null,needsProse:true}));
+ let calls=0;
+ const keeper=startProseKeeper(()=>state,{fetcher:async()=>{calls++;return new Response('{}',{status:429});}});
+ keeper.prefetchCards(['a','b','c','d']);
+ await turn();await turn();
+ assert.equal(calls,2);assert.equal(keeper.peekCard('d'),undefined);
+ keeper.stop();
+});
+
+test('a petition gaining another group discards old narration and requests its new revision', async () => {
+ const state=fixtureState('town'), card=cardsNeedingProse(state)[0];
+ const calls=[], stored=[];
+ const keeper=startProseKeeper(()=>state,{fetcher:async(_url,options)=>new Promise(resolve=>{
+  const facts=JSON.parse(options.body).facts;
+  calls.push({facts,signal:options.signal,finish:()=>resolve(Response.json({source:'template',prose:{why:facts.why,options:Object.fromEntries(facts.options.map(o=>[o.key,o.tradeoff||'']))}}))});
+ }),actions:()=> (_state,id,prose)=>{stored.push(prose);card.prose=prose;}});
+ const first=keeper.requestCard(card.id);
+ card.proseRevision=1;card.why='The farmers and merchants bring the same concern. They want to be heard.';
+ const updated=keeper.requestCard(card.id);
+ assert.equal(calls.length,2);assert.equal(calls[0].signal.aborted,true);
+ calls[0].finish();await first;await turn();
+ assert.equal(stored.length,0);assert.equal(keeper.peekCard(card.id).pending,true);
+ calls[1].finish();await updated;
+ assert.equal(stored.length,1);assert.equal(stored[0].why,card.why);
+});
+
+test('a completed response cannot overwrite a petition revised before its next UI update', async () => {
+ const state=fixtureState('town'), card=cardsNeedingProse(state)[0];
+ let finish;const stored=[];
+ const keeper=createProseKeeper({fetcher:async()=>new Promise(resolve=>{finish=()=>resolve(Response.json({source:'template',prose:{why:'We ask this now.',options:Object.fromEntries(card.options.map(o=>[o.key,o.tradeoff||'']))}}));}),actions:()=> (_state,id,prose)=>stored.push(prose)});
+ const pending=keeper.requestCard(state,card.id);
+ card.proseRevision=1;
+ finish();await pending;
+ assert.deepEqual(stored,[]);assert.equal(keeper.stats().failed,0);
+});
