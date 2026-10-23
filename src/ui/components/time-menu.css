@@ -1,0 +1,80 @@
+/* A compact paper menu in the top layer, clear of the phone sheet's clipping. */
+.speed-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 8px;
+  width: 190px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+  color: var(--ink);
+  box-shadow: var(--shadow-lift);
+  font: 500 var(--fs-15)/1.4 var(--font-ui);
+  z-index: 120;
+}
+.speed-menu:not([data-open]) { display: none; }
+.speed-menu::backdrop { background: transparent; }
+.speed-menu-title {
+  margin: 4px 10px 6px;
+  color: var(--muted);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.speed-menu-option {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.speed-menu-option:hover,
+.speed-menu-option:focus-visible { background: var(--paper-3); }
+.speed-menu-option:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.speed-menu-option[aria-checked="true"] { background: var(--green-soft); color: var(--green); font-weight: 600; }
+.speed-menu-option[aria-disabled="true"] { color: var(--muted); }
+.speed-menu-option[aria-disabled="true"] > span:nth-child(2) { opacity: .65; }
+.speed-menu-plan { font-size: var(--fs-11); color: var(--muted); }
+.time .seg button.speed { display: inline-flex; align-items: center; justify-content: center; }
+.time .speed::after {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+.speed-menu-upgrade {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--green);
+  font: 600 var(--fs-13)/1.4 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.speed-menu-upgrade:hover { background: var(--green-soft); }
+.speed-menu-upgrade:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.speed-menu-option[aria-disabled="true"] { cursor: default; }

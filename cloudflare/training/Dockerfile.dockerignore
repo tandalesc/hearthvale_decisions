@@ -1,0 +1,22 @@
+# The repository build context must never upload local credentials, corpora,
+# checkpoints, screenshots, or .git data to the cloud builder.
+**
+!package.json
+!public/
+!public/students/
+!public/students/manifest.json
+!src/
+!src/**
+!server/
+!server/**
+!scripts/
+!scripts/**
+!cloudflare/
+!cloudflare/decision.js
+!cloudflare/learning.js
+!cloudflare/training/
+!cloudflare/training/**
+**/__pycache__/**
+**/*.pyc
+**/.env*
+**/local.env

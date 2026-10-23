@@ -1,0 +1,1212 @@
+{
+  "version": 7,
+  "from": 6,
+  "at": "2026-10-23T11:26:07.586Z",
+  "publishedLocally": true,
+  "deployedOrUploaded": false,
+  "recommendation": "SHIP the isolated strike extension; reject the full-finetune candidate.",
+  "passed": true,
+  "lineage": {
+    "productionBaseline": 6,
+    "productionBaselineSha256": "854f0715833630df0dc4ebe42c52f80d096addcfcbb840e60883fb928c44e7f1",
+    "historicalVersionsPreserved": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "recoveredReplayAdditions": {
+      "v3": 400,
+      "v4": 213,
+      "v5": 400,
+      "v6": 6239
+    },
+    "correction": "Local manifests were stale at v2; confirmed actual production v6 and recovered full replay/checkpoint. A preliminary v2-derived candidate is archived privately and superseded."
+  },
+  "recipe": {
+    "variant": "strike-exclusive embedding rows; frozen v6 shared model and confidence",
+    "explicitChangeFromOriginalRecipe": "Freeze every original v6 parameter and the complete confidence head/calibration. Train only 288 appended strike-exclusive embedding parameters. Preserve original shared word and bare-option lookups to prevent vocabulary leakage.",
+    "unchanged": {
+      "epochs": 6,
+      "lr": 0.001,
+      "batchSize": 1024,
+      "optimizer": "AdamW, weight_decay .01",
+      "loss": "Teacher KL with existing row weights",
+      "schedule": "OneCycleLR, pct_start .1",
+      "gradientClipping": 1.0,
+      "townHoldout": true,
+      "replay": "All seven production v6 replay files plus strike coverage"
+    },
+    "newParameters": 288,
+    "trainRows": 277699,
+    "testRows": 47548,
+    "teacher": "ramblerun/Decision-AI",
+    "confidence": "Original v6 head/calibration retained exactly",
+    "evaluationAdjustment": "Novel held-out eval uses strike question traffic because frozen realplay questions predate strike_resolve; frozen realplay gates use original questions unchanged."
+  },
+  "coverage": {
+    "natural": 72,
+    "contextCoverage": 108,
+    "states": 72,
+    "seeds": [
+      515735,
+      523654,
+      531573
+    ],
+    "rows": 1142,
+    "labels": 1142,
+    "models": {
+      "ramblerun/Decision-AI": 1142
+    },
+    "augmentation": "15 deterministic rotating schema context combinations per observed snapshot; natural questions retained; every target comes from LAN teacher"
+  },
+  "strikeHeldout": {
+    "rows": 397,
+    "kl": 0.014921420253813267,
+    "top1": 0.9345088005065918,
+    "baseline_kl": 0.05143042281270027
+  },
+  "gates": {
+    "real-play KL": {
+      "pass": true,
+      "current": 0.019902023892697466,
+      "next": 0.019845509081260596
+    },
+    "real-play KL by traffic": {
+      "pass": true,
+      "current": 0.01088332577193525,
+      "next": 0.010877778921041205
+    },
+    "no busy kind worse": {
+      "pass": true,
+      "worse": []
+    },
+    "largest option bias": {
+      "pass": true,
+      "current": 0.018534350451615167,
+      "next": 0.018534350451615167
+    },
+    "young-town bias": {
+      "pass": true,
+      "current": -0.0236,
+      "currentAt": "household_stay_move:stay",
+      "next": -0.0236,
+      "nextAt": "household_stay_move:stay"
+    },
+    "rare options": {
+      "pass": true,
+      "outside": []
+    },
+    "held-out new rows": {
+      "pass": true,
+      "rows": 397,
+      "current": 0.20068502516426262,
+      "next": 0.014921375998551766
+    },
+    "JS parity": {
+      "pass": true,
+      "output": "data/strike-training/isolated-gates/decisions.v7.json: set, 64 fixture rows, largest difference 2.53e-7; 265 \u00b5s a question cold, 95 \u00b5s with its facts seen before, 91 \u00b5s with its state cached (22 kinds)"
+    },
+    "size and speed": {
+      "pass": true,
+      "kb": 335,
+      "cachedUs": 91
+    },
+    "canary towns": {
+      "pass": true,
+      "finished": true,
+      "workShareNext": 14.1,
+      "workShareCurrent": 14.1,
+      "popNext": 464,
+      "popCurrent": 464
+    },
+    "canary population": {
+      "pass": true,
+      "maxDecline": 0.1,
+      "expectedSeeds": [
+        515735,
+        523654,
+        531573,
+        539492,
+        547411,
+        555330,
+        563249,
+        571168,
+        579087,
+        587006,
+        594925,
+        602844
+      ],
+      "current": 464.40644280190037,
+      "next": 464.40644280190037,
+      "ratio": 1,
+      "measurements": [
+        {
+          "seed": 515735,
+          "current": 570,
+          "next": 570
+        },
+        {
+          "seed": 523654,
+          "current": 465,
+          "next": 465
+        },
+        {
+          "seed": 531573,
+          "current": 1008,
+          "next": 1008
+        },
+        {
+          "seed": 539492,
+          "current": 543,
+          "next": 543
+        },
+        {
+          "seed": 547411,
+          "current": 585,
+          "next": 585
+        },
+        {
+          "seed": 555330,
+          "current": 427,
+          "next": 427
+        },
+        {
+          "seed": 563249,
+          "current": 932,
+          "next": 932
+        },
+        {
+          "seed": 571168,
+          "current": 345,
+          "next": 345
+        },
+        {
+          "seed": 579087,
+          "current": 1171,
+          "next": 1171
+        },
+        {
+          "seed": 587006,
+          "current": 287,
+          "next": 287
+        },
+        {
+          "seed": 594925,
+          "current": 100,
+          "next": 100
+        },
+        {
+          "seed": 602844,
+          "current": 257,
+          "next": 257
+        }
+      ]
+    }
+  },
+  "exactExistingKindParity": {
+    "pass": true,
+    "rows": 39261,
+    "kinds": {
+      "react_to_policy": 1917,
+      "institution_draft": 2500,
+      "enterprise_plan": 2500,
+      "take_loan": 1375,
+      "migration_wave": 520,
+      "choose_trade": 2500,
+      "household_stay_move": 2500,
+      "newcomer_integrate": 2500,
+      "choose_site": 2500,
+      "petition": 2500,
+      "household_home": 2500,
+      "institution_form_support": 217,
+      "event_response": 478,
+      "crime_charity": 2500,
+      "faction_stance": 2500,
+      "enterprise_found": 1834,
+      "institution_negotiate": 140,
+      "resident_routine": 2500,
+      "farm_land": 280,
+      "merchant_speculate": 2500,
+      "festival_participation": 2500
+    },
+    "distinctQuestionContexts": 24640,
+    "originalWeightRowsChecked": 4442,
+    "originalSerializedWeightsExact": true,
+    "confidenceExact": true,
+    "sharedWordAndBareOptionMappingExact": true,
+    "maxProbabilityDifference": 0,
+    "maxExpectedKLDifference": 0
+  },
+  "extendedCanary": {
+    "recipe": {
+      "seeds": 12,
+      "startSeedIndex": 65,
+      "years": 40,
+      "workersPerVariant": 4,
+      "player": true,
+      "initialPopulation": "Recorded per town; start65 is seed index, not population",
+      "diagnostics": "Read-only annual unrest and answer-count instrumentation in a private copy of distill-collect.js"
+    },
+    "comparison": {
+      "v6": {
+        "geomeanPopulation": 464.40644280190037,
+        "meanWorkShare": 14.11347437484188,
+        "meanUnrest": 0.006509395976964263,
+        "strikeQuestions": 0,
+        "towns": [
+          {
+            "seed": 515735,
+            "archetype": "greatlake",
+            "initialPop": 28,
+            "population": 570,
+            "growth": 20.357142857142858,
+            "workShare": 16.086874263723512,
+            "unrestFinal": 0.0014391586177361234,
+            "unrestMean": 0.0013552997294405211,
+            "unrestMax": 0.012003318976922894,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 523654,
+            "archetype": "delta",
+            "initialPop": 28,
+            "population": 465,
+            "growth": 16.607142857142858,
+            "workShare": 13.250771245125401,
+            "unrestFinal": 0.005648959128673592,
+            "unrestMean": 0.0075006534080427605,
+            "unrestMax": 0.04388622365836942,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 531573,
+            "archetype": "coast",
+            "initialPop": 28,
+            "population": 1008,
+            "growth": 36.0,
+            "workShare": 14.727295119130018,
+            "unrestFinal": 0.008083183063119044,
+            "unrestMean": 0.0026303992700455275,
+            "unrestMax": 0.03913411347584459,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 539492,
+            "archetype": "shore",
+            "initialPop": 28,
+            "population": 543,
+            "growth": 19.392857142857142,
+            "workShare": 11.866551915837311,
+            "unrestFinal": 0.008950589827223002,
+            "unrestMean": 0.008349175974793531,
+            "unrestMax": 0.05304634190387765,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 547411,
+            "archetype": "dry",
+            "initialPop": 28,
+            "population": 585,
+            "growth": 20.892857142857142,
+            "workShare": 12.842158443330574,
+            "unrestFinal": 0.011630744450622262,
+            "unrestMean": 0.0037629657731072645,
+            "unrestMax": 0.03267643206577354,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 555330,
+            "archetype": "river",
+            "initialPop": 28,
+            "population": 427,
+            "growth": 15.25,
+            "workShare": 14.601979985083593,
+            "unrestFinal": 0.006454192809212794,
+            "unrestMean": 0.00530895190713507,
+            "unrestMax": 0.03748264658359947,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 563249,
+            "archetype": "lake",
+            "initialPop": 28,
+            "population": 932,
+            "growth": 33.285714285714285,
+            "workShare": 14.310675959576683,
+            "unrestFinal": 0.02183995972846144,
+            "unrestMean": 0.020118302455816424,
+            "unrestMax": 0.04343729307711262,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 571168,
+            "archetype": "greatlake",
+            "initialPop": 28,
+            "population": 345,
+            "growth": 12.321428571428571,
+            "workShare": 14.353703254960834,
+            "unrestFinal": 0.007329784949420938,
+            "unrestMean": 0.010653949628467196,
+            "unrestMax": 0.06824747830884548,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 579087,
+            "archetype": "delta",
+            "initialPop": 28,
+            "population": 1171,
+            "growth": 41.82142857142857,
+            "workShare": 14.606571527806425,
+            "unrestFinal": 0.007597442129720791,
+            "unrestMean": 0.006052121371463126,
+            "unrestMax": 0.034952442175515776,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 587006,
+            "archetype": "coast",
+            "initialPop": 28,
+            "population": 287,
+            "growth": 10.25,
+            "workShare": 17.212662884030706,
+            "unrestFinal": 0.0018038294127469573,
+            "unrestMean": 0.002067831865454741,
+            "unrestMax": 0.025919511339397277,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 594925,
+            "archetype": "shore",
+            "initialPop": 28,
+            "population": 100,
+            "growth": 3.5714285714285716,
+            "workShare": 12.174490454975341,
+            "unrestFinal": 0.0065354664233815965,
+            "unrestMean": 0.0030577569904895237,
+            "unrestMax": 0.03485397995243038,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 602844,
+            "archetype": "dry",
+            "initialPop": 28,
+            "population": 257,
+            "growth": 9.178571428571429,
+            "workShare": 13.327957444522173,
+            "unrestFinal": 0.000811605690787639,
+            "unrestMean": 0.00725534334931547,
+            "unrestMax": 0.04895345888308558,
+            "strikeQuestions": 0
+          }
+        ]
+      },
+      "v7": {
+        "geomeanPopulation": 357.4037735416733,
+        "meanWorkShare": 13.378744986579454,
+        "meanUnrest": 0.010447714377995205,
+        "strikeQuestions": 0,
+        "towns": [
+          {
+            "seed": 515735,
+            "archetype": "greatlake",
+            "initialPop": 28,
+            "population": 528,
+            "growth": 18.857142857142858,
+            "workShare": 16.764320032017814,
+            "unrestFinal": 0.00059361686038231,
+            "unrestMean": 0.0017673830091510692,
+            "unrestMax": 0.025295864633317084,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 523654,
+            "archetype": "delta",
+            "initialPop": 28,
+            "population": 727,
+            "growth": 25.964285714285715,
+            "workShare": 11.18784858850472,
+            "unrestFinal": 0.021794569831945665,
+            "unrestMean": 0.020812986472436512,
+            "unrestMax": 0.06435779198655213,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 531573,
+            "archetype": "coast",
+            "initialPop": 28,
+            "population": 408,
+            "growth": 14.571428571428571,
+            "workShare": 13.231264961081147,
+            "unrestFinal": 0.0035439346373915045,
+            "unrestMean": 0.006530103517873533,
+            "unrestMax": 0.07088576667874245,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 539492,
+            "archetype": "shore",
+            "initialPop": 28,
+            "population": 146,
+            "growth": 5.214285714285714,
+            "workShare": 10.011655666831128,
+            "unrestFinal": 0.00014465716427346925,
+            "unrestMean": 0.002768416031781767,
+            "unrestMax": 0.029934902267013248,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 547411,
+            "archetype": "dry",
+            "initialPop": 28,
+            "population": 355,
+            "growth": 12.678571428571429,
+            "workShare": 12.055536252197875,
+            "unrestFinal": 0.005657330284903358,
+            "unrestMean": 0.0015655432223448595,
+            "unrestMax": 0.024841810156723376,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 555330,
+            "archetype": "river",
+            "initialPop": 28,
+            "population": 501,
+            "growth": 17.892857142857142,
+            "workShare": 15.64851808002368,
+            "unrestFinal": 0.0032314149309361022,
+            "unrestMean": 0.00937494324561593,
+            "unrestMax": 0.08229371621411065,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 563249,
+            "archetype": "lake",
+            "initialPop": 28,
+            "population": 456,
+            "growth": 16.285714285714285,
+            "workShare": 14.659879918600655,
+            "unrestFinal": 0.005773035147057017,
+            "unrestMean": 0.014681540341995996,
+            "unrestMax": 0.02856392187222709,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 571168,
+            "archetype": "greatlake",
+            "initialPop": 28,
+            "population": 632,
+            "growth": 22.571428571428573,
+            "workShare": 14.944084648082242,
+            "unrestFinal": 0.008694906328752139,
+            "unrestMean": 0.006474257209444053,
+            "unrestMax": 0.08231746254568807,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 579087,
+            "archetype": "delta",
+            "initialPop": 28,
+            "population": 511,
+            "growth": 18.25,
+            "workShare": 14.31229880587187,
+            "unrestFinal": 0.0009254743985910331,
+            "unrestMean": 0.009835048534350835,
+            "unrestMax": 0.0725756378548497,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 587006,
+            "archetype": "coast",
+            "initialPop": 28,
+            "population": 226,
+            "growth": 8.071428571428571,
+            "workShare": 15.057607482627771,
+            "unrestFinal": 0.001274261693147306,
+            "unrestMean": 0.009901986204119528,
+            "unrestMax": 0.06092768731350963,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 594925,
+            "archetype": "shore",
+            "initialPop": 28,
+            "population": 118,
+            "growth": 4.214285714285714,
+            "workShare": 12.297657150669325,
+            "unrestFinal": 0.07461225546203537,
+            "unrestMean": 0.03143076716292094,
+            "unrestMax": 0.10980296536748484,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 602844,
+            "archetype": "dry",
+            "initialPop": 28,
+            "population": 272,
+            "growth": 9.714285714285714,
+            "workShare": 10.37426825244522,
+            "unrestFinal": 0.10152967706416142,
+            "unrestMean": 0.010229597583907436,
+            "unrestMax": 0.10152967706416142,
+            "strikeQuestions": 0
+          }
+        ]
+      },
+      "v7-no-strike": {
+        "geomeanPopulation": 357.4037735416733,
+        "meanWorkShare": 13.378744986579454,
+        "meanUnrest": 0.010447714377995205,
+        "strikeQuestions": 0,
+        "towns": [
+          {
+            "seed": 515735,
+            "archetype": "greatlake",
+            "initialPop": 28,
+            "population": 528,
+            "growth": 18.857142857142858,
+            "workShare": 16.764320032017814,
+            "unrestFinal": 0.00059361686038231,
+            "unrestMean": 0.0017673830091510692,
+            "unrestMax": 0.025295864633317084,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 523654,
+            "archetype": "delta",
+            "initialPop": 28,
+            "population": 727,
+            "growth": 25.964285714285715,
+            "workShare": 11.18784858850472,
+            "unrestFinal": 0.021794569831945665,
+            "unrestMean": 0.020812986472436512,
+            "unrestMax": 0.06435779198655213,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 531573,
+            "archetype": "coast",
+            "initialPop": 28,
+            "population": 408,
+            "growth": 14.571428571428571,
+            "workShare": 13.231264961081147,
+            "unrestFinal": 0.0035439346373915045,
+            "unrestMean": 0.006530103517873533,
+            "unrestMax": 0.07088576667874245,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 539492,
+            "archetype": "shore",
+            "initialPop": 28,
+            "population": 146,
+            "growth": 5.214285714285714,
+            "workShare": 10.011655666831128,
+            "unrestFinal": 0.00014465716427346925,
+            "unrestMean": 0.002768416031781767,
+            "unrestMax": 0.029934902267013248,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 547411,
+            "archetype": "dry",
+            "initialPop": 28,
+            "population": 355,
+            "growth": 12.678571428571429,
+            "workShare": 12.055536252197875,
+            "unrestFinal": 0.005657330284903358,
+            "unrestMean": 0.0015655432223448595,
+            "unrestMax": 0.024841810156723376,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 555330,
+            "archetype": "river",
+            "initialPop": 28,
+            "population": 501,
+            "growth": 17.892857142857142,
+            "workShare": 15.64851808002368,
+            "unrestFinal": 0.0032314149309361022,
+            "unrestMean": 0.00937494324561593,
+            "unrestMax": 0.08229371621411065,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 563249,
+            "archetype": "lake",
+            "initialPop": 28,
+            "population": 456,
+            "growth": 16.285714285714285,
+            "workShare": 14.659879918600655,
+            "unrestFinal": 0.005773035147057017,
+            "unrestMean": 0.014681540341995996,
+            "unrestMax": 0.02856392187222709,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 571168,
+            "archetype": "greatlake",
+            "initialPop": 28,
+            "population": 632,
+            "growth": 22.571428571428573,
+            "workShare": 14.944084648082242,
+            "unrestFinal": 0.008694906328752139,
+            "unrestMean": 0.006474257209444053,
+            "unrestMax": 0.08231746254568807,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 579087,
+            "archetype": "delta",
+            "initialPop": 28,
+            "population": 511,
+            "growth": 18.25,
+            "workShare": 14.31229880587187,
+            "unrestFinal": 0.0009254743985910331,
+            "unrestMean": 0.009835048534350835,
+            "unrestMax": 0.0725756378548497,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 587006,
+            "archetype": "coast",
+            "initialPop": 28,
+            "population": 226,
+            "growth": 8.071428571428571,
+            "workShare": 15.057607482627771,
+            "unrestFinal": 0.001274261693147306,
+            "unrestMean": 0.009901986204119528,
+            "unrestMax": 0.06092768731350963,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 594925,
+            "archetype": "shore",
+            "initialPop": 28,
+            "population": 118,
+            "growth": 4.214285714285714,
+            "workShare": 12.297657150669325,
+            "unrestFinal": 0.07461225546203537,
+            "unrestMean": 0.03143076716292094,
+            "unrestMax": 0.10980296536748484,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 602844,
+            "archetype": "dry",
+            "initialPop": 28,
+            "population": 272,
+            "growth": 9.714285714285714,
+            "workShare": 10.37426825244522,
+            "unrestFinal": 0.10152967706416142,
+            "unrestMean": 0.010229597583907436,
+            "unrestMax": 0.10152967706416142,
+            "strikeQuestions": 0
+          }
+        ]
+      },
+      "v7-isolated": {
+        "geomeanPopulation": 464.40644280190037,
+        "meanWorkShare": 14.11347437484188,
+        "meanUnrest": 0.006509395976964263,
+        "strikeQuestions": 0,
+        "towns": [
+          {
+            "seed": 515735,
+            "archetype": "greatlake",
+            "initialPop": 28,
+            "population": 570,
+            "growth": 20.357142857142858,
+            "workShare": 16.086874263723512,
+            "unrestFinal": 0.0014391586177361234,
+            "unrestMean": 0.0013552997294405211,
+            "unrestMax": 0.012003318976922894,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 523654,
+            "archetype": "delta",
+            "initialPop": 28,
+            "population": 465,
+            "growth": 16.607142857142858,
+            "workShare": 13.250771245125401,
+            "unrestFinal": 0.005648959128673592,
+            "unrestMean": 0.0075006534080427605,
+            "unrestMax": 0.04388622365836942,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 531573,
+            "archetype": "coast",
+            "initialPop": 28,
+            "population": 1008,
+            "growth": 36.0,
+            "workShare": 14.727295119130018,
+            "unrestFinal": 0.008083183063119044,
+            "unrestMean": 0.0026303992700455275,
+            "unrestMax": 0.03913411347584459,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 539492,
+            "archetype": "shore",
+            "initialPop": 28,
+            "population": 543,
+            "growth": 19.392857142857142,
+            "workShare": 11.866551915837311,
+            "unrestFinal": 0.008950589827223002,
+            "unrestMean": 0.008349175974793531,
+            "unrestMax": 0.05304634190387765,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 547411,
+            "archetype": "dry",
+            "initialPop": 28,
+            "population": 585,
+            "growth": 20.892857142857142,
+            "workShare": 12.842158443330574,
+            "unrestFinal": 0.011630744450622262,
+            "unrestMean": 0.0037629657731072645,
+            "unrestMax": 0.03267643206577354,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 555330,
+            "archetype": "river",
+            "initialPop": 28,
+            "population": 427,
+            "growth": 15.25,
+            "workShare": 14.601979985083593,
+            "unrestFinal": 0.006454192809212794,
+            "unrestMean": 0.00530895190713507,
+            "unrestMax": 0.03748264658359947,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 563249,
+            "archetype": "lake",
+            "initialPop": 28,
+            "population": 932,
+            "growth": 33.285714285714285,
+            "workShare": 14.310675959576683,
+            "unrestFinal": 0.02183995972846144,
+            "unrestMean": 0.020118302455816424,
+            "unrestMax": 0.04343729307711262,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 571168,
+            "archetype": "greatlake",
+            "initialPop": 28,
+            "population": 345,
+            "growth": 12.321428571428571,
+            "workShare": 14.353703254960834,
+            "unrestFinal": 0.007329784949420938,
+            "unrestMean": 0.010653949628467196,
+            "unrestMax": 0.06824747830884548,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 579087,
+            "archetype": "delta",
+            "initialPop": 28,
+            "population": 1171,
+            "growth": 41.82142857142857,
+            "workShare": 14.606571527806425,
+            "unrestFinal": 0.007597442129720791,
+            "unrestMean": 0.006052121371463126,
+            "unrestMax": 0.034952442175515776,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 587006,
+            "archetype": "coast",
+            "initialPop": 28,
+            "population": 287,
+            "growth": 10.25,
+            "workShare": 17.212662884030706,
+            "unrestFinal": 0.0018038294127469573,
+            "unrestMean": 0.002067831865454741,
+            "unrestMax": 0.025919511339397277,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 594925,
+            "archetype": "shore",
+            "initialPop": 28,
+            "population": 100,
+            "growth": 3.5714285714285716,
+            "workShare": 12.174490454975341,
+            "unrestFinal": 0.0065354664233815965,
+            "unrestMean": 0.0030577569904895237,
+            "unrestMax": 0.03485397995243038,
+            "strikeQuestions": 0
+          },
+          {
+            "seed": 602844,
+            "archetype": "dry",
+            "initialPop": 28,
+            "population": 257,
+            "growth": 9.178571428571429,
+            "workShare": 13.327957444522173,
+            "unrestFinal": 0.000811605690787639,
+            "unrestMean": 0.00725534334931547,
+            "unrestMax": 0.04895345888308558,
+            "strikeQuestions": 0
+          }
+        ]
+      }
+    },
+    "populationGuard": {
+      "fullFinetune": {
+        "pass": false,
+        "maxDecline": 0.1,
+        "expectedSeeds": [
+          515735,
+          523654,
+          531573,
+          539492,
+          547411,
+          555330,
+          563249,
+          571168,
+          579087,
+          587006,
+          594925,
+          602844
+        ],
+        "current": 464.40644280190037,
+        "next": 357.4037735416733,
+        "ratio": 0.7695926253420418,
+        "measurements": [
+          {
+            "seed": 515735,
+            "current": 570,
+            "next": 528
+          },
+          {
+            "seed": 523654,
+            "current": 465,
+            "next": 727
+          },
+          {
+            "seed": 531573,
+            "current": 1008,
+            "next": 408
+          },
+          {
+            "seed": 539492,
+            "current": 543,
+            "next": 146
+          },
+          {
+            "seed": 547411,
+            "current": 585,
+            "next": 355
+          },
+          {
+            "seed": 555330,
+            "current": 427,
+            "next": 501
+          },
+          {
+            "seed": 563249,
+            "current": 932,
+            "next": 456
+          },
+          {
+            "seed": 571168,
+            "current": 345,
+            "next": 632
+          },
+          {
+            "seed": 579087,
+            "current": 1171,
+            "next": 511
+          },
+          {
+            "seed": 587006,
+            "current": 287,
+            "next": 226
+          },
+          {
+            "seed": 594925,
+            "current": 100,
+            "next": 118
+          },
+          {
+            "seed": 602844,
+            "current": 257,
+            "next": 272
+          }
+        ],
+        "reason": "Candidate population geometric mean declined more than 10%; investigate before publication"
+      },
+      "isolated": {
+        "pass": true,
+        "maxDecline": 0.1,
+        "expectedSeeds": [
+          515735,
+          523654,
+          531573,
+          539492,
+          547411,
+          555330,
+          563249,
+          571168,
+          579087,
+          587006,
+          594925,
+          602844
+        ],
+        "current": 464.40644280190037,
+        "next": 464.40644280190037,
+        "ratio": 1,
+        "measurements": [
+          {
+            "seed": 515735,
+            "current": 570,
+            "next": 570
+          },
+          {
+            "seed": 523654,
+            "current": 465,
+            "next": 465
+          },
+          {
+            "seed": 531573,
+            "current": 1008,
+            "next": 1008
+          },
+          {
+            "seed": 539492,
+            "current": 543,
+            "next": 543
+          },
+          {
+            "seed": 547411,
+            "current": 585,
+            "next": 585
+          },
+          {
+            "seed": 555330,
+            "current": 427,
+            "next": 427
+          },
+          {
+            "seed": 563249,
+            "current": 932,
+            "next": 932
+          },
+          {
+            "seed": 571168,
+            "current": 345,
+            "next": 345
+          },
+          {
+            "seed": 579087,
+            "current": 1171,
+            "next": 1171
+          },
+          {
+            "seed": 587006,
+            "current": 287,
+            "next": 287
+          },
+          {
+            "seed": 594925,
+            "current": 100,
+            "next": 100
+          },
+          {
+            "seed": 602844,
+            "current": 257,
+            "next": 257
+          }
+        ]
+      },
+      "entireTrajectoriesWorkUnrestAndAnswerCountsExact": true
+    },
+    "wholeTrajectoriesWorkUnrestAndAnswersExactAgainstV6": true
+  },
+  "rejectedFullFinetune": {
+    "reason": "Twelve paired towns showed 23.0% population decline; removing strike head produced identical outcomes and zero strike questions, isolating existing-head drift.",
+    "standardTenGates": {
+      "real-play KL": {
+        "pass": true,
+        "current": 0.019902023892697466,
+        "next": 0.019838111987997148
+      },
+      "real-play KL by traffic": {
+        "pass": true,
+        "current": 0.01088332577193525,
+        "next": 0.01080700794430209
+      },
+      "no busy kind worse": {
+        "pass": true,
+        "worse": []
+      },
+      "largest option bias": {
+        "pass": true,
+        "current": 0.018534350451615167,
+        "next": 0.01798542607052389
+      },
+      "young-town bias": {
+        "pass": true,
+        "current": -0.0236,
+        "currentAt": "household_stay_move:stay",
+        "next": 0.0252,
+        "nextAt": "enterprise_found:shop"
+      },
+      "rare options": {
+        "pass": true,
+        "outside": []
+      },
+      "held-out new rows": {
+        "pass": true,
+        "rows": 397,
+        "current": 0.20068502516426262,
+        "next": 0.009365420885380397
+      },
+      "JS parity": {
+        "pass": true,
+        "output": "data/loop/v7/decisions.v7.json: set, 64 fixture rows, largest difference 2.25e-7; 199 \u00b5s a question cold, 72 \u00b5s with its facts seen before, 69 \u00b5s with its state cached (22 kinds)"
+      },
+      "size and speed": {
+        "pass": true,
+        "kb": 336,
+        "cachedUs": 69
+      },
+      "canary towns": {
+        "pass": true,
+        "finished": true,
+        "workShareNext": 12.8,
+        "workShareCurrent": 14,
+        "popNext": 389,
+        "popCurrent": 617
+      }
+    },
+    "populationGuard": {
+      "pass": false,
+      "maxDecline": 0.1,
+      "expectedSeeds": [
+        515735,
+        523654,
+        531573,
+        539492,
+        547411,
+        555330,
+        563249,
+        571168,
+        579087,
+        587006,
+        594925,
+        602844
+      ],
+      "current": 464.40644280190037,
+      "next": 357.4037735416733,
+      "ratio": 0.7695926253420418,
+      "measurements": [
+        {
+          "seed": 515735,
+          "current": 570,
+          "next": 528
+        },
+        {
+          "seed": 523654,
+          "current": 465,
+          "next": 727
+        },
+        {
+          "seed": 531573,
+          "current": 1008,
+          "next": 408
+        },
+        {
+          "seed": 539492,
+          "current": 543,
+          "next": 146
+        },
+        {
+          "seed": 547411,
+          "current": 585,
+          "next": 355
+        },
+        {
+          "seed": 555330,
+          "current": 427,
+          "next": 501
+        },
+        {
+          "seed": 563249,
+          "current": 932,
+          "next": 456
+        },
+        {
+          "seed": 571168,
+          "current": 345,
+          "next": 632
+        },
+        {
+          "seed": 579087,
+          "current": 1171,
+          "next": 511
+        },
+        {
+          "seed": 587006,
+          "current": 287,
+          "next": 226
+        },
+        {
+          "seed": 594925,
+          "current": 100,
+          "next": 118
+        },
+        {
+          "seed": 602844,
+          "current": 257,
+          "next": 272
+        }
+      ],
+      "reason": "Candidate population geometric mean declined more than 10%; investigate before publication"
+    },
+    "archive": "data/strike-training/full-finetune-v7/"
+  },
+  "bundle": {
+    "file": "public/students/decisions.v7.json",
+    "sha256": "e7b1e9e57dbfdd1f689059775533af2537d14ffdc067c53576ec08a5ed01b30e",
+    "bytes": 364786,
+    "kinds": [
+      "choose_site",
+      "choose_trade",
+      "crime_charity",
+      "enterprise_found",
+      "enterprise_plan",
+      "event_response",
+      "faction_stance",
+      "farm_land",
+      "festival_participation",
+      "household_home",
+      "household_stay_move",
+      "institution_draft",
+      "institution_form_support",
+      "institution_negotiate",
+      "merchant_speculate",
+      "migration_wave",
+      "newcomer_integrate",
+      "petition",
+      "react_to_policy",
+      "resident_routine",
+      "strike_resolve",
+      "take_loan"
+    ]
+  },
+  "limitations": [
+    "Strike coverage contains 72 observed snapshots across three map seeds; labels include schema-valid context variants.",
+    "The 12-town, 40-year canaries asked no strike questions. They establish existing-behavior preservation; strike quality is measured on 397 held-out teacher-labelled rows.",
+    "The confidence head remains calibrated to v6 kinds; strike-specific confidence calibration was not independently fitted."
+  ]
+}

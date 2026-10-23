@@ -28,8 +28,8 @@ import {createRenderMirror} from './sim/render-mirror.js';
 // The inline host: sim-session.js on this thread, stepping in a task of its own posted as
 // each drawn frame is handed to the GPU (the GPU draws that frame while the sim works out
 // the next). The renderer reads the live render view.
-export function createInlineHost({sim, routes = null, decisions = null, students = null, pace = 1, budgetMs = 10, rowFloats = 20} = {}) {
-  const session = createSimSession({sim, routes, decisions, students, pace, budgetMs, rowFloats});
+export function createInlineHost({sim, routes = null, decisions = null, students = null, entitlement, pace = 1, budgetMs = 10, rowFloats = 20} = {}) {
+  const session = createSimSession({sim, routes, decisions, students, entitlement, pace, budgetMs, rowFloats});
   let stepOwed = 0, posted = false, lastNow = 0, lastSpeed = 0, lib = null;
   const listeners = {step: [], fail: []};
   const host = {
@@ -59,6 +59,8 @@ export function createInlineHost({sim, routes = null, decisions = null, students
     setIndividualCap: (v) => session.setIndividualCap(v),
     decisions: session.decisions,
     notes: session.notes,
+    cancelCardProse: () => session.cancelCardProse(),
+    requestCardProse: (id) => session.requestCardProse(id),
     useNarrator: (n, prose) => session.useNarrator(n, prose),
     dev: (name, ...args) => session.dev(name, args),
     async inSim(fn, ...args) {
@@ -96,7 +98,7 @@ const PROBE_MS = 5000;
 const LONG_OPS = new Set(['setup', 'init', 'save', 'check', 'dev', 'inSim', 'snapshot', 'serialize']);
 
 // The worker host. opts go to the worker's setup: {pace, budgetMs, rowFloats, model,
-// decisionSettings, routes: {worker, fixedClock}, decisions, prose, student, studentPin}.
+// decisionSettings, routes: {worker, fixedClock}, decisions, prose, student, studentPin, entitlement}.
 export function createWorkerHost(opts = {}) {
   const mirror = createRenderMirror({rowFloats: opts.rowFloats ?? 20});
   const pending = new Map();
@@ -153,9 +155,9 @@ export function createWorkerHost(opts = {}) {
     if (started) for (const fn of listeners.fail) fn(dead);
   }
 
-  const {routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats, student, studentPin} = opts;
+  const {routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats, student, studentPin, entitlement} = opts;
   const ready = Promise.race([
-    call('setup', [{routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats, student, studentPin}]),
+    call('setup', [{routes, decisions, prose, model, decisionSettings, pace, budgetMs, rowFloats, student, studentPin, entitlement}]),
     new Promise((_, reject) => setTimeout(() => reject(new Error('The sim worker took too long to start.')), START_MS)),
   ]).then(() => { started = true; }, (err) => { fail(err.message); throw err; });
 
@@ -206,6 +208,8 @@ export function createWorkerHost(opts = {}) {
       configure: (s) => { call('decisions.configure', [s]).catch(() => {}); },
       setEnabled: (on) => { call('decisions.setEnabled', [on]).catch(() => {}); },
     },
+    cancelCardProse: () => call('cancelCardProse'),
+    requestCardProse: (id) => call('requestCardProse', [id]),
     notes: {
       set: (ref, key, text) => { call('notes.set', [ref, key, text]).catch(() => {}); },
       touch: (ref) => { call('notes.touch', [ref]).catch(() => {}); },

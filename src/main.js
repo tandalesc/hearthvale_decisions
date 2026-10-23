@@ -9,6 +9,8 @@
 //   ?student=0                  turn off the decision students (public/students/), which
 //                               otherwise answer the kinds they know in the browser
 //   ?student=N                  hold every town on decision student version N (testing)
+import {loadEntitlement, entitledSpeed} from './entitlements.js';
+import {createAccount} from './ui/account.js';
 import {createDecisionClient} from './decision-client.js';
 import {createLocalAnswerer, createStudentVersions} from './decision-local.js';
 import {loadNarrator, loadRenderer, loadSim} from './ui/bridge.js';
@@ -76,6 +78,9 @@ async function boot() {
   // The narrator's chunks follow at once, fetched while the town is read or founded.
   const narrating = loading.then(([s]) => loadNarrator(s.kind)).catch(() => null);
   const prefs = createPrefs();
+  let entitlement = {tier: 'free', authenticated: false, billingEnabled: false};
+  const entitlementReady = loadEntitlement();
+  const account = createAccount(entitlement);
 
   // ---------- the main menu ----------
   const fixture = params.get('fixture');
@@ -85,7 +90,7 @@ async function boot() {
   if (!fixture && (intent?.kind === 'menu' || (!intent && params.get('play') !== '1'))) {
     try {
       const {createMainMenu} = await import('./ui/menu/menu.js');
-      menu = createMainMenu({saves, prefs, version, start: intent?.screen});
+      menu = createMainMenu({saves, prefs, version, start: intent?.screen, openAccount: () => account.open()});
       loader.toMenu();
     } catch (err) {
       console.error('[hearthvale] the main menu failed; continuing the last town', err);
@@ -97,6 +102,27 @@ async function boot() {
   // The decision model is always on, with automatic pacing: students answer
   // what they know and the service the rest. Settings older builds saved for
   // turning it off or capping it are no longer read.
+  entitlement = await entitlementReady;
+  // Checkout redirects are only navigation hints. Access comes from the server.
+  const billingReturn = params.get('billing');
+  if (billingReturn === 'success' && entitlement.tier !== 'paid') {
+    for (let attempt = 0; attempt < 4 && entitlement.tier !== 'paid'; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      entitlement = await loadEntitlement();
+    }
+  }
+  account.update(entitlement);
+  menu?.updateAccount(entitlement);
+  if (billingReturn || params.get('signin') === 'success') {
+    const clean = new URL(location.href);
+    clean.searchParams.delete('billing');
+    clean.searchParams.delete('signin');
+    history.replaceState(null, '', clean);
+    const notice = billingReturn === 'success'
+      ? entitlement.tier === 'paid' ? 'Welcome to Hearthvale Plus. Thank you for supporting the town.' : 'Your payment is still being confirmed. Refresh access in a moment.'
+      : billingReturn === 'cancelled' ? 'Checkout was cancelled. You can keep playing for free or choose a plan below.' : 'You’re signed in. Your town saves stay on this device.';
+    account.open({view: entitlement.tier === 'paid' ? undefined : 'plans', notice, pendingPayment: billingReturn === 'success' && entitlement.tier !== 'paid'});
+  }
   const modelEnabled = true;
   const decisionSettings = {mode: 'auto', cap: 100};
 
@@ -106,7 +132,7 @@ async function boot() {
   let host = null;
   let sim, renderer;
   // Decision students answer the kinds they know in the browser unless ?student=0.
-  const student = params.get('student') !== '0' ? new URL('students/', document.baseURI).href : null;
+  const student = params.get('student') !== '0' ? new URL('/api/students/', document.baseURI).href : null;
   const studentPin = /^[1-9]\d*$/.test(params.get('student') ?? '') ? params.get('student') : null;
   const pace = (s) => (Number(params.get('pace')) > 0 ? Number(params.get('pace')) : s.pace ?? 1);
   async function inlineHost() {
@@ -118,12 +144,12 @@ async function boot() {
       console.warn('[hearthvale] route planner unavailable', err);
     }
     let client = createDecisionClient({now: () => performance.now()}), students = null;
+    client = createLocalAnswerer({client, entitlement, report: {}});
     if (student) {
-      client = createLocalAnswerer({client, report: {}});
-      students = createStudentVersions({answerer: client, base: student, pinned: studentPin});
+      students = createStudentVersions({answerer: client, base: student, manifestURL: new URL('/api/students/manifest', document.baseURI).href, fallbackBase: new URL('students/', document.baseURI).href, pinned: studentPin});
       await students.start();
     }
-    const h = createInlineHost({sim, routes, decisions: client, students, pace: pace(sim), budgetMs: SIM_BUDGET_MS, rowFloats: ROW_FLOATS});
+    const h = createInlineHost({sim, routes, decisions: client, students, entitlement, pace: pace(sim), budgetMs: SIM_BUDGET_MS, rowFloats: ROW_FLOATS});
     h.decisions.configure(decisionSettings);
     h.decisions.setEnabled(modelEnabled);
     return h;
@@ -133,7 +159,7 @@ async function boot() {
     [sim, renderer] = await loading;
     if (sim.kind === 'real' && params.get('simWorker') !== '0' && typeof Worker !== 'undefined') {
       try {
-        const h = createWorkerHost({pace: pace(sim), budgetMs: WORKER_BUDGET_MS, rowFloats: ROW_FLOATS, model: modelEnabled, decisionSettings, student, studentPin});
+        const h = createWorkerHost({pace: pace(sim), budgetMs: WORKER_BUDGET_MS, rowFloats: ROW_FLOATS, model: modelEnabled, decisionSettings, student, studentPin, entitlement});
         await h.ready;
         return (host = h);
       } catch (err) {
@@ -290,6 +316,7 @@ async function boot() {
   // a second; below the chosen speed when the sim's frame budget runs out.
   let reached = null, reachedSim = 0, reachedReal = 0;
   const setSpeed = (s) => {
+    s = entitledSpeed(s, entitlement);
     if (s === speed) return;
     if (s > 0) lastSpeed = s;
     speed = s;
@@ -428,6 +455,10 @@ async function boot() {
   };
   const app = createApp({
     sim, world, prefs, audio, narrator,
+    entitlement: () => entitlement,
+    openAccount: (options) => account.open(options),
+    cancelCardProse: () => host.cancelCardProse(),
+    requestCardProse: (id) => host.requestCardProse(id),
     ui: (req) => host.ui(req),
     inspect: (target) => host.inspect(target),
     notes: host.notes,

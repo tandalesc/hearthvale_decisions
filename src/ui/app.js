@@ -86,6 +86,9 @@ export function createApp(host) {
   let factionNames = {}, factionsAt = -Infinity, bodyNames = {};
   const ctx = {
     root, prefs,
+    entitlement: () => host.entitlement?.(),
+    requestCardProse: (id) => host.requestCardProse?.(id),
+    cancelCardProse: () => host.cancelCardProse?.(),
     factionName: (id) => factionNames[id] ?? titleCase(id),
     bodyName: (id) => bodyNames[id] ?? (id === 'moot' ? 'The Council' : titleCase(id)),
     bodyIcon: (id) => bodyIcon({id, kind: data.bodies.find((b) => b.id === id)?.kind}),
@@ -101,6 +104,7 @@ export function createApp(host) {
     dissolve: (id) => confirmDissolve(id),
     onMetric,
     openSettings: () => settings.open(),
+    openAccount: (options) => host.openAccount?.(options),
     setSpeed: (s) => host.setSpeed(s),
     speed: () => host.speed(),
     lastSpeed: () => host.lastSpeed(),
@@ -192,6 +196,10 @@ export function createApp(host) {
   });
   const settings = createSettings({
     root, prefs,
+    openAccount: (options) => host.openAccount?.(options),
+    entitlement: () => host.entitlement?.(),
+    requestCardProse: (id) => host.requestCardProse?.(id),
+    cancelCardProse: () => host.cancelCardProse?.(),
     decisionStats: () => host.decisions.stats(),
     renderStats: () => safe(() => world?.stats?.(), null),
     power: () => safe(() => world?.power?.(), null),
@@ -978,6 +986,7 @@ export function createApp(host) {
   // ---------- input ----------
   addEventListener('keydown', (e) => {
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (document.querySelector('dialog[open]')) return;
     const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName);
     if (e.key === 'Escape') {
       if (clean) return setClean(false);

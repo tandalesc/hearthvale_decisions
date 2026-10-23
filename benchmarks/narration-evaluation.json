@@ -1,0 +1,5314 @@
+{
+  "model": "claude-haiku-5-5",
+  "calls": 36,
+  "syntheticSimulationFacts": true,
+  "notes": [
+    "Baseline six: two prevalidation failures have no captured raw output, exact cause unknown.",
+    "Phases reuse matched six cases; heldout-final repeats heldout six. Fresh-final six had not previously been evaluated.",
+    "Final twelve live outcomes:11 accepted; the remaining example-word false positive passes final guard replay.",
+    "No names, numbers, dramatic claims or option/effect safety guard was relaxed. Example-copy detection now requires an actual six-word consecutive copied phrase absent from facts."
+  ],
+  "summary": {
+    "baselineAccepted": 3,
+    "baselineCases": 6,
+    "focusedMatchedAccepted": 6,
+    "focusedMatchedCases": 6,
+    "finalLiveAccepted": 11,
+    "finalLiveCases": 12,
+    "finalReplayAccepted": 12,
+    "finalFirstTextMedianMs": 614,
+    "freshSafePreviewMedianMs": 828.5,
+    "finalMedianMs": 845.5,
+    "finalInputTokens": 9993,
+    "finalOutputTokens": 673
+  },
+  "replay": [
+    {
+      "title": "Feast days",
+      "accepted": true
+    },
+    {
+      "title": "A school for the ward: Marsh Town",
+      "accepted": true
+    },
+    {
+      "title": "Which first?",
+      "accepted": true
+    },
+    {
+      "title": "Which first?",
+      "accepted": true
+    },
+    {
+      "title": "Which first?",
+      "accepted": true
+    },
+    {
+      "title": "A stone quay by Crown End",
+      "accepted": true
+    },
+    {
+      "title": "A printing licence, or a bigger church",
+      "accepted": true
+    },
+    {
+      "title": "Green reserves",
+      "accepted": true
+    },
+    {
+      "title": "Barges from the coast",
+      "accepted": true
+    },
+    {
+      "title": "The tithe: tenth, or licences for taverns",
+      "accepted": true
+    },
+    {
+      "title": "Which first?",
+      "accepted": true
+    },
+    {
+      "title": "The ward keeps its own rates: Marsh Town",
+      "accepted": true
+    }
+  ],
+  "phases": [
+    {
+      "phase": "baseline",
+      "rows": [
+        {
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "template",
+          "reason": "speaks of themselves by name",
+          "raw": "{\"why\":\"I am careful and fair-minded, Ivo, so I weigh both plans. The moot hall is cramped, and the Water Hill clerks lean toward the hall, as you know from the Planning Office you approved in year 26.\"}",
+          "ms": 1222,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c187",
+            "kind": "proposal",
+            "template": "hall-upgrade",
+            "category": "civic",
+            "title": "Which first?",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Ivo Holt",
+              "role": "steward",
+              "traits": [
+                "careful",
+                "fair-minded"
+              ],
+              "body": "Town Council"
+            },
+            "why": "The moot hall is too small for the town we have become. There is a second plan too: a summer fair. Which comes first?",
+            "trigger": [
+              "unrest is low",
+              "tension between groups is low",
+              "Cost: 1,957 coin",
+              "Town coin: 8,766 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "A proper town hall",
+                "cost": 1957,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a town hall"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  },
+                  {
+                    "act": "more",
+                    "what": "order"
+                  }
+                ],
+                "tradeoff": "It costs 1,957 coin. The town gains a fine centre."
+              },
+              {
+                "key": "y_do",
+                "label": "A summer fair",
+                "cost": 272,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "event",
+                    "what": "the summer fair"
+                  }
+                ],
+                "tradeoff": "Visitors come and spend. It costs 272 coin."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Town Council"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Water Hill"
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 29,
+                "act": "heard",
+                "what": "the merchants' petition"
+              },
+              {
+                "year": 29,
+                "act": "approved",
+                "what": "forming the Festival Society"
+              },
+              {
+                "year": 28,
+                "act": "approved",
+                "what": "forming the School Board"
+              },
+              {
+                "year": 26,
+                "act": "approved",
+                "what": "forming the Planning Office"
+              }
+            ],
+            "record": {
+              "approved": 21,
+              "refused": 0,
+              "deferred": 17
+            },
+            "recent": {
+              "approved": 3,
+              "refused": 0,
+              "deferred": 0
+            },
+            "helps": [
+              "clerical"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "town",
+          "round": 0,
+          "kind": "debate",
+          "title": "Guild seats, or an exchange hall",
+          "source": "template",
+          "reason": "prevalidation",
+          "ms": 1186,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c199",
+            "kind": "debate",
+            "template": "debate:adopt:guild-vote exchange-hall",
+            "category": "civic",
+            "title": "Guild seats, or an exchange hall",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Wynn Holt",
+              "role": "master smith",
+              "traits": [
+                "proud",
+                "exacting"
+              ],
+              "body": "Craft Guild"
+            },
+            "why": "The Craft Guild and the Merchant Exchange want different things. You can back one. The other will be sore.",
+            "trigger": [
+              "unrest is low",
+              "tension between groups is low"
+            ],
+            "options": [
+              {
+                "key": "a",
+                "label": "Back the Craft Guild: guild seats",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "guild seats"
+                  }
+                ],
+                "tradeoff": "The guilds gain power. Others lose a little."
+              },
+              {
+                "key": "b",
+                "label": "Back the Merchant Exchange: an exchange hall",
+                "cost": 1601,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a exchange"
+                  },
+                  {
+                    "act": "more",
+                    "what": "trade"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  }
+                ],
+                "tradeoff": "It costs 1,601 coin. Trade will grow."
+              },
+              {
+                "key": "neither",
+                "label": "Back neither",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Both bodies lose patience."
+              }
+            ],
+            "stances": [
+              {
+                "who": "merchants",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "makers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "labourers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 27,
+                "act": "refused",
+                "what": "water-mill rights, or land value tax"
+              },
+              {
+                "year": 25,
+                "act": "deferred",
+                "what": "a mark of quality"
+              },
+              {
+                "year": 24,
+                "act": "refused",
+                "what": "apprenticeships, or free trade: wide open"
+              },
+              {
+                "year": 21,
+                "act": "approved",
+                "what": "a hall for the guild"
+              }
+            ],
+            "record": {
+              "approved": 2,
+              "refused": 5,
+              "deferred": 4
+            },
+            "helps": [
+              "craft",
+              "trade",
+              "gentry"
+            ],
+            "hurts": [
+              "labour",
+              "craft"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "town",
+          "round": 0,
+          "kind": "petition",
+          "title": "The Merchant Exchange has lost heart",
+          "source": "template",
+          "reason": "prevalidation",
+          "ms": 1064,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c212",
+            "kind": "petition",
+            "template": "revive",
+            "category": "civic",
+            "title": "The Merchant Exchange has lost heart",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Isolde Rook",
+              "role": "merchant",
+              "traits": [
+                "quick",
+                "ambitious"
+              ],
+              "body": "Merchant Exchange"
+            },
+            "why": "The Merchant Exchange feels ignored. Its members stopped coming. It can still be saved.",
+            "trigger": [
+              "unrest is low",
+              "tension between groups is low"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Give it a fresh start",
+                "cost": 153,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  }
+                ],
+                "tradeoff": "It costs 153 coin. Its patience returns."
+              },
+              {
+                "key": "not_now",
+                "label": "Let it fade",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "It will close within a few years."
+              }
+            ],
+            "stances": [
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 0
+            },
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "city",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"I'd ask you to weigh the fenced fields first, since the big farms are ready to invest and more boats arrive each year. The summer fair in year 91 showed how much the town gains from trade.\"}",
+          "ms": 2581,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c977",
+            "kind": "proposal",
+            "template": "adopt:enclosure",
+            "category": "land",
+            "title": "Which first?",
+            "year": 92,
+            "season": "spring",
+            "era": "city",
+            "urgency": 1,
+            "asker": {
+              "name": "Ezra Cobb",
+              "role": "merchant",
+              "traits": [
+                "quick",
+                "ambitious"
+              ],
+              "body": "Merchant Exchange"
+            },
+            "why": "Fenced fields grow more grain. The big farms are ready to invest. More boats come each year. There is a second plan too: an exchange hall. Which comes first?",
+            "trigger": [
+              "the need for homes is low",
+              "crowding is fair",
+              "Upkeep: None",
+              "Town coin: 199,828 coin",
+              "Merchant Exchange purse: 0 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "Fenced fields",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "fenced fields"
+                  }
+                ],
+                "tradeoff": "Poor families lose the common. Some will leave."
+              },
+              {
+                "key": "y_do",
+                "label": "An exchange hall",
+                "cost": 39254,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a exchange"
+                  },
+                  {
+                    "act": "more",
+                    "what": "trade"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  }
+                ],
+                "tradeoff": "It costs 39,254 coin. Trade will grow."
+              },
+              {
+                "key": "delegate",
+                "label": "Let them decide",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The Merchant Exchange chooses and pays from its own purse."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Merchant Exchange"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "farmers",
+                "lean": "against",
+                "p": 0.65,
+                "where": "Water End"
+              },
+              {
+                "who": "labourers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "merchants",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 75,
+                "act": "deferred",
+                "what": "the Merchant Exchange has lost heart"
+              },
+              {
+                "year": 75,
+                "act": "approved",
+                "what": "make room in the centre"
+              },
+              {
+                "year": 71,
+                "act": "approved",
+                "what": "grain from abroad: every season, or a paving fund"
+              },
+              {
+                "year": 69,
+                "act": "refused",
+                "what": "warehouses by the river, or a ring road round the town"
+              }
+            ],
+            "record": {
+              "approved": 3,
+              "refused": 3,
+              "deferred": 2
+            },
+            "helps": [
+              "gentry"
+            ],
+            "hurts": [
+              "labour",
+              "farm"
+            ],
+            "events": [
+              {
+                "year": 91,
+                "what": "the summer fair"
+              },
+              {
+                "year": 89,
+                "what": "a bumper harvest"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "city",
+          "round": 1,
+          "kind": "event",
+          "title": "Newcomers at the gate",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Carts are coming up the road, and I've watched the crier's notices fill with worry about who will be let in. Since the labourers' petition lapsed in year 96, you've leaned toward patience, and I'd ask the same care here.\"}",
+          "ms": 916,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c1080",
+            "kind": "event",
+            "template": "event:migration-wave",
+            "category": "event",
+            "title": "Newcomers at the gate",
+            "year": 97,
+            "season": "summer",
+            "era": "city",
+            "urgency": 2,
+            "asker": {
+              "name": "The town crier",
+              "role": "news",
+              "traits": [
+                "careful",
+                "fair-minded"
+              ],
+              "body": "City Council"
+            },
+            "why": "Carts are coming up the road. Families from the hills want to settle here.",
+            "options": [
+              {
+                "key": "welcome",
+                "label": "Welcome them all",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The town grows fast. Homes will be scarce."
+              },
+              {
+                "key": "away",
+                "label": "Turn them away",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Fewer mouths. Our name suffers."
+              },
+              {
+                "key": "quota",
+                "label": "Take half",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Slower growth. Some families turn back."
+              }
+            ],
+            "past": [
+              {
+                "year": 97,
+                "act": "lapsed",
+                "what": "old Ford and Barn Fields"
+              },
+              {
+                "year": 96,
+                "act": "lapsed",
+                "what": "the labourers' petition"
+              },
+              {
+                "year": 95,
+                "act": "lapsed",
+                "what": "where should the town hall be"
+              },
+              {
+                "year": 95,
+                "act": "lapsed",
+                "what": "the merchants' petition"
+              }
+            ],
+            "record": {
+              "approved": 45,
+              "refused": 0,
+              "deferred": 66
+            },
+            "events": [
+              {
+                "year": 95,
+                "what": "newcomers at the gate"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "city",
+          "round": 1,
+          "kind": "demand",
+          "title": "A summer fair",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Summer is coming, and I'd love to see a fair bring traders and lift spirits. The labourers of Water End have been asking for one, and I think you'd see the crowds if we keep it simple.\"}",
+          "ms": 1530,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c1081",
+            "kind": "demand",
+            "template": "fair",
+            "category": "faith",
+            "title": "A summer fair",
+            "year": 97,
+            "season": "summer",
+            "era": "city",
+            "urgency": 1,
+            "asker": {
+              "name": "Tobin Hale",
+              "role": "fiddler",
+              "traits": [
+                "merry",
+                "restless"
+              ],
+              "body": "Festival Society"
+            },
+            "why": "Summer is coming. A fair would bring traders and lift spirits.",
+            "trigger": [
+              "faith is high",
+              "Cost: 2,082 coin",
+              "Town coin: 169,846 coin",
+              "Festival Society budget left: 307 coin"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Fund a fine fair",
+                "cost": 2082,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "event",
+                    "what": "the summer fair"
+                  }
+                ],
+                "tradeoff": "Visitors come and spend. It costs 2,082 coin."
+              },
+              {
+                "key": "small",
+                "label": "A simple fair",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "event",
+                    "what": "the summer fair"
+                  }
+                ],
+                "tradeoff": "No cost to the town. A smaller crowd."
+              },
+              {
+                "key": "negotiate",
+                "label": "Negotiate",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "negotiate"
+                  }
+                ],
+                "tradeoff": "Offer half. They may take it, or insist."
+              }
+            ],
+            "stances": [
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Water End"
+              },
+              {
+                "who": "clergy",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "merchants",
+                "lean": "for",
+                "p": 0.58
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 97,
+                "act": "lapsed",
+                "what": "festival Society: budget for year 97"
+              },
+              {
+                "year": 96,
+                "act": "lapsed",
+                "what": "festival Society: budget for year 96"
+              },
+              {
+                "year": 96,
+                "act": "lapsed",
+                "what": "a carnival week, or a watch house"
+              },
+              {
+                "year": 95,
+                "act": "lapsed",
+                "what": "festival Society: budget for year 95"
+              }
+            ],
+            "record": {
+              "approved": 12,
+              "refused": 6,
+              "deferred": 7
+            },
+            "helps": [
+              "trade",
+              "labour"
+            ],
+            "hurts": [
+              "clergy"
+            ],
+            "events": [
+              {
+                "year": 95,
+                "what": "newcomers at the gate"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "phase": "improved",
+      "rows": [
+        {
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "template",
+          "reason": "more than 40 words",
+          "raw": "{\"why\":\"You have approved three recent proposals without refusal, and the clerks of Water Hill lean toward the hall upgrade, so we ask you to weigh it first. The farmers remain undecided, and the bumper harvest of year 29 has given the town coin to spare.\"}",
+          "ms": 1930,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c187",
+            "kind": "proposal",
+            "template": "hall-upgrade",
+            "category": "civic",
+            "title": "Which first?",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Ivo Holt",
+              "role": "steward",
+              "traits": [
+                "careful",
+                "fair-minded"
+              ],
+              "body": "Town Council"
+            },
+            "why": "The moot hall is too small for the town we have become. There is a second plan too: a summer fair. Which comes first?",
+            "trigger": [
+              "unrest is low",
+              "tension between groups is low",
+              "Cost: 1,957 coin",
+              "Town coin: 8,766 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "A proper town hall",
+                "cost": 1957,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a town hall"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  },
+                  {
+                    "act": "more",
+                    "what": "order"
+                  }
+                ],
+                "tradeoff": "It costs 1,957 coin. The town gains a fine centre."
+              },
+              {
+                "key": "y_do",
+                "label": "A summer fair",
+                "cost": 272,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "event",
+                    "what": "the summer fair"
+                  }
+                ],
+                "tradeoff": "Visitors come and spend. It costs 272 coin."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Town Council"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Water Hill"
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 29,
+                "act": "heard",
+                "what": "the merchants' petition"
+              },
+              {
+                "year": 29,
+                "act": "approved",
+                "what": "forming the Festival Society"
+              },
+              {
+                "year": 28,
+                "act": "approved",
+                "what": "forming the School Board"
+              },
+              {
+                "year": 26,
+                "act": "approved",
+                "what": "forming the Planning Office"
+              }
+            ],
+            "record": {
+              "approved": 21,
+              "refused": 0,
+              "deferred": 17
+            },
+            "recent": {
+              "approved": 3,
+              "refused": 0,
+              "deferred": 0
+            },
+            "helps": [
+              "clerical"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "town",
+          "round": 0,
+          "kind": "debate",
+          "title": "Guild seats, or an exchange hall",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"I am a master smith, and as you know the Craft Guild wants its seats, so I back it. Your refusal of mill rights in year 27 shows you have weighed trade against craft before.\"}",
+          "ms": 1521,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c199",
+            "kind": "debate",
+            "template": "debate:adopt:guild-vote exchange-hall",
+            "category": "civic",
+            "title": "Guild seats, or an exchange hall",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Wynn Holt",
+              "role": "master smith",
+              "traits": [
+                "proud",
+                "exacting"
+              ],
+              "body": "Craft Guild"
+            },
+            "why": "The Craft Guild and the Merchant Exchange want different things. You can back one. The other will be sore.",
+            "trigger": [
+              "unrest is low",
+              "tension between groups is low"
+            ],
+            "options": [
+              {
+                "key": "a",
+                "label": "Back the Craft Guild: guild seats",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "guild seats"
+                  }
+                ],
+                "tradeoff": "The guilds gain power. Others lose a little."
+              },
+              {
+                "key": "b",
+                "label": "Back the Merchant Exchange: an exchange hall",
+                "cost": 1601,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a exchange"
+                  },
+                  {
+                    "act": "more",
+                    "what": "trade"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  }
+                ],
+                "tradeoff": "It costs 1,601 coin. Trade will grow."
+              },
+              {
+                "key": "neither",
+                "label": "Back neither",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Both bodies lose patience."
+              }
+            ],
+            "stances": [
+              {
+                "who": "merchants",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "makers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "labourers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 27,
+                "act": "refused",
+                "what": "water-mill rights, or land value tax"
+              },
+              {
+                "year": 25,
+                "act": "deferred",
+                "what": "a mark of quality"
+              },
+              {
+                "year": 24,
+                "act": "refused",
+                "what": "apprenticeships, or free trade: wide open"
+              },
+              {
+                "year": 21,
+                "act": "approved",
+                "what": "a hall for the guild"
+              }
+            ],
+            "record": {
+              "approved": 2,
+              "refused": 5,
+              "deferred": 4
+            },
+            "helps": [
+              "craft",
+              "trade",
+              "gentry"
+            ],
+            "hurts": [
+              "labour",
+              "craft"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "town",
+          "round": 0,
+          "kind": "petition",
+          "title": "The Merchant Exchange has lost heart",
+          "source": "template",
+          "reason": "more than 40 words",
+          "raw": "{\"why\":\"Since the bumper harvest in year 29, you have seen many barges from the coast, yet the Merchant Exchange stands quiet. As the ambitious merchant speaking to you, I believe its members would return if the Exchange were given a fresh start.\"}",
+          "ms": 1173,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c212",
+            "kind": "petition",
+            "template": "revive",
+            "category": "civic",
+            "title": "The Merchant Exchange has lost heart",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Isolde Rook",
+              "role": "merchant",
+              "traits": [
+                "quick",
+                "ambitious"
+              ],
+              "body": "Merchant Exchange"
+            },
+            "why": "The Merchant Exchange feels ignored. Its members stopped coming. It can still be saved.",
+            "trigger": [
+              "unrest is low",
+              "tension between groups is low"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Give it a fresh start",
+                "cost": 153,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  }
+                ],
+                "tradeoff": "It costs 153 coin. Its patience returns."
+              },
+              {
+                "key": "not_now",
+                "label": "Let it fade",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "It will close within a few years."
+              }
+            ],
+            "stances": [
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 0
+            },
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "city",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "template",
+          "reason": "more than 40 words",
+          "raw": "{\"why\":\"I am a merchant, quick and ambitious, and I say fenced fields grow more grain while the big farms are ready to invest. You also approved making room in the centre back in year 75, so this fits your recent path.\"}",
+          "ms": 934,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c977",
+            "kind": "proposal",
+            "template": "adopt:enclosure",
+            "category": "land",
+            "title": "Which first?",
+            "year": 92,
+            "season": "spring",
+            "era": "city",
+            "urgency": 1,
+            "asker": {
+              "name": "Ezra Cobb",
+              "role": "merchant",
+              "traits": [
+                "quick",
+                "ambitious"
+              ],
+              "body": "Merchant Exchange"
+            },
+            "why": "Fenced fields grow more grain. The big farms are ready to invest. More boats come each year. There is a second plan too: an exchange hall. Which comes first?",
+            "trigger": [
+              "the need for homes is low",
+              "crowding is fair",
+              "Upkeep: None",
+              "Town coin: 199,828 coin",
+              "Merchant Exchange purse: 0 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "Fenced fields",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "fenced fields"
+                  }
+                ],
+                "tradeoff": "Poor families lose the common. Some will leave."
+              },
+              {
+                "key": "y_do",
+                "label": "An exchange hall",
+                "cost": 39254,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a exchange"
+                  },
+                  {
+                    "act": "more",
+                    "what": "trade"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  }
+                ],
+                "tradeoff": "It costs 39,254 coin. Trade will grow."
+              },
+              {
+                "key": "delegate",
+                "label": "Let them decide",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The Merchant Exchange chooses and pays from its own purse."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Merchant Exchange"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "farmers",
+                "lean": "against",
+                "p": 0.65,
+                "where": "Water End"
+              },
+              {
+                "who": "labourers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "merchants",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 75,
+                "act": "deferred",
+                "what": "the Merchant Exchange has lost heart"
+              },
+              {
+                "year": 75,
+                "act": "approved",
+                "what": "make room in the centre"
+              },
+              {
+                "year": 71,
+                "act": "approved",
+                "what": "grain from abroad: every season, or a paving fund"
+              },
+              {
+                "year": 69,
+                "act": "refused",
+                "what": "warehouses by the river, or a ring road round the town"
+              }
+            ],
+            "record": {
+              "approved": 3,
+              "refused": 3,
+              "deferred": 2
+            },
+            "helps": [
+              "gentry"
+            ],
+            "hurts": [
+              "labour",
+              "farm"
+            ],
+            "events": [
+              {
+                "year": 91,
+                "what": "the summer fair"
+              },
+              {
+                "year": 89,
+                "what": "a bumper harvest"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "city",
+          "round": 1,
+          "kind": "event",
+          "title": "Newcomers at the gate",
+          "source": "template",
+          "reason": "copies a template sentence",
+          "raw": "{\"why\":\"Carts are coming up the road, and families from the hills want to settle here. As the News voice of the City Council, we remember the labourers' petition lapsed in year 96, so fairness toward newcomers matters to us now.\"}",
+          "ms": 1174,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c1080",
+            "kind": "event",
+            "template": "event:migration-wave",
+            "category": "event",
+            "title": "Newcomers at the gate",
+            "year": 97,
+            "season": "summer",
+            "era": "city",
+            "urgency": 2,
+            "asker": {
+              "name": "The town crier",
+              "role": "news",
+              "traits": [
+                "careful",
+                "fair-minded"
+              ],
+              "body": "City Council"
+            },
+            "why": "Carts are coming up the road. Families from the hills want to settle here.",
+            "options": [
+              {
+                "key": "welcome",
+                "label": "Welcome them all",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The town grows fast. Homes will be scarce."
+              },
+              {
+                "key": "away",
+                "label": "Turn them away",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Fewer mouths. Our name suffers."
+              },
+              {
+                "key": "quota",
+                "label": "Take half",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Slower growth. Some families turn back."
+              }
+            ],
+            "past": [
+              {
+                "year": 97,
+                "act": "lapsed",
+                "what": "old Ford and Barn Fields"
+              },
+              {
+                "year": 96,
+                "act": "lapsed",
+                "what": "the labourers' petition"
+              },
+              {
+                "year": 95,
+                "act": "lapsed",
+                "what": "where should the town hall be"
+              },
+              {
+                "year": 95,
+                "act": "lapsed",
+                "what": "the merchants' petition"
+              }
+            ],
+            "record": {
+              "approved": 45,
+              "refused": 0,
+              "deferred": 66
+            },
+            "events": [
+              {
+                "year": 95,
+                "what": "newcomers at the gate"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "city",
+          "round": 1,
+          "kind": "demand",
+          "title": "A summer fair",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Summer is coming, and I hear the labourers at Water End lean for a fair, which would bring traders and lift spirits. You would be setting the Festival Society's 307 coin budget against a town treasury of 169,846 coin.\"}",
+          "ms": 952,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c1081",
+            "kind": "demand",
+            "template": "fair",
+            "category": "faith",
+            "title": "A summer fair",
+            "year": 97,
+            "season": "summer",
+            "era": "city",
+            "urgency": 1,
+            "asker": {
+              "name": "Tobin Hale",
+              "role": "fiddler",
+              "traits": [
+                "merry",
+                "restless"
+              ],
+              "body": "Festival Society"
+            },
+            "why": "Summer is coming. A fair would bring traders and lift spirits.",
+            "trigger": [
+              "faith is high",
+              "Cost: 2,082 coin",
+              "Town coin: 169,846 coin",
+              "Festival Society budget left: 307 coin"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Fund a fine fair",
+                "cost": 2082,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "event",
+                    "what": "the summer fair"
+                  }
+                ],
+                "tradeoff": "Visitors come and spend. It costs 2,082 coin."
+              },
+              {
+                "key": "small",
+                "label": "A simple fair",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "event",
+                    "what": "the summer fair"
+                  }
+                ],
+                "tradeoff": "No cost to the town. A smaller crowd."
+              },
+              {
+                "key": "negotiate",
+                "label": "Negotiate",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "negotiate"
+                  }
+                ],
+                "tradeoff": "Offer half. They may take it, or insist."
+              }
+            ],
+            "stances": [
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Water End"
+              },
+              {
+                "who": "clergy",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "merchants",
+                "lean": "for",
+                "p": 0.58
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 97,
+                "act": "lapsed",
+                "what": "festival Society: budget for year 97"
+              },
+              {
+                "year": 96,
+                "act": "lapsed",
+                "what": "festival Society: budget for year 96"
+              },
+              {
+                "year": 96,
+                "act": "lapsed",
+                "what": "a carnival week, or a watch house"
+              },
+              {
+                "year": 95,
+                "act": "lapsed",
+                "what": "festival Society: budget for year 95"
+              }
+            ],
+            "record": {
+              "approved": 12,
+              "refused": 6,
+              "deferred": 7
+            },
+            "helps": [
+              "trade",
+              "labour"
+            ],
+            "hurts": [
+              "clergy"
+            ],
+            "events": [
+              {
+                "year": 95,
+                "what": "newcomers at the gate"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "phase": "focused",
+      "rows": [
+        {
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"The clerks of Water Hill lean for this upgrade, and you approved forming the Festival Society in year 29 after a bumper harvest.\"}",
+          "ms": 973,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c187",
+            "kind": "proposal",
+            "template": "hall-upgrade",
+            "category": "civic",
+            "title": "Which first?",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Ivo Holt",
+              "role": "steward",
+              "traits": [
+                "careful",
+                "fair-minded"
+              ],
+              "body": "Town Council"
+            },
+            "why": "The moot hall is too small for the town we have become. There is a second plan too: a summer fair. Which comes first?",
+            "trigger": [
+              "unrest is low",
+              "tension between groups is low",
+              "Cost: 1,957 coin",
+              "Town coin: 8,766 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "A proper town hall",
+                "cost": 1957,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a town hall"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  },
+                  {
+                    "act": "more",
+                    "what": "order"
+                  }
+                ],
+                "tradeoff": "It costs 1,957 coin. The town gains a fine centre."
+              },
+              {
+                "key": "y_do",
+                "label": "A summer fair",
+                "cost": 272,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "event",
+                    "what": "the summer fair"
+                  }
+                ],
+                "tradeoff": "Visitors come and spend. It costs 272 coin."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Town Council"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Water Hill"
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 29,
+                "act": "heard",
+                "what": "the merchants' petition"
+              },
+              {
+                "year": 29,
+                "act": "approved",
+                "what": "forming the Festival Society"
+              },
+              {
+                "year": 28,
+                "act": "approved",
+                "what": "forming the School Board"
+              },
+              {
+                "year": 26,
+                "act": "approved",
+                "what": "forming the Planning Office"
+              }
+            ],
+            "record": {
+              "approved": 21,
+              "refused": 0,
+              "deferred": 17
+            },
+            "recent": {
+              "approved": 3,
+              "refused": 0,
+              "deferred": 0
+            },
+            "helps": [
+              "clerical"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "town",
+          "round": 0,
+          "kind": "debate",
+          "title": "Guild seats, or an exchange hall",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"I ask as a master smith, and the merchants of Old Ford lean for this exchange hall, while makers and labourers lean against it.\"}",
+          "ms": 828,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c199",
+            "kind": "debate",
+            "template": "debate:adopt:guild-vote exchange-hall",
+            "category": "civic",
+            "title": "Guild seats, or an exchange hall",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Wynn Holt",
+              "role": "master smith",
+              "traits": [
+                "proud",
+                "exacting"
+              ],
+              "body": "Craft Guild"
+            },
+            "why": "The Craft Guild and the Merchant Exchange want different things. You can back one. The other will be sore.",
+            "trigger": [
+              "unrest is low",
+              "tension between groups is low"
+            ],
+            "options": [
+              {
+                "key": "a",
+                "label": "Back the Craft Guild: guild seats",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "guild seats"
+                  }
+                ],
+                "tradeoff": "The guilds gain power. Others lose a little."
+              },
+              {
+                "key": "b",
+                "label": "Back the Merchant Exchange: an exchange hall",
+                "cost": 1601,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a exchange"
+                  },
+                  {
+                    "act": "more",
+                    "what": "trade"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  }
+                ],
+                "tradeoff": "It costs 1,601 coin. Trade will grow."
+              },
+              {
+                "key": "neither",
+                "label": "Back neither",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Both bodies lose patience."
+              }
+            ],
+            "stances": [
+              {
+                "who": "merchants",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "makers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "labourers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 27,
+                "act": "refused",
+                "what": "water-mill rights, or land value tax"
+              },
+              {
+                "year": 25,
+                "act": "deferred",
+                "what": "a mark of quality"
+              },
+              {
+                "year": 24,
+                "act": "refused",
+                "what": "apprenticeships, or free trade: wide open"
+              },
+              {
+                "year": 21,
+                "act": "approved",
+                "what": "a hall for the guild"
+              }
+            ],
+            "record": {
+              "approved": 2,
+              "refused": 5,
+              "deferred": 4
+            },
+            "helps": [
+              "craft",
+              "trade",
+              "gentry"
+            ],
+            "hurts": [
+              "labour",
+              "craft"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "town",
+          "round": 0,
+          "kind": "petition",
+          "title": "The Merchant Exchange has lost heart",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Since the bumper harvest in year 29, you have seen our Exchange quiet, and the farmers, who lean indifferent, have not pressed for or against any change.\"}",
+          "ms": 858,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c212",
+            "kind": "petition",
+            "template": "revive",
+            "category": "civic",
+            "title": "The Merchant Exchange has lost heart",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Isolde Rook",
+              "role": "merchant",
+              "traits": [
+                "quick",
+                "ambitious"
+              ],
+              "body": "Merchant Exchange"
+            },
+            "why": "The Merchant Exchange feels ignored. Its members stopped coming. It can still be saved.",
+            "trigger": [
+              "unrest is low",
+              "tension between groups is low"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Give it a fresh start",
+                "cost": 153,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  }
+                ],
+                "tradeoff": "It costs 153 coin. Its patience returns."
+              },
+              {
+                "key": "not_now",
+                "label": "Let it fade",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "It will close within a few years."
+              }
+            ],
+            "stances": [
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 0
+            },
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "city",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"As the Merchant Exchange, we back this enclosure, though the farmers at Water End lean against it, as you may weigh against the summer fair of year 91.\"}",
+          "ms": 845,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c977",
+            "kind": "proposal",
+            "template": "adopt:enclosure",
+            "category": "land",
+            "title": "Which first?",
+            "year": 92,
+            "season": "spring",
+            "era": "city",
+            "urgency": 1,
+            "asker": {
+              "name": "Ezra Cobb",
+              "role": "merchant",
+              "traits": [
+                "quick",
+                "ambitious"
+              ],
+              "body": "Merchant Exchange"
+            },
+            "why": "Fenced fields grow more grain. The big farms are ready to invest. More boats come each year. There is a second plan too: an exchange hall. Which comes first?",
+            "trigger": [
+              "the need for homes is low",
+              "crowding is fair",
+              "Upkeep: None",
+              "Town coin: 199,828 coin",
+              "Merchant Exchange purse: 0 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "Fenced fields",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "fenced fields"
+                  }
+                ],
+                "tradeoff": "Poor families lose the common. Some will leave."
+              },
+              {
+                "key": "y_do",
+                "label": "An exchange hall",
+                "cost": 39254,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a exchange"
+                  },
+                  {
+                    "act": "more",
+                    "what": "trade"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  }
+                ],
+                "tradeoff": "It costs 39,254 coin. Trade will grow."
+              },
+              {
+                "key": "delegate",
+                "label": "Let them decide",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The Merchant Exchange chooses and pays from its own purse."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Merchant Exchange"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "farmers",
+                "lean": "against",
+                "p": 0.65,
+                "where": "Water End"
+              },
+              {
+                "who": "labourers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "merchants",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 75,
+                "act": "deferred",
+                "what": "the Merchant Exchange has lost heart"
+              },
+              {
+                "year": 75,
+                "act": "approved",
+                "what": "make room in the centre"
+              },
+              {
+                "year": 71,
+                "act": "approved",
+                "what": "grain from abroad: every season, or a paving fund"
+              },
+              {
+                "year": 69,
+                "act": "refused",
+                "what": "warehouses by the river, or a ring road round the town"
+              }
+            ],
+            "record": {
+              "approved": 3,
+              "refused": 3,
+              "deferred": 2
+            },
+            "helps": [
+              "gentry"
+            ],
+            "hurts": [
+              "labour",
+              "farm"
+            ],
+            "events": [
+              {
+                "year": 91,
+                "what": "the summer fair"
+              },
+              {
+                "year": 89,
+                "what": "a bumper harvest"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "city",
+          "round": 1,
+          "kind": "event",
+          "title": "Newcomers at the gate",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Newcomers at the gate was also raised in year 95, and you let the labourers' petition and the merchants' petition lapse, so this matter is more pressing now.\"}",
+          "ms": 926,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c1080",
+            "kind": "event",
+            "template": "event:migration-wave",
+            "category": "event",
+            "title": "Newcomers at the gate",
+            "year": 97,
+            "season": "summer",
+            "era": "city",
+            "urgency": 2,
+            "asker": {
+              "name": "The town crier",
+              "role": "news",
+              "traits": [
+                "careful",
+                "fair-minded"
+              ],
+              "body": "City Council"
+            },
+            "why": "Carts are coming up the road. Families from the hills want to settle here.",
+            "options": [
+              {
+                "key": "welcome",
+                "label": "Welcome them all",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The town grows fast. Homes will be scarce."
+              },
+              {
+                "key": "away",
+                "label": "Turn them away",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Fewer mouths. Our name suffers."
+              },
+              {
+                "key": "quota",
+                "label": "Take half",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Slower growth. Some families turn back."
+              }
+            ],
+            "past": [
+              {
+                "year": 97,
+                "act": "lapsed",
+                "what": "old Ford and Barn Fields"
+              },
+              {
+                "year": 96,
+                "act": "lapsed",
+                "what": "the labourers' petition"
+              },
+              {
+                "year": 95,
+                "act": "lapsed",
+                "what": "where should the town hall be"
+              },
+              {
+                "year": 95,
+                "act": "lapsed",
+                "what": "the merchants' petition"
+              }
+            ],
+            "record": {
+              "approved": 45,
+              "refused": 0,
+              "deferred": 66
+            },
+            "events": [
+              {
+                "year": 95,
+                "what": "newcomers at the gate"
+              }
+            ]
+          }
+        },
+        {
+          "profile": "city",
+          "round": 1,
+          "kind": "demand",
+          "title": "A summer fair",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"You have let the festival budget lapse in years 95, 96 and 97, and the clergy lean against this fair while labourers at Water End lean for it.\"}",
+          "ms": 830,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c1081",
+            "kind": "demand",
+            "template": "fair",
+            "category": "faith",
+            "title": "A summer fair",
+            "year": 97,
+            "season": "summer",
+            "era": "city",
+            "urgency": 1,
+            "asker": {
+              "name": "Tobin Hale",
+              "role": "fiddler",
+              "traits": [
+                "merry",
+                "restless"
+              ],
+              "body": "Festival Society"
+            },
+            "why": "Summer is coming. A fair would bring traders and lift spirits.",
+            "trigger": [
+              "faith is high",
+              "Cost: 2,082 coin",
+              "Town coin: 169,846 coin",
+              "Festival Society budget left: 307 coin"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Fund a fine fair",
+                "cost": 2082,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "event",
+                    "what": "the summer fair"
+                  }
+                ],
+                "tradeoff": "Visitors come and spend. It costs 2,082 coin."
+              },
+              {
+                "key": "small",
+                "label": "A simple fair",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "event",
+                    "what": "the summer fair"
+                  }
+                ],
+                "tradeoff": "No cost to the town. A smaller crowd."
+              },
+              {
+                "key": "negotiate",
+                "label": "Negotiate",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "negotiate"
+                  }
+                ],
+                "tradeoff": "Offer half. They may take it, or insist."
+              }
+            ],
+            "stances": [
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Water End"
+              },
+              {
+                "who": "clergy",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "merchants",
+                "lean": "for",
+                "p": 0.58
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 97,
+                "act": "lapsed",
+                "what": "festival Society: budget for year 97"
+              },
+              {
+                "year": 96,
+                "act": "lapsed",
+                "what": "festival Society: budget for year 96"
+              },
+              {
+                "year": 96,
+                "act": "lapsed",
+                "what": "a carnival week, or a watch house"
+              },
+              {
+                "year": 95,
+                "act": "lapsed",
+                "what": "festival Society: budget for year 95"
+              }
+            ],
+            "record": {
+              "approved": 12,
+              "refused": 6,
+              "deferred": 7
+            },
+            "helps": [
+              "trade",
+              "labour"
+            ],
+            "hurts": [
+              "clergy"
+            ],
+            "events": [
+              {
+                "year": 95,
+                "what": "newcomers at the gate"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "phase": "heldout",
+      "rows": [
+        {
+          "inputTokens": 910,
+          "outputTokens": 56,
+          "firstTextMs": 517,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Feast days",
+          "source": "template",
+          "reason": "number not in facts: seventy",
+          "raw": "{\"why\":\"You will recall the bumper harvest of year 29, and the labourers of Old Ford lean toward feast days, with about seventy percent of them in favour.\"}",
+          "ms": 767,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c191",
+            "kind": "proposal",
+            "template": "adopt:feast-days",
+            "category": "faith",
+            "title": "Feast days",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Silas Vane",
+              "role": "priest",
+              "traits": [
+                "gentle",
+                "devout"
+              ],
+              "body": "Church"
+            },
+            "why": "Feast days bring us together. People need joy as well as bread.",
+            "trigger": [
+              "faith is fair",
+              "Upkeep: 17 coin a year",
+              "Town coin: 8,728 coin",
+              "Church purse: 1,482 coin"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Bring in feast days",
+                "cost": 0,
+                "upkeep": 17,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "feast days"
+                  }
+                ],
+                "tradeoff": "Spirits lift. Work stops for the day."
+              },
+              {
+                "key": "more",
+                "label": "Go further: every saint",
+                "cost": 0,
+                "upkeep": 35,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "feast days"
+                  }
+                ],
+                "tradeoff": "A stronger effect. A bigger bill."
+              },
+              {
+                "key": "delegate",
+                "label": "Let them decide",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The Church chooses and pays from its own purse."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Church"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 28,
+                "act": "approved",
+                "what": "a parish school, or a curfew"
+              },
+              {
+                "year": 26,
+                "act": "approved",
+                "what": "the tithe, or fenced fields"
+              },
+              {
+                "year": 24,
+                "act": "refused",
+                "what": "an alms house, or warehouses by the river"
+              },
+              {
+                "year": 23,
+                "act": "refused",
+                "what": "a day of rest, or a watch house"
+              }
+            ],
+            "record": {
+              "approved": 3,
+              "refused": 4,
+              "deferred": 3
+            },
+            "recent": {
+              "approved": 1,
+              "refused": 0,
+              "deferred": 0
+            },
+            "helps": [
+              "clergy",
+              "labour"
+            ],
+            "hurts": [
+              "gentry"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 825,
+          "outputTokens": 58,
+          "firstTextMs": 591,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "A school for the ward: Marsh Town",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Reading and learning are low in Marsh Town, and the labourers of Old Ford lean for this school, as you approved a market charter for the ward in year 25.\"}",
+          "ms": 804,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c192",
+            "kind": "proposal",
+            "template": "ward-school",
+            "category": "education",
+            "title": "A school for the ward: Marsh Town",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Una Marsh",
+              "role": "member"
+            },
+            "why": "Children in Marsh Town walk a long way to school. The ward wants one close by.",
+            "trigger": [
+              "reading is low",
+              "learning is low",
+              "Cost: 509 coin",
+              "Town coin: 8,728 coin",
+              "Marsh Town Ward Council purse: 6 coin"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Build it in the ward",
+                "cost": 509,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a school"
+                  },
+                  {
+                    "act": "more",
+                    "what": "learning"
+                  }
+                ],
+                "tradeoff": "It costs 509 coin. Learning grows in Marsh Town."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Marsh Town Ward Council"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 25,
+                "act": "deferred",
+                "what": "the ward keeps its own rates"
+              },
+              {
+                "year": 25,
+                "act": "approved",
+                "what": "a market charter for the ward"
+              }
+            ],
+            "record": {
+              "approved": 1,
+              "refused": 0,
+              "deferred": 1
+            },
+            "helps": [
+              "clerical",
+              "labour"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 863,
+          "outputTokens": 54,
+          "firstTextMs": 558,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Labourers in Old Ford lean toward the green space, and you deferred paving the busiest lane in year 28, when the town was calmer than now.\"}",
+          "ms": 809,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c195",
+            "kind": "proposal",
+            "template": "green-space",
+            "category": "land",
+            "title": "Which first?",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Osric Cobb",
+              "role": "surveyor",
+              "traits": [
+                "orderly",
+                "far-sighted"
+              ],
+              "body": "Planning Office"
+            },
+            "why": "The riverbank by Bridge Green is a lovely spot. Families walk out to it on rest days. Keep it green for good, with a path and a bench or two. There is a second plan too: a turnpike from old ford to marsh town. Which comes first?",
+            "trigger": [
+              "774 people live here",
+              "the need for homes is low",
+              "crowding is low",
+              "Cost: 180 coin",
+              "Town coin: 8,728 coin"
+            ],
+            "place": {
+              "district": "Old Ford",
+              "road": "grass",
+              "traffic": "quiet"
+            },
+            "options": [
+              {
+                "key": "x_do",
+                "label": "Keep the riverbank by Bridge Green green",
+                "cost": 180,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "works",
+                    "what": "the works"
+                  },
+                  {
+                    "act": "more",
+                    "what": "green land"
+                  }
+                ],
+                "tradeoff": "It costs 180 coin. Nobody may build there. People will walk there."
+              },
+              {
+                "key": "y_do",
+                "label": "A turnpike from Old Ford to Marsh Town",
+                "cost": 8190,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "works",
+                    "what": "the works"
+                  },
+                  {
+                    "act": "more",
+                    "what": "trade"
+                  }
+                ],
+                "tradeoff": "It costs 8,190 coin. Trade between the towns quickens."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Planning Office"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 28,
+                "act": "deferred",
+                "what": "pave the busiest lane"
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 1
+            },
+            "recent": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 1
+            },
+            "helps": [
+              "gentry",
+              "clerical",
+              "labour"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 755,
+          "outputTokens": 53,
+          "firstTextMs": 544,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"I have watched reading and learning stay low in our schools, and the clerks of Water Hill lean for this library, though the farmers are indifferent.\"}",
+          "ms": 798,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c205",
+            "kind": "proposal",
+            "template": "adopt:library",
+            "category": "education",
+            "title": "Which first?",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 2,
+            "asker": {
+              "name": "Rhea Ashdown",
+              "role": "schoolmistress",
+              "traits": [
+                "patient",
+                "hopeful"
+              ],
+              "body": "School Board"
+            },
+            "why": "Books are dear. A library would let everyone read. About 1 in ten people can read. There is a second plan too: free schooling. Which comes first?",
+            "trigger": [
+              "reading is low",
+              "learning is low",
+              "Upkeep: 44 coin a year",
+              "Town coin: 8,834 coin",
+              "School Board purse: 0 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "A lending library",
+                "cost": 0,
+                "upkeep": 44,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "the lending library"
+                  }
+                ],
+                "tradeoff": "A small cost each year."
+              },
+              {
+                "key": "y_do",
+                "label": "Free schooling",
+                "cost": 0,
+                "upkeep": 131,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "free schooling"
+                  }
+                ],
+                "tradeoff": "It costs a great deal. Fewer children earn at home."
+              },
+              {
+                "key": "delegate",
+                "label": "Let them decide",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The School Board chooses and pays from its own purse."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the School Board"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Water Hill"
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 0
+            },
+            "helps": [
+              "clerical"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 789,
+          "outputTokens": 61,
+          "firstTextMs": 645,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "template",
+          "reason": "number not in facts: seventy",
+          "raw": "{\"why\":\"Last year's bumper harvest and the merchants of Old Ford, who lean for it at seventy percent, mean the Festival Society's empty purse could fill with support.\"}",
+          "ms": 910,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c208",
+            "kind": "proposal",
+            "template": "raise:festival-fund",
+            "category": "faith",
+            "title": "Which first?",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Bryn Hale",
+              "role": "fiddler",
+              "traits": [
+                "merry",
+                "restless"
+              ],
+              "body": "Festival Society"
+            },
+            "why": "Visitors spend freely at a good fair. Our name would travel. There is a second plan too: a playhouse. Which comes first?",
+            "trigger": [
+              "faith is fair",
+              "Upkeep: 110 coin a year",
+              "Town coin: 8,995 coin",
+              "Festival Society purse: 0 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "A festival fund: a festival season",
+                "cost": 0,
+                "upkeep": 110,
+                "effects": [
+                  {
+                    "act": "raise",
+                    "what": "the festival fund"
+                  }
+                ],
+                "tradeoff": "It costs coin. Some call it waste."
+              },
+              {
+                "key": "y_do",
+                "label": "A playhouse",
+                "cost": 1224,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a theatre"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  }
+                ],
+                "tradeoff": "It costs 1,224 coin. Visitors and fame follow."
+              },
+              {
+                "key": "delegate",
+                "label": "Let them decide",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The Festival Society chooses and pays from its own purse."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Festival Society"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "merchants",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 0
+            },
+            "helps": [
+              "trade",
+              "labour"
+            ],
+            "hurts": [
+              "clergy"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 978,
+          "outputTokens": 61,
+          "firstTextMs": 687,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "A stone quay by Crown End",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Merchants at Old Ford lean for a stone quay by Crown End, which would help trade and labour, though you refused a similar quay by Brook Row in year 21.\"}",
+          "ms": 909,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c209",
+            "kind": "proposal",
+            "template": "quay",
+            "category": "infrastructure",
+            "title": "A stone quay by Crown End",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Linus Fairweather",
+              "role": "boatwright",
+              "traits": [
+                "practical",
+                "weathered"
+              ],
+              "body": "River Authority"
+            },
+            "why": "Boats tie up on the mud bank by Crown End. A stone quay would let them load in any weather.",
+            "trigger": [
+              "river trade is fair",
+              "traffic on the roads is low",
+              "Cost: 1,800 coin",
+              "Town coin: 9,019 coin",
+              "River Authority purse: 4 coin"
+            ],
+            "place": {
+              "district": "Crown End",
+              "road": "grass",
+              "traffic": "quiet"
+            },
+            "options": [
+              {
+                "key": "do",
+                "label": "Build the quay",
+                "cost": 1800,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "works",
+                    "what": "the works"
+                  },
+                  {
+                    "act": "more",
+                    "what": "river trade"
+                  }
+                ],
+                "tradeoff": "It costs 1,800 coin. More boats will stop here."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the River Authority"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "merchants",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 29,
+                "act": "deferred",
+                "what": "a bridge at the ford"
+              },
+              {
+                "year": 29,
+                "act": "refused",
+                "what": "dredge the channel, or keep the old fields"
+              },
+              {
+                "year": 26,
+                "act": "approved",
+                "what": "road and river tolls: fair, or field drainage"
+              },
+              {
+                "year": 21,
+                "act": "refused",
+                "what": "a stone quay by Brook Row, or market gardens: many plots"
+              }
+            ],
+            "record": {
+              "approved": 3,
+              "refused": 7,
+              "deferred": 3
+            },
+            "recent": {
+              "approved": 0,
+              "refused": 1,
+              "deferred": 1
+            },
+            "helps": [
+              "trade",
+              "labour"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "phase": "heldout-final",
+      "rows": [
+        {
+          "inputTokens": 898,
+          "outputTokens": 61,
+          "firstTextMs": 1202,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Feast days",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Labourers in Old Ford lean for feast days, and a bumper harvest came in year 29, so I ask you to weigh the church's wish for rest and celebration.\"}",
+          "ms": 1650,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c191",
+            "kind": "proposal",
+            "template": "adopt:feast-days",
+            "category": "faith",
+            "title": "Feast days",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Silas Vane",
+              "role": "priest",
+              "traits": [
+                "gentle",
+                "devout"
+              ],
+              "body": "Church"
+            },
+            "why": "Feast days bring us together. People need joy as well as bread.",
+            "trigger": [
+              "faith is fair",
+              "Upkeep: 17 coin a year",
+              "Town coin: 8,728 coin",
+              "Church purse: 1,482 coin"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Bring in feast days",
+                "cost": 0,
+                "upkeep": 17,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "feast days"
+                  }
+                ],
+                "tradeoff": "Spirits lift. Work stops for the day."
+              },
+              {
+                "key": "more",
+                "label": "Go further: every saint",
+                "cost": 0,
+                "upkeep": 35,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "feast days"
+                  }
+                ],
+                "tradeoff": "A stronger effect. A bigger bill."
+              },
+              {
+                "key": "delegate",
+                "label": "Let them decide",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The Church chooses and pays from its own purse."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Church"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 28,
+                "act": "approved",
+                "what": "a parish school, or a curfew"
+              },
+              {
+                "year": 26,
+                "act": "approved",
+                "what": "the tithe, or fenced fields"
+              },
+              {
+                "year": 24,
+                "act": "refused",
+                "what": "an alms house, or warehouses by the river"
+              },
+              {
+                "year": 23,
+                "act": "refused",
+                "what": "a day of rest, or a watch house"
+              }
+            ],
+            "record": {
+              "approved": 3,
+              "refused": 4,
+              "deferred": 3
+            },
+            "recent": {
+              "approved": 1,
+              "refused": 0,
+              "deferred": 0
+            },
+            "helps": [
+              "clergy",
+              "labour"
+            ],
+            "hurts": [
+              "gentry"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 808,
+          "outputTokens": 65,
+          "firstTextMs": 545,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "A school for the ward: Marsh Town",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Reading and learning are both low in Marsh Town, and the labourers of Old Ford lean for this school, while the clerks also favour it as you weigh the 509 coin cost.\"}",
+          "ms": 778,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c192",
+            "kind": "proposal",
+            "template": "ward-school",
+            "category": "education",
+            "title": "A school for the ward: Marsh Town",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Una Marsh",
+              "role": "member"
+            },
+            "why": "Children in Marsh Town walk a long way to school. The ward wants one close by.",
+            "trigger": [
+              "reading is low",
+              "learning is low",
+              "Cost: 509 coin",
+              "Town coin: 8,728 coin",
+              "Marsh Town Ward Council purse: 6 coin"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Build it in the ward",
+                "cost": 509,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a school"
+                  },
+                  {
+                    "act": "more",
+                    "what": "learning"
+                  }
+                ],
+                "tradeoff": "It costs 509 coin. Learning grows in Marsh Town."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Marsh Town Ward Council"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 25,
+                "act": "deferred",
+                "what": "the ward keeps its own rates"
+              },
+              {
+                "year": 25,
+                "act": "approved",
+                "what": "a market charter for the ward"
+              }
+            ],
+            "record": {
+              "approved": 1,
+              "refused": 0,
+              "deferred": 1
+            },
+            "helps": [
+              "clerical",
+              "labour"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 846,
+          "outputTokens": 61,
+          "firstTextMs": 630,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"As you weigh this, labourers in Old Ford lean for it, while clerks also favour it and farmers are indifferent, and a bumper harvest came in year 29.\"}",
+          "ms": 924,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c195",
+            "kind": "proposal",
+            "template": "green-space",
+            "category": "land",
+            "title": "Which first?",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Osric Cobb",
+              "role": "surveyor",
+              "traits": [
+                "orderly",
+                "far-sighted"
+              ],
+              "body": "Planning Office"
+            },
+            "why": "The riverbank by Bridge Green is a lovely spot. Families walk out to it on rest days. Keep it green for good, with a path and a bench or two. There is a second plan too: a turnpike from old ford to marsh town. Which comes first?",
+            "trigger": [
+              "774 people live here",
+              "the need for homes is low",
+              "crowding is low",
+              "Cost: 180 coin",
+              "Town coin: 8,728 coin"
+            ],
+            "place": {
+              "district": "Old Ford",
+              "road": "grass",
+              "traffic": "quiet"
+            },
+            "options": [
+              {
+                "key": "x_do",
+                "label": "Keep the riverbank by Bridge Green green",
+                "cost": 180,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "works",
+                    "what": "the works"
+                  },
+                  {
+                    "act": "more",
+                    "what": "green land"
+                  }
+                ],
+                "tradeoff": "It costs 180 coin. Nobody may build there. People will walk there."
+              },
+              {
+                "key": "y_do",
+                "label": "A turnpike from Old Ford to Marsh Town",
+                "cost": 8190,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "works",
+                    "what": "the works"
+                  },
+                  {
+                    "act": "more",
+                    "what": "trade"
+                  }
+                ],
+                "tradeoff": "It costs 8,190 coin. Trade between the towns quickens."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Planning Office"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 28,
+                "act": "deferred",
+                "what": "pave the busiest lane"
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 1
+            },
+            "recent": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 1
+            },
+            "helps": [
+              "gentry",
+              "clerical",
+              "labour"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 743,
+          "outputTokens": 56,
+          "firstTextMs": 616,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Reading and learning are both low, and the clerks of Water Hill lean in favour, while the farmers are indifferent after last year's bumper harvest.\"}",
+          "ms": 860,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c205",
+            "kind": "proposal",
+            "template": "adopt:library",
+            "category": "education",
+            "title": "Which first?",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 2,
+            "asker": {
+              "name": "Rhea Ashdown",
+              "role": "schoolmistress",
+              "traits": [
+                "patient",
+                "hopeful"
+              ],
+              "body": "School Board"
+            },
+            "why": "Books are dear. A library would let everyone read. About 1 in ten people can read. There is a second plan too: free schooling. Which comes first?",
+            "trigger": [
+              "reading is low",
+              "learning is low",
+              "Upkeep: 44 coin a year",
+              "Town coin: 8,834 coin",
+              "School Board purse: 0 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "A lending library",
+                "cost": 0,
+                "upkeep": 44,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "the lending library"
+                  }
+                ],
+                "tradeoff": "A small cost each year."
+              },
+              {
+                "key": "y_do",
+                "label": "Free schooling",
+                "cost": 0,
+                "upkeep": 131,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "free schooling"
+                  }
+                ],
+                "tradeoff": "It costs a great deal. Fewer children earn at home."
+              },
+              {
+                "key": "delegate",
+                "label": "Let them decide",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The School Board chooses and pays from its own purse."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the School Board"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Water Hill"
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 0
+            },
+            "helps": [
+              "clerical"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 772,
+          "outputTokens": 52,
+          "firstTextMs": 619,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "template",
+          "reason": "copies an example card",
+          "raw": "{\"why\":\"Since the bumper harvest in year 29, the merchants of Old Ford lean for this festival fund, and the labourers lean for it too.\"}",
+          "ms": 838,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c208",
+            "kind": "proposal",
+            "template": "raise:festival-fund",
+            "category": "faith",
+            "title": "Which first?",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Bryn Hale",
+              "role": "fiddler",
+              "traits": [
+                "merry",
+                "restless"
+              ],
+              "body": "Festival Society"
+            },
+            "why": "Visitors spend freely at a good fair. Our name would travel. There is a second plan too: a playhouse. Which comes first?",
+            "trigger": [
+              "faith is fair",
+              "Upkeep: 110 coin a year",
+              "Town coin: 8,995 coin",
+              "Festival Society purse: 0 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "A festival fund: a festival season",
+                "cost": 0,
+                "upkeep": 110,
+                "effects": [
+                  {
+                    "act": "raise",
+                    "what": "the festival fund"
+                  }
+                ],
+                "tradeoff": "It costs coin. Some call it waste."
+              },
+              {
+                "key": "y_do",
+                "label": "A playhouse",
+                "cost": 1224,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a theatre"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  }
+                ],
+                "tradeoff": "It costs 1,224 coin. Visitors and fame follow."
+              },
+              {
+                "key": "delegate",
+                "label": "Let them decide",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The Festival Society chooses and pays from its own purse."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Festival Society"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "merchants",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 0
+            },
+            "helps": [
+              "trade",
+              "labour"
+            ],
+            "hurts": [
+              "clergy"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 961,
+          "outputTokens": 56,
+          "firstTextMs": 582,
+          "profile": "town",
+          "round": 0,
+          "kind": "proposal",
+          "title": "A stone quay by Crown End",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"I am asking because merchants at Old Ford lean for this stone quay by Crown End, and you refused a similar quay by Brook Row in year 21.\"}",
+          "ms": 840,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c209",
+            "kind": "proposal",
+            "template": "quay",
+            "category": "infrastructure",
+            "title": "A stone quay by Crown End",
+            "year": 30,
+            "season": "spring",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Linus Fairweather",
+              "role": "boatwright",
+              "traits": [
+                "practical",
+                "weathered"
+              ],
+              "body": "River Authority"
+            },
+            "why": "Boats tie up on the mud bank by Crown End. A stone quay would let them load in any weather.",
+            "trigger": [
+              "river trade is fair",
+              "traffic on the roads is low",
+              "Cost: 1,800 coin",
+              "Town coin: 9,019 coin",
+              "River Authority purse: 4 coin"
+            ],
+            "place": {
+              "district": "Crown End",
+              "road": "grass",
+              "traffic": "quiet"
+            },
+            "options": [
+              {
+                "key": "do",
+                "label": "Build the quay",
+                "cost": 1800,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "works",
+                    "what": "the works"
+                  },
+                  {
+                    "act": "more",
+                    "what": "river trade"
+                  }
+                ],
+                "tradeoff": "It costs 1,800 coin. More boats will stop here."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the River Authority"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "merchants",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 29,
+                "act": "deferred",
+                "what": "a bridge at the ford"
+              },
+              {
+                "year": 29,
+                "act": "refused",
+                "what": "dredge the channel, or keep the old fields"
+              },
+              {
+                "year": 26,
+                "act": "approved",
+                "what": "road and river tolls: fair, or field drainage"
+              },
+              {
+                "year": 21,
+                "act": "refused",
+                "what": "a stone quay by Brook Row, or market gardens: many plots"
+              }
+            ],
+            "record": {
+              "approved": 3,
+              "refused": 7,
+              "deferred": 3
+            },
+            "recent": {
+              "approved": 0,
+              "refused": 1,
+              "deferred": 1
+            },
+            "helps": [
+              "trade",
+              "labour"
+            ],
+            "events": [
+              {
+                "year": 29,
+                "what": "a bumper harvest"
+              },
+              {
+                "year": 26,
+                "what": "barges from the coast"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "phase": "fresh-final",
+      "rows": [
+        {
+          "inputTokens": 783,
+          "outputTokens": 48,
+          "firstPreviewMs": 935,
+          "firstTextMs": 607,
+          "profile": "town",
+          "round": 1,
+          "kind": "debate",
+          "title": "A printing licence, or a bigger church",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Reading and learning are both low, and the clerks of Old Ford lean for a printing licence, while the clergy lean against it.\"}",
+          "ms": 944,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c237",
+            "kind": "debate",
+            "template": "debate:adopt:press-licence chapel-upgrade",
+            "category": "education",
+            "title": "A printing licence, or a bigger church",
+            "year": 35,
+            "season": "summer",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Rhea Ashdown",
+              "role": "schoolmistress",
+              "traits": [
+                "patient",
+                "hopeful"
+              ],
+              "body": "School Board"
+            },
+            "why": "The School Board and the Church want different things. You can back one. The other will be sore.",
+            "trigger": [
+              "reading is low",
+              "learning is low"
+            ],
+            "options": [
+              {
+                "key": "a",
+                "label": "Back the School Board: a printing licence",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "the printing licence"
+                  }
+                ],
+                "tradeoff": "Ideas spread. So does grumbling."
+              },
+              {
+                "key": "b",
+                "label": "Back the Church: a bigger church",
+                "cost": 1134,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "spend",
+                    "what": "town coin"
+                  },
+                  {
+                    "act": "build",
+                    "what": "a chapel"
+                  },
+                  {
+                    "act": "more",
+                    "what": "faith"
+                  },
+                  {
+                    "act": "more",
+                    "what": "fame"
+                  }
+                ],
+                "tradeoff": "It costs 1,134 coin. Faith and fame both grow."
+              },
+              {
+                "key": "neither",
+                "label": "Back neither",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Both bodies lose patience."
+              }
+            ],
+            "stances": [
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "clergy",
+                "lean": "against",
+                "p": 0.63
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 32,
+                "act": "lapsed",
+                "what": "a lending library"
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 0
+            },
+            "helps": [
+              "clerical",
+              "clergy"
+            ],
+            "hurts": [
+              "clergy"
+            ],
+            "events": [
+              {
+                "year": 34,
+                "what": "barges from the coast"
+              },
+              {
+                "year": 33,
+                "what": "the summer fair"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 841,
+          "outputTokens": 49,
+          "firstPreviewMs": 799,
+          "firstTextMs": 612,
+          "profile": "town",
+          "round": 1,
+          "kind": "proposal",
+          "title": "Green reserves",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Clerks at Old Ford lean for this, while labourers lean against it, and you let the green space keep lapsing in year 33.\"}",
+          "ms": 807,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c228",
+            "kind": "proposal",
+            "template": "adopt:park-reserve",
+            "category": "land",
+            "title": "Green reserves",
+            "year": 35,
+            "season": "summer",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Osric Cobb",
+              "role": "surveyor",
+              "traits": [
+                "orderly",
+                "far-sighted"
+              ],
+              "body": "Planning Office"
+            },
+            "why": "The town is filling up. Open ground now will be priceless later.",
+            "trigger": [
+              "the need for homes is low",
+              "crowding is low",
+              "Upkeep: 31 coin a year",
+              "Town coin: 10,335 coin",
+              "Planning Office purse: 84 coin"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Bring in green reserves",
+                "cost": 0,
+                "upkeep": 31,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "green reserves"
+                  }
+                ],
+                "tradeoff": "Fewer lots to build on. Land costs more."
+              },
+              {
+                "key": "more",
+                "label": "Go further: parks",
+                "cost": 0,
+                "upkeep": 63,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "green reserves"
+                  }
+                ],
+                "tradeoff": "A stronger effect. A bigger bill."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Planning Office"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "clerks",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "labourers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 33,
+                "act": "lapsed",
+                "what": "keep a green space"
+              },
+              {
+                "year": 28,
+                "act": "deferred",
+                "what": "pave the busiest lane"
+              }
+            ],
+            "record": {
+              "approved": 0,
+              "refused": 0,
+              "deferred": 1
+            },
+            "helps": [
+              "clerical",
+              "gentry"
+            ],
+            "hurts": [
+              "labour"
+            ],
+            "events": [
+              {
+                "year": 34,
+                "what": "barges from the coast"
+              },
+              {
+                "year": 33,
+                "what": "the summer fair"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 730,
+          "outputTokens": 59,
+          "firstPreviewMs": 1562,
+          "firstTextMs": 1321,
+          "profile": "town",
+          "round": 1,
+          "kind": "event",
+          "title": "Barges from the coast",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"We the Town Council ask you to weigh the barges from the coast, as you approved forming the Festival Society in year 29 and have lapsed two earlier matters.\"}",
+          "ms": 1587,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c235",
+            "kind": "event",
+            "template": "event:barges",
+            "category": "event",
+            "title": "Barges from the coast",
+            "year": 35,
+            "season": "summer",
+            "era": "town",
+            "urgency": 2,
+            "asker": {
+              "name": "The town crier",
+              "role": "news",
+              "traits": [
+                "careful",
+                "fair-minded"
+              ],
+              "body": "Town Council"
+            },
+            "why": "Big barges from the coast want to make Hearthvale a regular stop.",
+            "options": [
+              {
+                "key": "welcome",
+                "label": "Welcome them",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Trade booms on the river. Prices fall for some."
+              },
+              {
+                "key": "charge",
+                "label": "Charge a mooring fee",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Coin for the town. Fewer barges stay."
+              },
+              {
+                "key": "pass",
+                "label": "Let them pass by",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Nothing changes on the river."
+              }
+            ],
+            "past": [
+              {
+                "year": 34,
+                "act": "lapsed",
+                "what": "where should the town hall be"
+              },
+              {
+                "year": 33,
+                "act": "lapsed",
+                "what": "a summer fair"
+              },
+              {
+                "year": 29,
+                "act": "heard",
+                "what": "the merchants' petition"
+              },
+              {
+                "year": 29,
+                "act": "approved",
+                "what": "forming the Festival Society"
+              }
+            ],
+            "record": {
+              "approved": 21,
+              "refused": 0,
+              "deferred": 17
+            },
+            "events": [
+              {
+                "year": 34,
+                "what": "barges from the coast"
+              },
+              {
+                "year": 33,
+                "what": "the summer fair"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 886,
+          "outputTokens": 51,
+          "firstPreviewMs": 822,
+          "firstTextMs": 608,
+          "profile": "town",
+          "round": 1,
+          "kind": "debate",
+          "title": "The tithe: tenth, or licences for taverns",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"I ask this as the clergy of Brook Row, who lean for it, while merchants and labourers lean against it, and the treasury is high.\"}",
+          "ms": 846,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c244",
+            "kind": "debate",
+            "template": "debate:raise:tithe tavern-licences",
+            "category": "tax",
+            "title": "The tithe: tenth, or licences for taverns",
+            "year": 35,
+            "season": "summer",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Silas Vane",
+              "role": "priest",
+              "traits": [
+                "gentle",
+                "devout"
+              ],
+              "body": "Church"
+            },
+            "why": "The Church and the Town Watch want different things. You can back one. The other will be sore.",
+            "trigger": [
+              "the treasury is high"
+            ],
+            "options": [
+              {
+                "key": "a",
+                "label": "Back the Church: the tithe: tenth",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "raise",
+                    "what": "the tithe"
+                  }
+                ],
+                "tradeoff": "Faith grows strong. Purses grow thin."
+              },
+              {
+                "key": "b",
+                "label": "Back the Town Watch: licences for taverns",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "less",
+                    "what": "unrest"
+                  },
+                  {
+                    "act": "more",
+                    "what": "order"
+                  }
+                ],
+                "tradeoff": "Quieter nights. Fewer places to drink."
+              },
+              {
+                "key": "neither",
+                "label": "Back neither",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "Both bodies lose patience."
+              }
+            ],
+            "stances": [
+              {
+                "who": "clergy",
+                "lean": "for",
+                "p": 0.75,
+                "where": "Brook Row"
+              },
+              {
+                "who": "merchants",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "labourers",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 34,
+                "act": "lapsed",
+                "what": "feast days, or no child labour"
+              },
+              {
+                "year": 28,
+                "act": "approved",
+                "what": "a parish school, or a curfew"
+              },
+              {
+                "year": 26,
+                "act": "approved",
+                "what": "the tithe, or fenced fields"
+              },
+              {
+                "year": 24,
+                "act": "refused",
+                "what": "an alms house, or warehouses by the river"
+              }
+            ],
+            "record": {
+              "approved": 3,
+              "refused": 4,
+              "deferred": 3
+            },
+            "helps": [
+              "clergy",
+              "gentry"
+            ],
+            "hurts": [
+              "labour",
+              "trade"
+            ],
+            "events": [
+              {
+                "year": 34,
+                "what": "barges from the coast"
+              },
+              {
+                "year": 33,
+                "what": "the summer fair"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 943,
+          "outputTokens": 59,
+          "firstPreviewMs": 835,
+          "firstTextMs": 644,
+          "profile": "town",
+          "round": 1,
+          "kind": "proposal",
+          "title": "Which first?",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Since the barges from the coast arrived in year 34, you have been asked about a rent cap, and farmers at Old Ford lean for it while merchants lean against.\"}",
+          "ms": 845,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c241",
+            "kind": "proposal",
+            "template": "adopt:rent-cap",
+            "category": "land",
+            "title": "Which first?",
+            "year": 35,
+            "season": "summer",
+            "era": "town",
+            "urgency": 1,
+            "asker": {
+              "name": "Wynn Holt",
+              "role": "master smith",
+              "traits": [
+                "proud",
+                "exacting"
+              ],
+              "body": "Craft Guild"
+            },
+            "why": "Old shops and small farms are priced out of the centre. A cap would let them stay. There is a second plan too: keep the old workshops. Which comes first?",
+            "trigger": [
+              "the need for homes is low",
+              "crowding is low",
+              "Upkeep: 17 coin a year",
+              "Town coin: 11,471 coin",
+              "Craft Guild purse: 95 coin"
+            ],
+            "options": [
+              {
+                "key": "x_do",
+                "label": "A rent cap",
+                "cost": 0,
+                "upkeep": 17,
+                "effects": [
+                  {
+                    "act": "adopt",
+                    "what": "the rent cap"
+                  }
+                ],
+                "tradeoff": "Small businesses stay put. Fewer new buildings go up."
+              },
+              {
+                "key": "y_do",
+                "label": "Keep the old workshops",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "lower",
+                    "what": "the workshop quarter"
+                  }
+                ],
+                "tradeoff": "The crafts keep a home. That land cannot be built up."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Craft Guild"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "farmers",
+                "lean": "for",
+                "p": 0.7,
+                "where": "Old Ford"
+              },
+              {
+                "who": "makers",
+                "lean": "for",
+                "p": 0.7
+              },
+              {
+                "who": "labourers",
+                "lean": "for",
+                "p": 0.7
+              },
+              {
+                "who": "merchants",
+                "lean": "against",
+                "p": 0.65
+              },
+              {
+                "who": "clerks",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 35,
+                "act": "lapsed",
+                "what": "a mark of quality"
+              },
+              {
+                "year": 32,
+                "act": "lapsed",
+                "what": "guild seats, or an exchange hall"
+              },
+              {
+                "year": 27,
+                "act": "refused",
+                "what": "water-mill rights, or land value tax"
+              },
+              {
+                "year": 24,
+                "act": "refused",
+                "what": "apprenticeships, or free trade: wide open"
+              }
+            ],
+            "record": {
+              "approved": 2,
+              "refused": 5,
+              "deferred": 4
+            },
+            "helps": [
+              "craft",
+              "farm",
+              "labour"
+            ],
+            "hurts": [
+              "gentry",
+              "trade"
+            ],
+            "events": [
+              {
+                "year": 34,
+                "what": "barges from the coast"
+              },
+              {
+                "year": 33,
+                "what": "the summer fair"
+              }
+            ]
+          }
+        },
+        {
+          "inputTokens": 782,
+          "outputTokens": 56,
+          "firstPreviewMs": 708,
+          "firstTextMs": 420,
+          "profile": "town",
+          "round": 1,
+          "kind": "proposal",
+          "title": "The ward keeps its own rates: Marsh Town",
+          "source": "llm",
+          "reason": "",
+          "raw": "{\"why\":\"Marsh Town's ward purse holds only 63 coin while the town treasury stands at 11,471, and the farmers are indifferent to the matter.\"}",
+          "ms": 713,
+          "facts": {
+            "v": 1,
+            "type": "card",
+            "id": "c242",
+            "kind": "proposal",
+            "template": "ward-rates",
+            "category": "tax",
+            "title": "The ward keeps its own rates: Marsh Town",
+            "year": 35,
+            "season": "summer",
+            "era": "town",
+            "urgency": 0,
+            "asker": {
+              "name": "Una Marsh",
+              "role": "member"
+            },
+            "why": "Marsh Town says its taxes are spent on the old town. It wants to keep a share for itself.",
+            "trigger": [
+              "the treasury is high",
+              "Town coin: 11,471 coin",
+              "Marsh Town Ward Council purse: 63 coin"
+            ],
+            "options": [
+              {
+                "key": "do",
+                "label": "Let it keep a share",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "nothing"
+                  }
+                ],
+                "tradeoff": "The ward grows bolder. The town purse shrinks a little."
+              },
+              {
+                "key": "not_now",
+                "label": "Not now",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "wait",
+                    "what": "they ask again later"
+                  }
+                ],
+                "tradeoff": "They will ask again later."
+              },
+              {
+                "key": "refuse",
+                "label": "Refuse",
+                "cost": 0,
+                "upkeep": 0,
+                "effects": [
+                  {
+                    "act": "displease",
+                    "what": "the Marsh Town Ward Council"
+                  }
+                ],
+                "tradeoff": "They will not like it."
+              }
+            ],
+            "stances": [
+              {
+                "who": "farmers",
+                "lean": "indifferent",
+                "p": 0.6
+              }
+            ],
+            "past": [
+              {
+                "year": 35,
+                "act": "lapsed",
+                "what": "a school for the ward"
+              },
+              {
+                "year": 25,
+                "act": "deferred",
+                "what": "the ward keeps its own rates"
+              },
+              {
+                "year": 25,
+                "act": "approved",
+                "what": "a market charter for the ward"
+              }
+            ],
+            "record": {
+              "approved": 1,
+              "refused": 0,
+              "deferred": 1
+            },
+            "hurts": [
+              "gentry"
+            ],
+            "events": [
+              {
+                "year": 34,
+                "what": "barges from the coast"
+              },
+              {
+                "year": 33,
+                "what": "the summer fair"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

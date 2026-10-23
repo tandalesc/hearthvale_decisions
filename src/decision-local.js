@@ -1,15 +1,15 @@
 // Answers decision questions locally with a student model where one exists,
-// and passes the rest to the decision client (docs/design/decision-distillation.md §4).
+// with local-rule fallback for free sessions and bounded teacher calls for paid sessions.
 //
 //   const bus = createLocalAnswerer({client});
-//   await bus.load('/students/decisions.v1.json');   // optional; until then everything passes through
+//   await bus.load('/students/decisions.v1.json');   // optional; absent students use local rules
 //   bus.ask(kind, id, context, {allowed, state, ...}) // the client's ask
 //
 // Same interface as the client (ask, stats, configure, reset, flush), so the
 // scheduler and the session do not change. A question for a kind a student
 // knows is validated as the client would and answered locally; its answer has
 // the client's shape with `model: 'student:...'`. The order stays student,
-// then service, then local rules (the scheduler's fallbacks).
+// then a paid teacher when eligible, then local rules (the scheduler's fallbacks).
 //
 // Student work is held to `budgetMs` per turn of the event loop: a month-start
 // sweep can ask 50+ questions in one tick (and encode a new snapshot for each
@@ -41,11 +41,12 @@
 // used. The weights never change within a save.
 import {validateQuestion, validateState, stateKey} from './decision-kinds.js';
 import {loadStudent} from './decision-student.js';
+import {isPaid} from './entitlements.js';
 
 const BUDGET_MS = 4;
 
 export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS, now = () => performance.now(),
-  defer = (fn) => setTimeout(fn, 0), report = null, live = {}} = {}) {
+  defer = (fn) => setTimeout(fn, 0), report = null, live = {}, entitlement = {tier: 'free'}} = {}) {
   const liveCfg = {share: 0.1, maxRate: 1, endpoint: '/api/decisions', fetcher: (...a) => globalThis.fetch(...a), ...live};
   let livePausedUntil = 0;
   // One live question to the proxy; -> the answer, or null (the student's is used).
@@ -109,9 +110,9 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
   const counters = {answered: 0, invalid: 0, deferred: 0, flagged: 0, reported: 0, taught: 0, taughtUnsure: 0, teacherEmpty: 0, liveRefused: 0};
   const serviceUp = () => {
     const st = client.stats?.();
-    return !!st && st.state !== 'backoff' && st.network !== 'offline';
+    return isPaid(entitlement) && !!st && st.state !== 'backoff' && st.network !== 'offline';
   };
-  const rep = report && {endpoint: '/api/decisions/novel', flushMs: 30000, maxBatch: 64, perSession: 5000,
+  const rep = report && {endpoint: '/api/decisions/novel', flushMs: 30000, maxBatch: 32, perSession: 5000,
     fetcher: (...a) => globalThis.fetch(...a), timer: (fn, ms) => setTimeout(fn, ms), ...report};
   const flaggedKeys = new Set(), outbox = [];
   const invalidBy = {};   // kind -> {count, last error}: questions the checks refused
@@ -122,7 +123,7 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
     if (flaggedKeys.has(key)) return;
     flaggedKeys.add(key);
     counters.flagged++;
-    outbox.push({kind, context, ...(allowed ? {allowed} : {}), state, reason, ...(expectedKL != null ? {expectedKL: Math.round(expectedKL * 1e5) / 1e5} : {})});
+    outbox.push({schemaVersion: 1, studentVersion: byKind.get(kind)?.version ?? null, kind, context, ...(allowed ? {allowed} : {}), state, reason, ...(expectedKL != null ? {expectedKL: Math.round(expectedKL * 1e5) / 1e5} : {})});
     if (outbox.length >= rep.maxBatch) flush();
     else if (!flushTimer) flushTimer = rep.timer(flush, rep.flushMs);
   }
@@ -152,18 +153,20 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
   }
   function run(job) {
     const s = currentSlice(), t0 = now();
-    const answer = job.student.answer(job.kind, job.state, job.context, job.allowed);
+    let answer;
+    try { answer = job.student.answer(job.kind, job.state, job.context, job.allowed); }
+    catch { return null; }
     s.used += now() - t0;
     counters.answered++;
     const threshold = job.student.thresholds?.threshold_p95 ?? Infinity;
-    if (answer.unknown > 0) flag(job.kind, job.state, job.context, job.allowed, 'unknown', answer.expectedKL);
-    else if (answer.expectedKL != null && answer.expectedKL >= threshold) flag(job.kind, job.state, job.context, job.allowed, 'confidence', answer.expectedKL);
+    if (answer?.unknown > 0) flag(job.kind, job.state, job.context, job.allowed, 'unknown', answer.expectedKL);
+    else if (answer?.expectedKL != null && answer.expectedKL >= threshold) flag(job.kind, job.state, job.context, job.allowed, 'confidence', answer.expectedKL);
     return answer;
   }
   // The student's answer, or the teacher's when the student is among the least sure.
   function answerOrTeach(job) {
     const answer = run(job);
-    if (answer.expectedKL != null && answer.expectedKL >= liveThreshold(job.student) && serviceUp() && takeToken()) {
+    if (answer?.expectedKL != null && answer.expectedKL >= liveThreshold(job.student) && serviceUp() && takeToken()) {
       counters.taughtUnsure++;
       return teach(job.kind, job.context, job.allowed, job.state).then((a) => {
         if (a) return a;
@@ -184,14 +187,20 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
   function ask(kind, id, context, opts = {}) {
     const student = byKind.get(kind);
     if (!student) {
-      // No student for this kind: the service answers; log it so a later student can.
+      // No student for this kind: report coverage, then use bounded paid teaching or local rules.
       if (rep) {
         try {
           const q = validateQuestion({kind, id, context, ...(opts.allowed ? {allowed: opts.allowed} : {})});
           flag(q.kind, validateState(q.kind, opts.state), q.context, q.allowed, 'kind');
         } catch { /* invalid: the client rejects it too */ }
       }
-      return client.ask(kind, id, context, opts);
+      // A missing student must never turn a free question into a hosted call.
+      if (!serviceUp()) return Promise.resolve(null);
+      try {
+        const q = validateQuestion({kind, id, context, ...(opts.allowed ? {allowed: opts.allowed} : {})});
+        const state = validateState(q.kind, opts.state);
+        return takeToken() ? teach(q.kind, q.context, q.allowed, state) : Promise.resolve(null);
+      } catch { return Promise.resolve(null); }
     }
     let question, state;
     try {
@@ -218,7 +227,7 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
   }
 
   // Fetches a bundle and starts answering its kinds. Returns the kinds, or null
-  // (and keeps passing through) when it cannot load.
+  // (and keeps existing fallbacks) when it cannot load.
   async function load(url, fetcher = (...a) => globalThis.fetch(...a)) {
     try {
       const response = await fetcher(url);
@@ -227,7 +236,7 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
       add(student);
       return [...student.kinds];
     } catch (err) {
-      console.warn(`[hearthvale] decision student ${url} not loaded; asking the service`, err);
+      console.warn(`[hearthvale] decision student ${url} not loaded; using available fallbacks`, err);
       return null;
     }
   }
@@ -243,6 +252,7 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
 
   return {
     ask,
+    clear: () => byKind.clear(),
     load,
     use,
     stats: () => ({...client.stats(), local: {...counters, queued: queue.length, kinds: [...byKind.keys()], invalidBy: {...invalidBy},
@@ -254,46 +264,37 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
   };
 }
 
-// Which student version answers: every town, new or saved, takes the latest
-// published version when it opens, and records it in its governance state. A
-// version changes only between sessions, never while a town runs, and each one
-// passed the loop's gates against its predecessor, so a saved town moves on in
-// small steps. `pinned` (the ?student=N URL parameter) holds every town on
-// version N while it is published, for testing. `base` is the students
-// directory, holding manifest.json {latest, versions: {n: file}}.
-export function createStudentVersions({answerer, base, pinned = null, fetcher = (...a) => globalThis.fetch(...a)}) {
-  let manifest = null, current = null;
-  const urlOf = (v) => new URL(manifest.versions[v], base).href;
-  async function switchTo(v) {
-    if (v === current) return true;
-    const kinds = await answerer.use(urlOf(v), fetcher);
-    if (kinds) current = v;
-    return !!kinds;
+// One published student version per play session. A later session refreshes the
+// manifest; opening another town in this session keeps the already loaded model.
+// Saved governance.studentVersion records provenance rather than a permanent pin.
+export function createStudentVersions({answerer, base, manifestURL = null, fallbackBase = null, pinned = null, fetcher = (...a) => globalThis.fetch(...a)}) {
+  let current = null, started = null;
+  async function loadPublished(directory, manifestUrl) {
+    try {
+      const response = await fetcher(manifestUrl);
+      if (!response.ok) return false;
+      const manifest = await response.json();
+      const want = String(pinned != null && manifest.versions?.[pinned] ? pinned : manifest.latest);
+      if (!manifest.versions?.[want]) return false;
+      const kinds = await answerer.use(new URL(manifest.versions[want], directory).href, fetcher);
+      if (!kinds) return false;
+      current = want;
+      return true;
+    } catch { return false; }
+  }
+  async function start() {
+    if (!started) started = (async () => {
+      const loaded = await loadPublished(base, manifestURL ?? new URL('manifest.json', base).href);
+      if (!loaded && fallbackBase) await loadPublished(fallbackBase, new URL('manifest.json', fallbackBase).href);
+      return current;
+    })();
+    return started;
   }
   return {
-    async start() {
-      try {
-        const r = await fetcher(new URL('manifest.json', base).href);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        manifest = await r.json();
-      } catch (err) {
-        console.warn('[hearthvale] no decision students published; asking the service', err);
-        return null;
-      }
-      await switchTo(String(manifest.latest));
-      return current;
-    },
-    // Called when a town opens, new or saved: the latest version (or the pinned one).
+    start,
     async pin(state) {
-      if (!manifest) return null;
-      const gov = (state.governance ??= {});
-      let want = String(manifest.latest);
-      if (pinned != null) {
-        if (manifest.versions[pinned]) want = String(pinned);
-        else console.warn(`[hearthvale] decision student v${pinned} is not published; using v${manifest.latest}`);
-      }
-      await switchTo(want);
-      gov.studentVersion = current;
+      await start();
+      if (current != null) (state.governance ??= {}).studentVersion = current;
       return current;
     },
     get version() { return current; },

@@ -9,13 +9,19 @@
     "start": "node server/serve.js",
     "test": "node --test tests/*.test.js",
     "benchmark:simulation": "node scripts/benchmark-simulation.js",
-    "benchmark:browser": "node scripts/benchmark-browser.js"
+    "benchmark:browser": "node scripts/benchmark-browser.js",
+    "dev:cloudflare": "npm run build && wrangler dev --config cloudflare/wrangler.toml",
+    "check:cloudflare": "npm run build && wrangler deploy --dry-run --config cloudflare/wrangler.toml",
+    "deploy:cloudflare": "npm run build && wrangler deploy --config cloudflare/wrangler.toml"
   },
   "dependencies": {
     "three": "^0.180.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261019.2-beta",
     "vite": "^7.1.0",
-    "@playwright/test": "^1.56.0"
+    "wrangler": "4.152.0"
   }
 }

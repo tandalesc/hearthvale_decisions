@@ -375,7 +375,7 @@ test('a torn faction splits in two, and merges back after ten calm years', () =>
   assert.equal(factionOf(s, farmers[0]), 'farmers');
 });
 
-test('cards ask for prose; stored prose is shown, template text is the fallback', () => {
+test('cards expose stored prose separately while canonical reasons and trade-offs stay authoritative', () => {
   const s = freshTown();
   const card = addCard(s, makeCard(s, {kind: 'proposal', from: 'moot', templateId: 'p', title: 'A plan', why: 'Template why.',
     options: [{key: 'do', label: 'Do it', tradeoff: 'Template trade-off.'}]}));
@@ -385,9 +385,11 @@ test('cards ask for prose; stored prose is shown, template text is the fallback'
   assert.equal(shown.why, 'Template why.');
   assert.equal(setCardProse(s, card.id, {why: 'Mara leans in. The plan is sound.', options: {do: 'It will work.'}, source: 'narrator'}).ok, true);
   shown = view.selectDocket(s)[0];
-  assert.equal(shown.why, 'Mara leans in. The plan is sound.');
+  assert.equal(shown.why, 'Template why.');
+  assert.equal(shown.prose.why, 'Mara leans in. The plan is sound.');
   assert.equal(shown.templateWhy, 'Template why.');
-  assert.equal(shown.options.find((o) => o.key === 'do').tradeoff, 'It will work.');
+  assert.equal(shown.options.find((o) => o.key === 'do').tradeoff, 'Template trade-off.');
+  assert.equal(shown.prose.options.do, 'It will work.');
   assert.equal(shown.options.find((o) => o.key === 'refuse').tradeoff, 'They will not like it.');
   assert.equal(card.needsProse, false);
 });

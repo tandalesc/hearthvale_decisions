@@ -1,7 +1,12 @@
 {
-  "latest": 2,
+  "latest": 7,
   "versions": {
     "1": "decisions.v1.json",
-    "2": "decisions.v2.json"
+    "2": "decisions.v2.json",
+    "3": "decisions.v3.json",
+    "4": "decisions.v4.json",
+    "5": "decisions.v5.json",
+    "6": "decisions.v6.json",
+    "7": "decisions.v7.json"
   }
 }

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f7ef">
+  <title>Hearthvale has moved</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:wght@400;500;600;700&display=swap">
+  <style>
+    :root { color-scheme: light; --paper:#fafbf2; --card:#fffef8; --ink:#2f3f2f; --sub:#5a6a55; --line:#dce2cf; --green:#526d42; --soft:#e9efdf; --gold:#b68d52; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; color:var(--ink); background:radial-gradient(ellipse at 50% -10%, #ecf2df 0%, var(--paper) 58%); font:15px/1.5 'DM Sans',system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+    .wrap { width:min(100% - 36px, 760px); margin:0 auto; padding:58px 0 64px; }
+    .brand { display:flex; align-items:center; justify-content:center; gap:9px; margin-bottom:38px; font:600 27px/1 'Fraunces',Georgia,serif; letter-spacing:-.03em; }
+    .brand svg { width:29px; height:29px; }
+    h1 { margin:10px 0 13px; font:600 clamp(35px,7vw,55px)/1.06 'Fraunces',Georgia,serif; letter-spacing:-.045em; text-align:center; }
+    .lede { max-width:570px; margin:0 auto 28px; color:var(--sub); font-size:17px; text-align:center; }
+    .actions { display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin:0 0 37px; }
+    a.button, button { display:inline-flex; align-items:center; justify-content:center; gap:7px; border-radius:10px; border:1px solid var(--line); padding:11px 17px; min-height:44px; background:var(--card); color:var(--ink); font:600 14px/1.2 'DM Sans',system-ui,sans-serif; text-decoration:none; cursor:pointer; }
+    a.button.primary, button.primary { background:var(--green); border-color:var(--green); color:white; }
+    a.button:hover, button:hover { filter:brightness(.96); }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .panel { background:var(--card); border:1px solid var(--line); border-radius:19px; padding:clamp(20px,5vw,32px); box-shadow:0 14px 45px #526d4210; }
+    .panel h2 { margin:0 0 5px; font:600 27px/1.2 'Fraunces',Georgia,serif; letter-spacing:-.025em; }
+    .panel > p { margin:0 0 19px; color:var(--sub); }
+    .status { padding:14px 16px; border-radius:11px; background:var(--soft); color:var(--ink); }
+    .status.error { background:#f8e9df; }
+    .towns { list-style:none; padding:0; margin:0; }
+    .town { display:flex; align-items:center; gap:15px; border-top:1px solid var(--line); padding:16px 0; }
+    .town:first-child { border-top:0; }
+    .town-info { flex:1; min-width:0; }
+    .town-name { margin:0 0 2px; font:600 20px/1.2 'Fraunces',Georgia,serif; overflow-wrap:anywhere; }
+    .town-meta { color:var(--sub); font-size:13px; }
+    .town-warning { margin-top:5px; color:#98583c; font-size:12px; }
+    .town button { flex:none; }
+    .foot { max-width:630px; margin:25px auto 0; color:var(--sub); font-size:13px; text-align:center; }
+    .steps { padding:15px 18px; border-radius:11px; background:#f1f4e9; margin:18px 0 0; }
+    .steps strong { color:var(--ink); }
+    .steps ol { margin:5px 0 0; padding-left:21px; }
+    .steps li { padding:2px 0; }
+    @media(max-width:540px) { .wrap{padding-top:35px;} .brand{margin-bottom:30px;} .town{align-items:flex-start;flex-wrap:wrap;} .town button{width:100%;} }
+    @media(prefers-color-scheme:dark) { :root{color-scheme:dark;--paper:#1f2622;--card:#28322b;--ink:#e8e9dc;--sub:#b9c2af;--line:#3d4b3f;--green:#93b37a;--soft:#354535;} body{background:radial-gradient(ellipse at 50% -10%,#304333 0%,var(--paper) 58%);} a.button.primary,button.primary{color:#17231a;} .steps{background:#303d32;} .status.error{background:#4c342f;} .town-warning{color:#e7a985;} }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="brand"><svg viewBox="0 0 64 64" aria-hidden="true"><path fill="#9bb671" d="M48 13C27 9 12 25 18 42c16 13 34-1 30-29Z"/><path fill="none" stroke="#526d42" stroke-width="4" stroke-linecap="round" d="m15 51 23-25"/></svg>Hearthvale</div>
+    <h1>Hearthvale has moved.</h1>
+    <p class="lede">Continue at our new site. If you built towns here, download them from this browser first, then import them there.</p>
+    <div class="actions"><a class="button primary" href="https://hearthvale.shishirtandale.com/">Visit the new Hearthvale &rarr;</a></div>
+    <section class="panel" aria-labelledby="towns-title">
+      <h2 id="towns-title">Your towns on this device</h2>
+      <p>These saves stay in this browser on this old site. Download each town you want to bring along.</p>
+      <div id="status" class="status" role="status" aria-live="polite">Looking for towns saved in this browser…</div>
+      <ul id="towns" class="towns" hidden></ul>
+      <div class="steps"><strong>To move a town</strong><ol><li>Download its JSON file from this page.</li><li>Open the new Hearthvale and choose <strong>Play → Manage Towns → Import town</strong>.</li><li>Select the downloaded file. Repeat for each town.</li></ol></div>
+    </section>
+    <p class="foot">Nothing is deleted from this browser. Towns saved on another device or browser must be exported there. This page cannot move saves automatically between sites.</p>
+  </main>
+  <script src="/migration.js" defer></script>
+</body>
+</html>

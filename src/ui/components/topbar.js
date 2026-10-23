@@ -23,7 +23,7 @@ export function createTopbar(ctx) {
       <div class="brand-text"><h1>Hearthvale</h1><div class="date"><span class="when"></span><span class="era-chip"></span><button class="here-chip" type="button" hidden></button></div></div>
     </div>
     <div class="metrics" role="group" aria-label="The town at a glance"></div>
-    <div class="topbar-end"><button class="icon-btn settings-btn" aria-label="Settings" title="Settings">${icon('settings')}</button></div>`;
+    <div class="topbar-end">${ctx.openAccount ? `<button type="button" class="btn btn-ghost account-entry">${ctx.entitlement?.()?.authenticated ? 'Account' : 'Sign in'}</button>` : ''}<button class="icon-btn settings-btn" aria-label="Settings" title="Settings">${icon('settings')}</button></div>`;
   el.querySelector('.brand h1').textContent = ctx.townName?.() || 'Hearthvale';
   const host = el.querySelector('.metrics');
   const nodes = {};
@@ -35,6 +35,7 @@ export function createTopbar(ctx) {
     nodes[m.key] = b;
   }
   el.querySelector('.settings-btn').addEventListener('click', () => ctx.openSettings());
+  el.querySelector('.account-entry')?.addEventListener('click', () => ctx.openAccount());
   el.querySelector('.here-chip').addEventListener('click', () => ctx.openPlaces?.());
   // On phones the date sits here (the drawer keeps only the time controls),
   // and its "toward the next age" popover opens downward, clear of the drawer.

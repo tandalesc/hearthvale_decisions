@@ -103,7 +103,7 @@ test('local answerer: student kinds answer locally within a per-turn budget; the
   const bus = createLocalAnswerer({client, students: [student], budgetMs: 3, now: () => clock, defer: (fn) => turns.push(fn)});
   const asks = Array.from({length: 7}, (_, i) => bus.ask('resident_routine', `p${i}`, walker, {state: district}));
   await bus.ask('choose_trade', 'x', {}, {state: town});
-  assert.deepEqual(passed, ['choose_trade'], 'kinds without a student go to the client');
+  assert.deepEqual(passed, [], 'free missing kinds use local rules');
   const settled = new Set();
   asks.forEach((p, i) => p.then(() => settled.add(i)));
   await Promise.resolve();
@@ -167,7 +167,7 @@ test('local answerer: unknown values go to the live teacher when it is up, else 
     assert.equal(init.headers['X-Hearthvale-Live'], '1');
     return {ok: true, status: 200, json: async () => ({answers: {0: {kind: 'resident_routine', choice: 'work', confidence: 1, probabilities: {work: 1}}}})};
   };
-  const bus = createLocalAnswerer({client, students: [student], live: {fetcher}});
+  const bus = createLocalAnswerer({client, students: [student], entitlement: {tier: 'paid'}, live: {fetcher}});
   const odd = {...district, character: 'farms'};   // unknown to this tiny vocabulary
   assert.equal((await bus.ask('resident_routine', 'a', walker, {state: odd})).choice, 'work');
   assert.deepEqual(asked, ['resident_routine'], 'the teacher answered it');
@@ -224,7 +224,7 @@ test('student versions: every town opens on the latest version; ?student=N pins 
   const town = {}, save = {governance: {studentVersion: 1}};
   assert.equal(await versions.pin(town), '2');
   assert.equal(town.governance.studentVersion, '2');
-  assert.equal(await versions.pin(save), '2', 'an old save moves to the latest version when it opens');
+  assert.equal(await versions.pin(save), '2', 'a new session refreshes a save to its published student version');
   assert.equal(save.governance.studentVersion, '2', 'and records it');
   const pinned = createStudentVersions({answerer: bus, base: 'https://game.test/students/', pinned: '1', fetcher});
   await pinned.start();
@@ -249,7 +249,7 @@ test('live teacher: the least sure 10% go to the teacher, tapering to 50 a secon
     if (refuse) return {ok: false, status: 429, json: async () => ({retryAfterMs: 5000})};
     return {ok: true, status: 200, json: async () => ({answers: {0: teacherAnswer}})};
   };
-  const bus = createLocalAnswerer({client, students: [student], now: () => clock, budgetMs: Infinity, defer: () => {}, live: {maxRate: 50, fetcher}});
+  const bus = createLocalAnswerer({client, students: [student], entitlement: {tier: 'paid'}, now: () => clock, budgetMs: Infinity, defer: () => {}, live: {maxRate: 50, fetcher}});
   const ask = (i) => bus.ask('resident_routine', `q${i}`, walker, {state: district});
 
   kl = 0.06;   // above the 90th-percentile rung (0.05): live at the start

@@ -51,7 +51,8 @@ export function createInspector(ctx) {
       <button class="icon-btn close" aria-label="Close" title="Close (Esc)">${icon('close')}</button></header>
     <div class="chips head-chips"></div>
     <p class="objective" hidden></p>
-    <blockquote class="note" hidden aria-live="polite"><p class="note-text"></p><div class="shimmer" aria-hidden="true"><i></i><i></i></div><p class="note-when" hidden></p></blockquote>
+    <span class="sr-only note-status" role="status" aria-live="polite"></span>
+    <blockquote class="note" hidden><p class="note-text"></p><div class="shimmer" aria-hidden="true"><i></i><i></i></div><p class="note-when" hidden></p></blockquote>
     <dl class="details"></dl>
     <div class="why" id="${WHY_ID}" hidden><h4>Why they say so</h4><ul></ul></div>
     <div class="inspector-actions" role="toolbar" aria-label="Actions">
@@ -166,17 +167,21 @@ export function createInspector(ctx) {
     setText($('.note-text'), '');
     $('.note').classList.add('is-waiting');
     let streamed = '';
+    $('.note').setAttribute('aria-busy', 'true');
+    setText($('.note-status'), '');
     const onToken = (delta, soFar) => {
-      if (mine.signal.aborted || reduced()) return;
+      if (mine.signal.aborted) return;
       streamed = soFar ?? streamed + delta;
-      setGoal(streamed);
+      setGoal(streamed, true);
     };
     const ask = n.noteFor && peek
       ? n.noteFor(null, target, {peek, notes: ctx.notes, signal: mine.signal, onToken, regenerate: true}).then((r) => r?.text)
       : n.narrate(facts, {signal: mine.signal, onToken});
     ask.then((text) => {
       if (mine.signal.aborted || !text) return;
-      setGoal(text, !streamed);
+      setGoal(text, true);
+      $('.note').removeAttribute('aria-busy');
+      setText($('.note-status'), 'Town note ready.');
     }).catch(() => {});
   }
 

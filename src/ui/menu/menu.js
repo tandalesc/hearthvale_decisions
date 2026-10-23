@@ -7,7 +7,7 @@
 // seeds and the valley map's worker.
 //
 //   const menu = createMainMenu({saves, prefs});
-//   const choice = await menu.choose();   // {kind: 'continue'|'load', id} | {kind: 'new', ...} | {kind: 'import', raw, name}
+//   const choice = await menu.choose();   // {kind: 'continue'|'load', id} | {kind: 'new', ...}
 //   menu.busy('Opening Millbrook…');      // while main.js builds the town
 //   menu.fail('That town cannot be opened.'); then choose() again
 //   menu.close();                         // fades out over the running game
@@ -79,7 +79,7 @@ function download(name, text) {
 
 const fileName = (meta) => `${String(meta.name || 'hearthvale').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-year-${meta.year ?? 0}.json`;
 
-export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
+export function createMainMenu({saves, prefs, start = 'title', openAccount}) {
   mountSprite();
   applyLook(prefs);
   const darkMedia = matchMedia('(prefers-color-scheme: dark)');
@@ -105,10 +105,7 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
         <p class="mm-tagline">A town that grows into a city over 150 years, and remembers every choice you made along the way.</p>
       </header>
       <div class="mm-body"></div>
-      <footer class="mm-foot">
-        <label class="mm-import btn btn-ghost">${icon('upload')}Import a town file<input type="file" accept="application/json,.json" class="sr-only" data-act="import"></label>
-        <span class="mm-version">${version ? `Version ${esc(version)}` : ''}</span>
-      </footer>
+      ${openAccount ? '<footer class="mm-foot"><button type="button" class="btn btn-ghost mm-account" data-act="account">Sign in</button><button type="button" class="mm-account-tier" data-act="account" aria-haspopup="dialog" title="View your tier and benefits" hidden></button></footer>' : ''}
     </main>
     <p class="mm-status" role="status" aria-live="polite"></p>`;
   document.body.append(root);
@@ -121,7 +118,7 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
   let towns = [];
   let latest = null;
   let resolveChoice = null;
-  let selected = null;     // the town picked on the Your towns screen
+  let selected = null;     // the town picked on the Manage Towns screen
   let confirmDelete = null;
   const urls = new Set();
   const objectUrl = (blob) => { const u = URL.createObjectURL(blob); urls.add(u); return u; };
@@ -151,11 +148,13 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
   }
 
   // ---------- screens ----------
-  const screens = {title: renderTitle, new: renderNew, towns: renderTowns, settings: renderSettings, about: renderAbout};
+  const parentScreen = {play: 'title', new: 'play', towns: 'play', settings: 'title', about: 'title'};
+  const screens = {title: renderTitle, play: renderPlay, new: renderNew, towns: renderTowns, settings: renderSettings, about: renderAbout};
 
   function go(screen, {focus = true} = {}) {
     if (!screens[screen]) return;
     root.dataset.screen = screen;
+    root.querySelector('.mm-back').dataset.go = parentScreen[screen] ?? 'title';
     confirmDelete = null;
     say('');
     body.innerHTML = '';
@@ -164,18 +163,28 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
     if (focus) requestAnimationFrame(() => (body.querySelector('[data-autofocus]') ?? body.querySelector('h2') ?? body.querySelector('button'))?.focus({preventScroll: true}));
   }
 
-  function renderTitle() {
-    const items = [];
-    if (latest) items.push({go: 'continue', label: 'Continue', sub: `${latest.name || 'Hearthvale'}, year ${latest.year ?? 0}. ${townLine(latest)}`, cls: 'mm-continue'});
-    items.push({go: 'new', label: 'New town', sub: 'Choose a valley and begin with seven families.'});
-    if (towns.length) items.push({go: 'towns', label: 'Your towns', sub: `${towns.length} ${towns.length === 1 ? 'town' : 'towns'} on this device.`});
-    items.push({go: 'settings', label: 'Settings', sub: 'Sound, display and reading.'});
-    items.push({go: 'about', label: 'About', sub: 'What Hearthvale is, and how to play.'});
-    body.innerHTML = `<nav aria-label="Main menu"><ul class="mm-list">${items.map((it, i) => `
+  function menuList(items, label) {
+    return `<nav aria-label="${label}"><ul class="mm-list">${items.map((it, i) => `
       <li><button type="button" class="mm-item ${it.cls ?? ''}" data-go="${it.go}"${i === 0 ? ' data-autofocus' : ''}>
         <span class="mm-item-label">${esc(it.label)}</span>
         <span class="mm-item-sub">${esc(it.sub)}</span>
       </button></li>`).join('')}</ul></nav>`;
+  }
+
+  function renderTitle() {
+    body.innerHTML = menuList([
+      {go: 'play', label: 'Play', sub: 'Continue a town, or find a new valley.'},
+      {go: 'settings', label: 'Settings', sub: 'Sound, display and reading.'},
+      {go: 'about', label: 'About', sub: 'What Hearthvale is, and how to play.'},
+    ], 'Main menu');
+  }
+
+  function renderPlay() {
+    const items = [];
+    if (latest) items.push({go: 'continue', label: 'Continue', sub: `${latest.name || 'Hearthvale'}, year ${latest.year ?? 0}. ${townLine(latest)}`, cls: 'mm-continue'});
+    items.push({go: 'new', label: 'New town', sub: 'Choose a valley and begin with seven families.'});
+    items.push({go: 'towns', label: 'Manage Towns', sub: towns.length ? `${towns.length} ${towns.length === 1 ? 'town' : 'towns'} on this device.` : 'Find and manage the towns saved on this device.'});
+    body.innerHTML = `<section class="mm-screen" aria-labelledby="mm-play-title"><h2 id="mm-play-title" tabindex="-1">Play</h2>${menuList(items, 'Play')}</section>`;
   }
 
   function renderNew() {
@@ -247,17 +256,19 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
   }
 
   function renderTowns() {
+    const importer = `<div class="mm-actions"><button type="button" class="btn btn-secondary" data-act="import">${icon('upload')}Import town</button><input type="file" accept="application/json,.json" data-act="import-file" hidden></div>`;
     if (!towns.length) {
-      body.innerHTML = `<section class="mm-screen" aria-labelledby="mm-towns-title"><h2 id="mm-towns-title" tabindex="-1">Your towns</h2>
-        <p class="mm-lede">No towns on this device yet. Found one, or import a town file you exported before.</p>
-        <div class="mm-actions"><button type="button" class="btn btn-primary" data-go="new" data-autofocus>New town</button></div></section>`;
+      body.innerHTML = `<section class="mm-screen" aria-labelledby="mm-towns-title"><h2 id="mm-towns-title" tabindex="-1">Manage Towns</h2>
+        <p class="mm-lede">No towns on this device yet. Start a new town or import one from another device.</p>
+        <div class="mm-actions"><button type="button" class="btn btn-primary" data-go="new" data-autofocus>New town</button></div>${importer}</section>`;
       return;
     }
     if (!selected || !towns.some((t) => t.id === selected.id)) selected = towns[0];
     body.innerHTML = `<section class="mm-screen" aria-labelledby="mm-towns-title">
-      <h2 id="mm-towns-title" tabindex="-1">Your towns</h2>
+      <h2 id="mm-towns-title" tabindex="-1">Manage Towns</h2>
       <ul class="mm-towns" role="listbox" aria-labelledby="mm-towns-title">${towns.map((t) => townRow(t)).join('')}</ul>
       <div class="mm-town-actions"></div>
+      ${importer}
     </section>`;
     syncTownActions();
     showPicture();
@@ -336,7 +347,7 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
       <p>A year passes in about two minutes at normal speed. Play again in the same valley and you will get a different city.</p>
       <h3>Keys</h3>
       <div class="keys"><kbd>Space</kbd><span>Pause or resume</span><kbd>1</kbd><span>Normal speed</span><kbd>2</kbd><span>Three times</span><kbd>3</kbd><span>Five times</span><kbd>4</kbd><span>Ten times</span><kbd>5</kbd><span>Twenty times</span><kbd>C</kbd><span>Open or close the Council</span><kbd>R</kbd><span>Open or close the Rule Book</span><kbd>H</kbd><span>Hide or show the interface</span></div>
-      <p class="mm-small">Towns are saved on this device every 30 seconds. Export a town from Your towns to keep a copy or move it to another device.</p>
+      <p class="mm-small">Towns are saved on this device every 30 seconds. Export or import a town from Play → Manage Towns to keep a copy or move between devices.</p>
     </section>`;
   }
 
@@ -359,16 +370,6 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
     const raw = await saves.load(meta.id);
     if (raw) download(fileName(meta), raw);
     else say('That town could not be read.', 'error');
-  }
-
-  async function importFile(file) {
-    try {
-      const raw = await file.text();
-      const meta = metaFromSave(raw);
-      pick({kind: 'import', raw, name: meta.name});
-    } catch {
-      say('That file is not a Hearthvale town.', 'error');
-    }
   }
 
   root.addEventListener('click', async (e) => {
@@ -402,6 +403,8 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
     if (row) return selectTown(row.dataset.town);
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
+    if (act === 'account') return openAccount?.();
+    if (act === 'import') return body.querySelector('[data-act="import-file"]')?.click();
     if (act === 'name-roll') {
       form.name = suggestName(form.landscape, form.name);
       body.querySelector('#mm-name').value = form.name;
@@ -477,8 +480,18 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
     if (e.target.id === 'mm-seed') { form.seedText = e.target.value; form.found = null; syncNew(); drawValley(250); }
     if (e.target.dataset.range) prefs.set(e.target.dataset.range, Number(e.target.value));
   });
-  root.addEventListener('change', (e) => {
-    if (e.target.dataset.act === 'import' && e.target.files?.[0]) importFile(e.target.files[0]);
+  root.addEventListener('change', async (e) => {
+    if (e.target.dataset.act !== 'import-file' || root.classList.contains('mm-busy')) return;
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const raw = await file.text();
+      const meta = metaFromSave(raw);
+      pick({kind: 'import', raw, name: meta.name});
+    } catch {
+      say('That file is not a Hearthvale town.', 'error');
+    }
   });
   root.addEventListener('keydown', (e) => {
     if (root.classList.contains('mm-busy')) return;
@@ -503,11 +516,12 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
     if (row && !root.classList.contains('mm-busy')) pick({kind: 'load', id: row.dataset.town});
   });
 
-  // Escape goes back to the title from anywhere, even with nothing focused.
+  // Escape returns to the parent menu, even with nothing focused.
   const onEscape = (e) => {
+    if (document.querySelector('dialog[open]')) return;
     if (e.key !== 'Escape' || e.defaultPrevented || root.classList.contains('mm-busy') || root.dataset.screen === 'title') return;
     e.preventDefault();
-    go('title');
+    go(parentScreen[root.dataset.screen] ?? 'title');
   };
   document.addEventListener('keydown', onEscape);
   const onResize = () => { if (root.dataset.screen === 'new') map?.redraw(); };
@@ -525,6 +539,12 @@ export function createMainMenu({saves, prefs, version = '', start = 'title'}) {
   });
 
   return {
+    updateAccount(session) {
+      const button = root.querySelector('.mm-account');
+      if (button) button.textContent = session.authenticated ? 'Manage account' : 'Sign in';
+      const tier = root.querySelector('.mm-account-tier');
+      if (tier) { tier.textContent = session.tier === 'paid' ? 'Hearthvale Plus' : ''; tier.hidden = session.tier !== 'paid'; }
+    },
     /** Waits for the player's choice. */
     async choose() {
       await ready;

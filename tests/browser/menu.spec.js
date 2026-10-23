@@ -22,7 +22,12 @@ test('a first visit shows the menu without Continue, and founds a named town in 
   test.setTimeout(90000);
   const errors = await openMenu(page);
   await expect(page.locator('.mm-word')).toHaveText('Hearthvale');
+  await expect(page.locator('.mm-list .mm-item-label')).toHaveText(['Play','Settings','About']);
+  await expect(page.locator('.mm [data-act="import"], .mm-version')).toHaveCount(0);
+  await expect(page.locator('.mm-head')).not.toContainText('Free play');
+  await expect(page.locator('.mm')).not.toContainText('Welcome to Hearthvale');
   await expect(page.locator('[data-go="continue"]')).toHaveCount(0);
+  await page.locator('[data-go="play"]').click();
   await page.locator('[data-go="new"]').click();
   await expect(page.locator('#mm-new-title')).toBeVisible();
   await page.locator('#mm-name').fill('Testbrook');
@@ -48,9 +53,10 @@ test('a first visit shows the menu without Continue, and founds a named town in 
   expect(errors).toEqual([]);
 });
 
-test('Continue reopens the last town, and Your towns can rename and delete', async ({page}) => {
+test('Continue reopens the last town, and Manage Towns can export, rename, delete and import', async ({page}) => {
   test.setTimeout(90000);
   const errors = await openMenu(page);
+  await page.locator('[data-go="play"]').click();
   await page.locator('[data-go="new"]').click();
   await page.locator('#mm-name').fill('Keepsake');
   await page.locator('[data-act="found"]').click();
@@ -61,6 +67,7 @@ test('Continue reopens the last town, and Your towns can rename and delete', asy
   await expect(page.locator('.toast')).toContainText('saved');
   await Promise.all([page.waitForNavigation(), page.locator('.settings [data-act="menu"]').click()]);
   await expect(page.locator('.mm')).toBeVisible();
+  await page.locator('[data-go="play"]').click();
   await expect(page.locator('[data-go="continue"]')).toContainText('Keepsake, year 0');
 
   await page.locator('[data-go="continue"]').click();
@@ -68,9 +75,13 @@ test('Continue reopens the last town, and Your towns can rename and delete', asy
   expect(await hv(page, async () => (await window.hearthvale.snapshot()).townName)).toBe('Keepsake');
 
   await Promise.all([page.waitForNavigation(), hv(page, () => window.hearthvale.toMenu())]);
+  await page.locator('[data-go="play"]').click();
   await page.locator('[data-go="towns"]').click();
   const row = page.locator('.mm-town', {hasText: 'Keepsake'});
   await expect(row).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#mm-towns-title')).toHaveText('Manage Towns');
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-act="export"]').click()]);
+  const exported = await download.path();
   await page.locator('[data-act="rename"]').click();
   await page.locator('.mm-rename').fill('Heirloom');
   await page.locator('.mm-rename').press('Enter');
@@ -82,18 +93,35 @@ test('Continue reopens the last town, and Your towns can rename and delete', asy
   await expect(page.locator('.mm-town')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(page.locator('[data-go="continue"]')).toHaveCount(0);
+  await page.locator('[data-go="towns"]').click();
+  await expect(page.getByRole('button', {name: 'Import town', exact: true})).toBeVisible();
+  await page.locator('[data-act="import-file"]').setInputFiles({name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('{invalid json')});
+  await expect(page.locator('.mm-status')).toContainText('That file is not a Hearthvale town.');
+  await page.locator('[data-act="import-file"]').setInputFiles(exported);
+  await booted(page);
+  expect(await hv(page, async () => (await window.hearthvale.snapshot()).townName)).toBe('Keepsake');
+  await Promise.all([page.waitForNavigation(), hv(page, () => window.hearthvale.toMenu())]);
+  await page.locator('[data-go="play"]').click();
+  await page.locator('[data-go="towns"]').click();
+  await expect(page.locator('.mm-town-name')).toHaveText(['Keepsake']);
   expect(errors).toEqual([]);
 });
 
 test('the menu is usable with the keyboard and fits a phone', async ({page}) => {
   await page.setViewportSize({width: 375, height: 740});
   await openMenu(page);
-  await expect(page.locator('[data-go="new"]')).toBeFocused();
+  await expect(page.locator('[data-go="play"]')).toBeFocused();
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('[data-go="settings"]')).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.locator('#mm-set-title')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('.mm-list')).toBeVisible();
+  await page.locator('[data-go="play"]').click();
+  await page.locator('[data-go="new"]').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.mm')).toHaveAttribute('data-screen','play');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.mm')).toHaveAttribute('data-screen','title');
   expect(await hv(page, () => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
