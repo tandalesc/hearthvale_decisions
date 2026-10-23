@@ -9,7 +9,11 @@ import { navGrid, cellOf, cellCenter, nearestOpen, recordCrossingBand, WALKER_SC
 // clock: what the cooperative fallback times its slices by (default
 // performance.now). Tests pass a clock that never advances, so each tick runs
 // its full slice cap and a run plans the same routes on a busy machine.
-export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache = 8192, clock } = {}) {
+// maxPending: requests out at once. A town opened with everyone needing a first route
+// asks for thousands in a tick; refused ones wait ROUTE_RETRY and ask again, so a low
+// limit only adds waiting (docs/design/crowd-scale.md §2.4): 16,384 takes a 10k town
+// in one go. The searches still run in order of asking.
+export function createRoutePlanner({ worker = true, maxPending = 16384, maxCache = 8192, clock } = {}) {
   const fallback = new RouteScheduler({ maxPending, maxCache: 1, ...(clock ? { clock } : {}) });
   const cache = new Map();
   const waiting = new Map();
