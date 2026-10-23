@@ -15,7 +15,7 @@ function rememberSignin(value) {
   try { if (value) localStorage.setItem(SIGNIN_KEY, JSON.stringify(value)); else localStorage.removeItem(SIGNIN_KEY); } catch {}
 }
 
-const PLUS_BENEFITS = ['10× and 20× speed', '10 cloud towns with automatic saves and recovery history', 'Live decisions for your townspeople', 'Richer writing in the Council and town notes'];
+const PLUS_BENEFITS = ['10× and 20× speed', 'Automatic cloud backup for up to 10 towns', 'Live decisions for your townspeople', 'Richer writing in the Council and town notes'];
 const benefits = () => h('ul.account-features', null, ...PLUS_BENEFITS.map(text => h('li', null, text)));
 const savedPlan = () => { try { return localStorage.getItem(PLAN_KEY) === 'year' ? 'year' : 'month'; } catch { return 'month'; } };
 
