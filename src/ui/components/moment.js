@@ -24,7 +24,6 @@ export function createMoments(ctx) {
     // just above the sheet on phones.
     el.innerHTML = `<button class="icon-btn moment-close" type="button" aria-label="Close" title="Close (Esc)">${icon('close')}</button>
     <div class="moment-card">
-      <div class="eyebrow">${esc(m.eyebrow ?? 'A moment')}</div>
       <h2 id="moment-title">${esc(m.title)}</h2>
       <div class="rule-line"></div>
       ${m.text ? `<p id="moment-text">${esc(m.text)}</p>` : ''}

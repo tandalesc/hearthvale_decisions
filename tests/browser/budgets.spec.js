@@ -130,9 +130,9 @@ for (const [width, height] of [[390, 844], [320, 568]]) {
     await expect(strip).toContainText('Room');
     // One card at a time, with the pager.
     await expect(page.locator('.dk .budget-card')).toHaveCount(1);
-    await expect(page.locator('.dk .pager .eyebrow')).toHaveText(`1 of ${ids.length}`);
+    await expect(page.locator('.dk .pager .pager-count')).toHaveText(`1 of ${ids.length}`);
     await page.locator('.dk .pager .next').click();
-    await expect(page.locator('.dk .pager .eyebrow')).toHaveText(`2 of ${ids.length}`);
+    await expect(page.locator('.dk .pager .pager-count')).toHaveText(`2 of ${ids.length}`);
     // Nothing spills sideways; every control in reach is 44 px or more.
     const rights = await page.locator('.dk .budget-card button').evaluateAll((els) => els.filter((e) => e.offsetWidth).map((e) => e.getBoundingClientRect().right));
     for (const r of rights) expect(r).toBeLessThanOrEqual(width + 0.5);

@@ -134,14 +134,14 @@ export function createNotices({phone = () => false} = {}) {
     for (const old of items.slice(max)) dismiss(old);
   }
 
-  // {key, icon, eyebrow, title, text, badge, ms, onClick}
+  // {key, icon, label, title, text, badge, ms, onClick}
   function major(m) {
     said.push({at: performance.now(), text: norm(`${m.title ?? ''} ${m.text ?? ''}`)});
     if (said.length > 12) said.shift();
     if (m.key) for (const old of live(majors)) if (old.dataset.key === m.key) { stops.get(old)?.(); old.remove(); }
     const el = h('div.notice.notice-major.paper', {role: 'status', 'data-key': m.key ?? ''});
-    const main = h('button.notice-main', {type: 'button'});
-    main.innerHTML = `<span class="seal-icon">${icon(m.icon ?? 'bell')}</span><span class="notice-text">${m.eyebrow ? `<b class="notice-eyebrow">${esc(m.eyebrow)}</b>` : ''}<span class="notice-title">${esc(m.title ?? '')}</span>${m.text ? `<span class="notice-body">${esc(m.text)}</span>` : ''}</span>${m.badge ? `<span class="badge">${esc(m.badge)}</span>` : ''}`;
+    const main = h('button.notice-main', {type: 'button', ...(m.label ? {'aria-label': `${m.label}: ${m.title ?? ''}`} : {})});
+    main.innerHTML = `<span class="seal-icon">${icon(m.icon ?? 'bell')}</span><span class="notice-text"><span class="notice-title">${esc(m.title ?? '')}</span>${m.text ? `<span class="notice-body">${esc(m.text)}</span>` : ''}</span>${m.badge ? `<span class="badge">${esc(m.badge)}</span>` : ''}`;
     if (!m.onClick) main.disabled = true;
     const away = () => dismiss(el);
     main.addEventListener('click', () => { m.onClick?.(); away(); });

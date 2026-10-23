@@ -9,7 +9,7 @@ import {createCard, createNextCard} from './card.js';
 export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town gets on with its day.'], stuckAbove = () => 0} = {}) {
   const el = h('div.docket');
   const pager = h('div.pager', {hidden: true});
-  pager.innerHTML = `<button class="icon-btn prev" aria-label="Previous card">${icon('chevron-left')}</button><span class="eyebrow"></span><span class="dots"></span><button class="icon-btn next" aria-label="Next card">${icon('chevron-right')}</button>`;
+  pager.innerHTML = `<button class="icon-btn prev" aria-label="Previous card">${icon('chevron-left')}</button><span class="pager-count"></span><span class="dots"></span><button class="icon-btn next" aria-label="Next card">${icon('chevron-right')}</button>`;
   const stack = h('div.stack.swipe-track');
   const emptyEl = h('div.empty', h('b', empty[0]), empty[1]);
   el.append(pager, stack, emptyEl);
@@ -99,7 +99,7 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
     pager.hidden = !phone || cards.length < 2;
     if (phone) {
       const i = cards.findIndex((c) => c.id === active);
-      setText(pager.querySelector('.eyebrow'), `${i + 1} of ${cards.length}`);
+      setText(pager.querySelector('.pager-count'), `${i + 1} of ${cards.length}`);
       pager.querySelector('.dots').innerHTML = cards.map((c) => `<i class="${c.id === active ? 'on' : ''}"></i>`).join('');
       pager.querySelector('.prev').disabled = i <= 0;
       pager.querySelector('.next').disabled = i >= cards.length - 1;

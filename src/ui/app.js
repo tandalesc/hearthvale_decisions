@@ -22,7 +22,7 @@ import './layout.css';
 import './components.css';
 import {esc, h, setText, toggleClass} from './dom.js';
 import {bodyIcon, icon, mountSprite} from './icons.js';
-import {ERA_NAMES, cap, signed, theName} from './format.js';
+import {cap, signed, theName} from './format.js';
 import {reduced, setReducedMotion} from './motion.js';
 import {createSheet} from './sheet.js';
 import {createTopbar} from './components/topbar.js';
@@ -557,7 +557,7 @@ export function createApp(host) {
     prevUnlocks = {...unlocks};
 
     if (prevEra != null && top.era > prevEra) {
-      showMoment({eyebrow: `A new age · ${ERA_NAMES[top.era]}`, title: `Hearthvale is a ${top.eraName?.toLowerCase() ?? 'new place'} now`, text: lastMoment() ?? 'The town has grown into a new age.', icon: 'spark', sound: 'fanfare', camera: true});
+      showMoment({title: `Hearthvale is a ${top.eraName?.toLowerCase() ?? 'new place'} now`, text: lastMoment() ?? 'The town has grown into a new age.', icon: 'spark', sound: 'fanfare', camera: true});
     }
     prevEra = top.era;
 
@@ -566,7 +566,7 @@ export function createApp(host) {
       for (const b of bodies) {
         if (prevBodies.includes(b.id)) continue;
         fresh.add(`body:${b.id}`);
-        showMoment({eyebrow: 'A new body', title: `${cap(theName(b.name))} sits for the first time`, text: b.explainer?.join(' ') ?? 'It will bring you its own plans to rule on.', icon: ctx.bodyIcon(b.id), sound: 'fanfare'});
+        showMoment({title: `${cap(theName(b.name))} sits for the first time`, text: b.explainer?.join(' ') ?? 'It will bring you its own plans to rule on.', icon: ctx.bodyIcon(b.id), sound: 'fanfare'});
       }
     }
     prevBodies = ids;
@@ -591,7 +591,7 @@ export function createApp(host) {
         // The sim marks which events deserve a title card; older sims fall back to a list.
         if (seenEvents.has(ev.id) || !(ev.titleCard ?? MAJOR_EVENTS.has(ev.event))) continue;
         const line = [...data.chronicle].reverse().find((e) => e.kind !== 'year');
-        showMoment({eyebrow: 'Hard times', title: ev.title, text: line?.text ?? '', icon: 'bell'});
+        showMoment({title: ev.title, text: line?.text ?? '', icon: 'bell'});
       }
     }
     seenEvents = eventIds;
@@ -639,7 +639,7 @@ export function createApp(host) {
     slateSaid = key;
     const gone = adv.gone?.at(-1);
     const why = gone && gone.year >= (data.top?.year ?? 0) - 1 && !first ? `${gone.name} has ${gone.why === 'dismissed' ? 'been dismissed' : gone.why}. ` : '';
-    notices.major({key: 'advisers', icon: 'quill', eyebrow: first ? 'Advisers' : 'The advisers\' bench',
+    notices.major({key: 'advisers', icon: 'quill', label: first ? 'Advisers' : 'The advisers\' bench',
       title: first ? 'The council takes on advisers' : 'A seat on the bench is open',
       text: `${why}Choose from ${adv.slate.candidates.length} townsfolk.`, onClick: () => openCouncil({page: 'advisers'})});
   }
@@ -653,7 +653,7 @@ export function createApp(host) {
     const first = added[0];
     const name = ctx.bodyName(first.from);
     const more = added.length > 1 ? added.length - 1 : 0;
-    notices.major({key: 'request', icon: ctx.bodyIcon(first.from), eyebrow: `${cap(name)} asks`, title: first.title, badge: more ? `+${more}` : '', onClick: () => openCard(first)});
+    notices.major({key: 'request', icon: ctx.bodyIcon(first.from), label: `${cap(name)} asks`, title: first.title, badge: more ? `+${more}` : '', onClick: () => openCard(first)});
   }
 
   function openCard(card) {

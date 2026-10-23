@@ -51,13 +51,6 @@
 .badge.is-urgent { background: var(--rust); color: #fff8f2; }
 .badge:empty { display: none; }
 
-.eyebrow {
-  font: 600 var(--fs-11)/1.2 var(--font-ui);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
 /* ---------- Top bar ---------- */
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex-shrink: 1; }
 .crest {
@@ -130,7 +123,6 @@
 .metric.is-warn .metric-val { color: var(--rust); }
 .metric.is-new { animation: reveal-in 420ms var(--ease-back) both; }
 .topbar-end { display: flex; align-items: center; gap: 2px; padding-left: 4px; border-left: 1px solid var(--line); }
-.topbar-end .account-entry { padding: 6px 8px; min-height: 36px; font-size: var(--fs-13); white-space: nowrap; }
 .settings-account-copy { margin: 0 0 12px; color: var(--ink-2); font-size: var(--fs-13); }
 
 .ui[data-layout="phone"] .brand-text { display: none; }
@@ -413,10 +405,8 @@ button.bud-row:hover { background: var(--paper-3); }
 .bud-years .g { background: color-mix(in srgb, var(--green-2) 45%, transparent); }
 .bud-years .s { background: var(--green-2); }
 
-.card-eyebrow { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.card-eyebrow .eyebrow { display: inline-flex; align-items: center; gap: 6px; }
-.card-eyebrow .eyebrow::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--kind, var(--green)); }
-.card-from { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-13); color: var(--ink-2); white-space: nowrap; min-width: 0; }
+.card-meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.card-from { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-13); color: var(--ink-2); white-space: nowrap; min-width: 0; }
 .card-from .i { width: 15px; height: 15px; }
 .urgent { color: var(--rust); font-weight: 600; }
 .card-title {
@@ -581,7 +571,7 @@ button.bud-row:hover { background: var(--paper-3); }
 .pager .dots { display: flex; gap: 6px; }
 .pager .dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line-2); transition: background-color var(--t-base), transform var(--t-base) var(--ease-out); }
 .pager .dots i.on { background: var(--green); transform: scale(1.25); }
-.pager .eyebrow { flex: 1; text-align: center; }
+.pager .pager-count { flex: 1; text-align: center; font-size: var(--fs-13); color: var(--muted); }
 .swipe-track { touch-action: pan-y; }
 
 /* ---------- Dashboards ---------- */
@@ -844,7 +834,6 @@ button.bud-row:hover { background: var(--paper-3); }
 .notice-major .seal-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; background: var(--green-soft); color: var(--green); flex-shrink: 0; }
 .notice-major[data-key="year"] .seal-icon { background: var(--gold-soft); color: color-mix(in srgb, var(--gold) 60%, var(--ink)); }
 .notice-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.notice-eyebrow { font-size: var(--fs-11); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 .notice-title { font: 600 var(--fs-15)/1.25 var(--font-display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notice-body { font-size: var(--fs-13); line-height: 1.35; color: var(--ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .notice-major .badge { flex-shrink: 0; }
@@ -879,8 +868,7 @@ button.bud-row:hover { background: var(--paper-3); }
   animation: fade-in var(--t-slow) ease both;
 }
 .moment-card { text-align: center; max-width: 560px; animation: moment-in var(--t-moment) var(--ease-out) both; }
-.moment-card .eyebrow { color: color-mix(in srgb, var(--gold) 60%, var(--ink)); }
-.moment-card h2 { margin: 14px 0 0; font: 600 var(--fs-44)/1.05 var(--font-display); font-variation-settings: 'opsz' 96, 'SOFT' 60; letter-spacing: -0.015em; text-wrap: balance; }
+.moment-card h2 { margin: 0; font: 600 var(--fs-44)/1.05 var(--font-display); font-variation-settings: 'opsz' 96, 'SOFT' 60; letter-spacing: -0.015em; text-wrap: balance; }
 .moment-card .rule-line { width: 0; height: 1.5px; margin: 18px auto; background: var(--gold); animation: rule-draw 700ms 300ms var(--ease-out) forwards; }
 .moment-card p { margin: 0 auto; max-width: 42ch; font-size: var(--fs-18); color: var(--ink-2); text-wrap: balance; }
 .moment-card ul { list-style: none; padding: 0; margin: 16px auto 0; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-15); color: var(--ink-2); max-width: 40ch; }
