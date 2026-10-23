@@ -1037,9 +1037,10 @@ export function cardFacts(state, cardId) {
   return out;
 }
 
-// Cards that still want prose, oldest first.
+// Cards that still want prose, oldest first. Budget cards have their own
+// layout and never show a quote, so they are never narrated.
 export const cardsNeedingProse = (state) =>
-  (state?.docket ?? []).filter((c) => !c.prose && c.needsProse !== false).sort((a, b) => (a.createdMonth ?? 0) - (b.createdMonth ?? 0));
+  (state?.docket ?? []).filter((c) => c.kind !== 'budget' && !c.prose && c.needsProse !== false).sort((a, b) => (a.createdMonth ?? 0) - (b.createdMonth ?? 0));
 
 // ---------------------------------------------------------------------------
 // The chronicle: a year's line and the end page

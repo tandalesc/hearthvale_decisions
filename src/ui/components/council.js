@@ -30,6 +30,9 @@ const ADVISERS = 'advisers';
 const waiting = (cards) => cards.filter((c) => c.kind !== 'report').length;
 
 // ctx adds: bodyView(id) → the body's page view; onOpen(), onClose().
+// Cards narrated ahead when the Council is open (Plus).
+const PREFETCH_CARDS = 5;
+
 export function createCouncil(ctx) {
   const el = h('section.dk.paper', {'aria-labelledby': 'dk-title', id: 'council'});
   el.innerHTML = `
@@ -139,7 +142,11 @@ export function createCouncil(ctx) {
     // A body that is gone (or a season that is over) takes the page back to the Town Council.
     if (page === BUDGETS ? !inSeason() && !data.season : page === ADVISERS ? !data.advisers : page !== TOWN && !body()) return setPage(TOWN, {quiet: true});
     if (open && isPaid(ctx.entitlement?.())) {
-      const pending = data.cards.filter(card => !card.prose && card.needsProse !== false);
+      // Narrate ahead only the next few cards on this page, in the order shown;
+      // the rest are narrated as they move up or when opened. Budgets never
+      // show a quote.
+      const pending = shown().filter(card => card.kind !== 'budget').slice(0, PREFETCH_CARDS)
+        .filter(card => !card.prose && card.needsProse !== false);
       const ids = pending.map(card => card.id);
       const sig = pending.map(card => `${card.id}:${card.proseRevision ?? 0}`).join('|');
       if (sig !== proseSig) { proseSig = sig; Promise.resolve(ctx.prefetchCardProse?.(ids)).catch(() => {}); }
