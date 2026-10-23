@@ -9,9 +9,12 @@ html, body {
   height: 100%;
   overflow: hidden;
   overscroll-behavior: none;
-  background: #a9c98a;
+  /* iOS home-screen apps tint the status bar from the page background, so
+     keep it a quiet neutral rather than a bright green glow over the town. */
+  background: #6b7163;
   -webkit-text-size-adjust: 100%;
 }
+html[data-theme="night"], html[data-theme="night"] body { background: #1f2622; }
 
 /* iOS web apps: plain 100% heights can stop at the inset layout viewport
    and leave the page background showing below the screen edge. The large

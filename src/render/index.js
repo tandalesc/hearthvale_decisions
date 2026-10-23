@@ -332,7 +332,7 @@ export function createWorld(canvas, { quality = 'auto', batterySaver = 'off', ti
     frame.distance = rig.distance();
 
     mark = performance.now();
-    grade.update(view, time, frameDt);
+    grade.update(view, time, frameDt, {paused: frame.paused});
     grade.apply({ renderer, scene, hemi: lights.hemi, sun: lights.sun });
     // Fog is atmosphere for the horizon: keep it beyond the town when zoomed out.
     const fogPush = Math.max(0, frame.distance - 110);

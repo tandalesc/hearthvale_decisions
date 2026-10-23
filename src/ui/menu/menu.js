@@ -258,32 +258,54 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
     }, delay);
   }
 
+  // Cloud backup adds icons, placeholder rows and a few buttons to this screen.
   function mountCloud() {
-    if(!cloud)return;
+    if (!cloud) return;
     cloudPanel?.destroy();
-    cloudPanel=createCloudTowns({cloud,saves,selected:()=>selected,play:id=>pick({kind:'cloud',id}),openAccount,changed:async()=>{await refreshTowns();if(selected)selected=towns.find(t=>t.id===selected.id)??null;const list=body.querySelector('.mm-towns');if(list){list.innerHTML=towns.map(townRow).join('');syncTownActions();showPicture();}else if(towns.length){renderTowns();}}});
-    body.querySelector('section')?.append(cloudPanel.el);
+    cloudPanel = createCloudTowns({cloud, say, play: (id) => pick({kind: 'cloud', id}),
+      changed: () => refreshTowns(), update: () => refreshTownList()});
+  }
+
+  // Towns on this device, then cloud towns that are not.
+  const allTowns = () => [...towns, ...(cloudPanel?.entries(towns) ?? [])];
+  const townRows = () => allTowns().map((t) => t.cloudOnly ? cloudPanel.row(t, t.id === selected?.id) : townRow(t)).join('');
+  function keepSelection(all = allTowns()) {
+    selected = all.find((t) => t.id === selected?.id) ?? all[0] ?? null;
   }
 
   function renderTowns() {
+    if (!cloudPanel) mountCloud();
     const importer = `<div class="mm-actions"><button type="button" class="btn btn-secondary" data-act="import">${icon('upload')}Import town</button><input type="file" accept="application/json,.json" data-act="import-file" hidden></div>`;
-    if (!towns.length) {
+    const all = allTowns();
+    if (!all.length) {
       body.innerHTML = `<section class="mm-screen" aria-labelledby="mm-towns-title"><h2 id="mm-towns-title" tabindex="-1">Manage Towns</h2>
         <p class="mm-lede">No towns on this device yet. Start a new town or import one from another device.</p>
         <div class="mm-actions"><button type="button" class="btn btn-primary" data-go="new" data-autofocus>New town</button></div>${importer}</section>`;
-      mountCloud();
       return;
     }
-    if (!selected || !towns.some((t) => t.id === selected.id)) selected = towns[0];
+    keepSelection(all);
     body.innerHTML = `<section class="mm-screen" aria-labelledby="mm-towns-title">
       <h2 id="mm-towns-title" tabindex="-1">Manage Towns</h2>
-      <ul class="mm-towns" role="listbox" aria-labelledby="mm-towns-title">${towns.map((t) => townRow(t)).join('')}</ul>
+      <ul class="mm-towns" role="listbox" aria-labelledby="mm-towns-title">${townRows()}</ul>
       <div class="mm-town-actions"></div>
       ${importer}
     </section>`;
     syncTownActions();
     showPicture();
-    mountCloud();
+  }
+
+  // Cloud state changed: redraw the rows and actions, keeping focus and selection.
+  function refreshTownList() {
+    if (root.dataset.screen !== 'towns' || body.querySelector('.mm-rename')) return;
+    const list = body.querySelector('.mm-towns');
+    const all = allTowns();
+    if (!list || !all.length) return all.length || list ? renderTowns() : undefined;
+    keepSelection(all);
+    const focused = document.activeElement?.closest?.('.mm-town')?.dataset.town;
+    list.innerHTML = townRows();
+    if (focused) list.querySelector(`[data-town="${CSS.escape(focused)}"]`)?.focus({preventScroll: true});
+    syncTownActions();
+    showPicture();
   }
 
   function townRow(t) {
@@ -296,12 +318,17 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
         <span class="mm-town-line">Year ${t.year ?? 0}. ${esc(townLine(t))}</span>
         <span class="mm-town-meta">${esc(valleyName(t))}. ${esc(playedWhen(t.savedAt))}.</span>
       </span>
+      ${cloudPanel?.badge(t) ?? ''}
     </li>`;
   }
 
   function syncTownActions() {
     const box = body.querySelector('.mm-town-actions');
     if (!box || !selected) return;
+    if (selected.cloudOnly) {
+      box.innerHTML = `<div class="btn-row">${cloudPanel?.buttons(selected) ?? ''}</div>${cloudPanel?.notice(selected) ?? ''}`;
+      return;
+    }
     const name = esc(selected.name || 'Hearthvale');
     box.innerHTML = confirmDelete === selected.id
       ? `<p class="mm-confirm" role="alert">Delete ${name} from this device? This cannot be undone. Export it first to keep a copy.</p>
@@ -310,8 +337,9 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
           <button type="button" class="btn btn-primary" data-act="play">${icon('play')}Play ${name}</button>
           <button type="button" class="btn btn-secondary" data-act="rename">Rename</button>
           <button type="button" class="btn btn-secondary" data-act="export">${icon('save')}Export</button>
+          ${cloudPanel?.buttons(selected) ?? ''}
           <button type="button" class="btn btn-ghost btn-danger" data-act="delete">Delete</button>
-        </div>`;
+        </div>${cloudPanel?.notice(selected) ?? ''}`;
   }
 
   function showPicture() {
@@ -323,7 +351,9 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
   }
 
   function selectTown(id, focus) {
-    selected = towns.find((t) => t.id === id) ?? selected;
+    const next = allTowns().find((t) => t.id === id) ?? selected;
+    if (next?.id !== selected?.id) cloudPanel?.reset();
+    selected = next;
     confirmDelete = null;
     for (const row of body.querySelectorAll('.mm-town')) {
       const on = row.dataset.town === selected.id;
@@ -333,7 +363,6 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
     }
     syncTownActions();
     showPicture();
-    cloudPanel?.render();
   }
 
   function renderSettings() {
@@ -360,7 +389,7 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
       <p>A year passes in about two minutes at normal speed. Play again in the same valley and you will get a different city.</p>
       <h3>Keys</h3>
       <div class="keys"><kbd>Space</kbd><span>Pause or resume</span><kbd>1</kbd><span>Normal speed</span><kbd>2</kbd><span>Three times</span><kbd>3</kbd><span>Five times</span><kbd>4</kbd><span>Ten times</span><kbd>5</kbd><span>Twenty times</span><kbd>C</kbd><span>Open or close the Council</span><kbd>R</kbd><span>Open or close the Rule Book</span><kbd>H</kbd><span>Hide or show the interface</span></div>
-      <p class="mm-small">Towns are saved on this device every 30 seconds. Registered players also get automatic cloud saves: one town for free, ten with Plus. Manage cloud towns and recovery history under Play → Manage Towns.</p>
+      <p class="mm-small">Towns are saved on this device every 30 seconds. Signed-in players also get automatic cloud backup: one town for free, up to ten with Plus. Plus players can restore past versions from Play → Manage Towns.</p>
     </section>`;
   }
 
@@ -412,6 +441,8 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
       map?.redraw();
       return;
     }
+    const cloudBtn = e.target.closest('[data-cloud-act]');
+    if (cloudBtn) return cloudPanel?.handle(cloudBtn, selected);
     const row = e.target.closest('[data-town]');
     if (row) return selectTown(row.dataset.town);
     const act = e.target.closest('[data-act]')?.dataset.act;
@@ -526,7 +557,10 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
   });
   root.addEventListener('dblclick', (e) => {
     const row = e.target.closest('[data-town]');
-    if (row && !root.classList.contains('mm-busy')) pick({kind: 'load', id: row.dataset.town});
+    if (!row || root.classList.contains('mm-busy')) return;
+    const town = allTowns().find((t) => t.id === row.dataset.town);
+    if (!town?.cloudOnly) pick({kind: 'load', id: row.dataset.town});
+    else if (!town.removed) pick({kind: 'cloud', id: town.cloudId});
   });
 
   // Escape returns to the parent menu, even with nothing focused.
@@ -553,7 +587,7 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
 
   return {
     updateAccount(session) {
-      if(root.dataset.screen==='towns')mountCloud();
+      if (root.dataset.screen === 'towns') { mountCloud(); refreshTownList(); }
       const button = root.querySelector('.mm-account');
       if (button) button.textContent = session.authenticated ? 'Manage account' : 'Sign in';
       const tier = root.querySelector('.mm-account-tier');

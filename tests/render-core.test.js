@@ -256,3 +256,15 @@ test('terrain ray hits the ground under a downward ray', () => {
   assert.ok(Math.abs(hit.y - Math.max(heightAt(hit.x, hit.z), 0.025)) < 0.05);
   assert.ok(hashId(5) >= 0 && hashId(5) < 1 && hashId(5) === hashId(5));
 });
+
+test('the slow day cycle stands still while the game is paused', () => {
+  const g = createGrade();
+  g.setMode('slow');
+  g.resetDay();
+  for (let i = 0; i < 60; i++) g.update(view(0.3), i / 10, 0.1);
+  const before = g.current.phase;
+  for (let i = 60; i < 600; i++) g.update(view(0.3), i / 10, 0.1, {paused: true});
+  assert.equal(g.current.phase, before, 'a minute of pause does not move the sun');
+  for (let i = 600; i < 660; i++) g.update(view(0.3), i / 10, 0.1);
+  assert.ok(Math.abs(g.current.phase - before - 0.1) < 1e-9, 'six seconds of play moves it a tenth of a day');
+});

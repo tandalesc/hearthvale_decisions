@@ -421,7 +421,7 @@ button.bud-row:hover { background: var(--paper-3); }
 .card-narration .card-why { margin: 0; }
 .card-narration-placeholder { display: grid; gap: 8px; padding-block: 10px; }
 .card-flavour { margin: 0; color: var(--ink); }
-.card-quote-text { margin: 0; font: italic 600 var(--fs-18)/1.5 var(--font-display); font-variation-settings: 'opsz' 24, 'SOFT' 30; text-wrap: pretty; }
+.card-quote-text { margin: 0; font: italic 400 var(--fs-18)/1.5 var(--font-display); font-variation-settings: 'opsz' 24, 'SOFT' 30; text-wrap: pretty; }
 .card-quote-text::before { content: '“'; }
 .card-quote-text::after { content: '”'; }
 .card-narration-toggle { position: absolute; right: -4px; top: -6px; color: var(--muted); }

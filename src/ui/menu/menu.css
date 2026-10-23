@@ -354,11 +354,27 @@
 :root[data-motion="reduced"] .mm-backdrop img.in { animation: none; }
 :root[data-motion="reduced"] .mm-page { transition: none; }
 
-.mm-cloud { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
-.mm-cloud h3 { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font: 600 22px var(--font-display); }
-.mm-cloud h3 small { font: 400 14px var(--font-ui); color: var(--muted); }
-.mm-cloud-local, .mm-cloud-town, .mm-cloud-history, .mm-cloud-confirm { padding-block: 12px; }
-.mm-cloud-town + .mm-cloud-town { border-top: 1px solid var(--line); }
-.mm-cloud .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
-.mm-cloud-history button { margin: 4px; }
-.mm-cloud-confirm { border-top: 1px solid var(--line); }
+/* Cloud backup: a badge on backed-up towns, rows for towns on other devices,
+   a one-line note under the selected town's buttons and the past-versions list. */
+.mm-town { padding-right: 36px; }
+.mm-cloud-badge { position: absolute; top: 12px; right: 12px; display: grid; color: var(--green-2); }
+.mm-cloud-badge .i { width: 18px; height: 18px; }
+.mm-cloud-badge.is-alert { color: var(--rust); }
+.mm-town-cloud .mm-thumb { background: transparent; border: 1.5px dashed var(--line-2); }
+.mm-town-cloud .mm-thumb .i { width: 26px; height: 26px; }
+.mm-town-cloud .mm-town-name { color: var(--ink-2); }
+.mm-cloud-note { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 4px 10px; align-items: center; margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: var(--paper-2); font-size: var(--fs-13); color: var(--ink-2); }
+.mm-cloud-note > .i { width: 18px; height: 18px; color: var(--muted); }
+.mm-cloud-note p { margin: 0; }
+.mm-cloud-note .btn-row { grid-column: 2; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.mm-cloud-note.is-alert { background: var(--rust-soft); }
+.mm-cloud-note.is-alert > .i { color: var(--rust); }
+.mm-town-actions .mm-confirm { margin-top: 14px; }
+.mm-versions { margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: var(--paper-2); }
+.mm-versions-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mm-versions h3 { margin: 0; font: 600 var(--fs-18) var(--font-display); }
+.mm-versions ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.mm-versions li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.mm-versions li span { display: grid; min-width: 0; }
+.mm-versions li small { font-size: var(--fs-11); color: var(--muted); }
+.mm-versions .btn-row { display: flex; gap: 8px; margin-top: 8px; }
