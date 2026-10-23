@@ -52,7 +52,7 @@ export function createInspector(ctx) {
     <div class="chips head-chips"></div>
     <p class="objective" hidden></p>
     <span class="sr-only note-status" role="status" aria-live="polite"></span>
-    <blockquote class="note" hidden><p class="note-text"></p><div class="shimmer" aria-hidden="true"><i></i><i></i></div><p class="note-when" hidden></p></blockquote>
+    <blockquote class="note" hidden><p class="note-text"></p><div class="shimmer" aria-hidden="true"><span class="note-loading">Loading…</span><i></i><i></i></div><p class="note-when" hidden></p></blockquote>
     <dl class="details"></dl>
     <div class="why" id="${WHY_ID}" hidden><h4>Why they say so</h4><ul></ul></div>
     <div class="inspector-actions" role="toolbar" aria-label="Actions">

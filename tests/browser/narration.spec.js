@@ -45,6 +45,8 @@ for (const ending of ['accepted', 'rejected', 'cancelled']) test(`worker narrati
   const id=await card.getAttribute('data-id');
   const canonicalWhy=await card.locator('.card-why').textContent();
   const canonicalOptions=await card.locator('.opt-trade').allTextContents();
+  await expect(card.locator('.card-why')).toBeHidden();
+  await expect(card.locator('.card-narration-placeholder')).toBeVisible();
   await expect.poll(()=>inSim(page,()=>Boolean(globalThis.__streamController))).toBe(true);
   if(ending==='accepted') {
     const before=await inSim(page,state=>state.time.tick);
@@ -99,6 +101,8 @@ test('inspector replaces validated previews with fallback without saving drafts 
   });
   await hv(page,id=>window.hearthvale.app.inspector.show({personId:id}),personId);
   await expect.poll(()=>page.evaluate(()=>Boolean(window.noteStream))).toBe(true);
+  await expect(page.locator('.inspector .note-text')).toBeEmpty();
+  await expect(page.locator('.inspector .note-loading')).toBeVisible();
   await page.evaluate(()=>{
     const send=(event,data)=>window.noteStream.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
     send('meta',{source:'llm'});
@@ -140,7 +144,9 @@ test('a streamed quote replaces the explanation, and a player selection survives
   await expect(page.locator('.card-why')).toBeVisible();
   await expect(page.locator('.card-narration-toggle')).toBeHidden();
   await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:''}}));
-  await expect(page.locator('.card-why')).toBeVisible();
+  await expect(page.locator('.card-why')).toBeHidden();
+  await expect(page.locator('.card-narration-placeholder')).toHaveText('Loading…');
+  await expect(page.locator('.card-narration-placeholder')).toBeVisible();
   await expect(page.locator('.card-narration-loading')).toBeVisible();
   await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:'The muddy lanes make every journey longer.'}}));
   await expect(page.locator('.card-why')).toBeHidden();
@@ -184,4 +190,28 @@ test('reduced motion keeps quote loading and swaps still',async({page})=>{
   await page.getByRole('button',{name:'Show game explanation'}).click();
   await expect(page.locator('.card-why')).toBeVisible();
   expect(await page.locator('.card-narration').evaluate(el=>el.getAnimations({subtree:true}).filter(a=>a.effect.getComputedTiming().duration>1).map(a=>a.constructor.name))).toEqual([]);
+});
+
+
+test('Plus waits from the first card render while free and saved prose stay instant', async ({page}) => {
+  await page.route('**/loading-test', route => route.fulfill({contentType:'text/html',body:'<!doctype html><body></body>'}));
+  await page.goto('/loading-test');
+  const initial = await page.evaluate(async () => {
+    const {createDocket} = await import('/src/ui/components/docket.js');
+    const card = {id:'a',kind:'proposal',from:'moot',title:'A bridge',why:'Canonical reason.',options:[{key:'do',label:'Approve',tradeoff:'Canonical effect.'}]};
+    const make = (tier, prose) => {
+      let finish;
+      const ctx = {entitlement:()=>({tier}),unlocks:()=>({}),coin:()=>100,bodyName:()=> 'Council',bodyIcon:()=> 'council',onRule:()=>{},requestCardProse:()=>new Promise(resolve=>finish=resolve)};
+      const docket=createDocket(ctx);document.body.append(docket.el);
+      docket.update([{...card,prose}]);docket.setVisible(true);
+      return {docket,finish};
+    };
+    const paid=make('paid'), free=make('free'), saved=make('paid',{why:'A saved town quote.',source:'llm'});
+    window.loadingTest={...paid,card};
+    return {paidHidden:paid.docket.el.querySelector('.card-why').hidden,loadingHidden:paid.docket.el.querySelector('.card-narration-placeholder').hidden,freeHidden:free.docket.el.querySelector('.card-why').hidden,savedHidden:saved.docket.el.querySelector('.card-flavour').hidden};
+  });
+  expect(initial).toEqual({paidHidden:true,loadingHidden:false,freeHidden:false,savedHidden:false});
+  await page.evaluate(async()=>{window.loadingTest.finish();await new Promise(resolve=>setTimeout(resolve,0));window.loadingTest.docket.update([window.loadingTest.card]);});
+  await expect(page.locator('.docket').first().locator('.card-why')).toBeVisible();
+  await expect(page.locator('.docket').first().locator('.card-narration-placeholder')).toBeHidden();
 });

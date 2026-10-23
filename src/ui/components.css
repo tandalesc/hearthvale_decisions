@@ -420,6 +420,8 @@ button.bud-row:hover { background: var(--paper-3); }
 .card-narration.has-quote .card-narration-body,
 .card-narration.is-loading .card-narration-body { padding-right: 48px; min-height: 44px; }
 .card-narration .card-why { margin: 0; }
+.card-narration-placeholder { margin: 0; padding-block: 10px; color: var(--muted); font-style: italic; }
+.inspector .note-loading { color: var(--muted); font-style: italic; font-size: var(--fs-14); }
 .card-flavour { margin: 0; color: var(--ink); }
 .card-quote-text { margin: 0; font: italic 600 var(--fs-18)/1.5 var(--font-display); font-variation-settings: 'opsz' 24, 'SOFT' 30; text-wrap: pretty; }
 .card-quote-text::before { content: '“'; }
