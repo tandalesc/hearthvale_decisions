@@ -30,7 +30,7 @@ const runTicks = (s, n, services = {}, options = {}) => {
 
 test('a new hamlet has about 28 people in 7 households, huts, a moot hall and no roads', () => {
   const s = createState(11);
-  assert.equal(s.version, 2);
+  assert.equal(s.version, 3);
   assert.equal(s.households.length, 7);
   assert.equal(s.indicators.pop, 28);
   assert.equal(s.people.length, 28);
@@ -502,11 +502,12 @@ test('performance: stepTick at 3,000 walkers stays under budget', () => {
     routes.tick?.(s);
   }
   // CPU time of this process, measured against a fixed reference job (serialising
-  // this city) in the same run: a busy or slower machine stretches both alike, so
-  // the budget holds anywhere and still catches a stepTick that got twice as slow.
-  // (On an M5 Pro, quiet: stepTick about 0.065 of the reference on average, 0.25 at p95.)
+  // this city without its walkers, whose routes are typed arrays that save quickly)
+  // in the same run: a busy or slower machine stretches both alike, so the budget
+  // holds anywhere and still catches a stepTick that got twice as slow.
+  // (On an M5 Pro: stepTick about 0.42 of the reference on average, 1.2 at p95.)
   const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
-  const reference = () => { const t = cpuMs(); for (let k = 0; k < 3; k++) serialize(s); return (cpuMs() - t) / 3; };
+  const reference = () => { const t = cpuMs(); for (let k = 0; k < 3; k++) serialize({...s, people: []}); return (cpuMs() - t) / 3; };
   const ref0 = reference();
   const times = [];
   for (let i = 0; i < 600; i++) {
@@ -520,6 +521,26 @@ test('performance: stepTick at 3,000 walkers stays under budget', () => {
   const mean = times.reduce((a, b) => a + b, 0) / times.length;
   const p95 = times[Math.floor(times.length * 0.95)];
   const msg = (what, v, limit) => `${what} ${v.toFixed(2)} ms of CPU, ${(v / ref).toFixed(3)} of the reference (${ref.toFixed(1)} ms); limit ${limit}`;
-  assert.ok(mean < 0.12 * ref, msg('mean', mean, 0.12));
-  assert.ok(p95 < 0.45 * ref, msg('p95', p95, 0.45));
+  assert.ok(mean < 0.8 * ref, msg('mean', mean, 0.8));
+  assert.ok(p95 < 2.2 * ref, msg('p95', p95, 2.2));
+});
+
+test('walkers keep their routes as Float32Arrays, and a version 2 save opens with them so', async () => {
+  const {restore, serialize} = await import('../src/sim/serialize.js');
+  const {createRoutePlanner} = await import('../src/route-planner.js');
+  const s = fixtureState('town');
+  const routes = createRoutePlanner({worker: false, clock: () => 0});
+  for (let i = 0; i < 120; i++) { routes.tick(s, 1e9); stepTick(s, 0.1, {routes}); }
+  const walking = s.people.filter((p) => p.task?.route?.length >= 4);
+  assert.ok(walking.length > 20);
+  assert.ok(walking.every((p) => p.task.route instanceof Float32Array));
+  const text = serialize(s);
+  const again = restore(text);
+  assert.equal(serialize(again), text, 'round trip');
+  // The same town written as version 2 did: routes as plain lists of numbers.
+  const old = JSON.parse(text, (k, v) => (v && v.$typed === 'Float32Array' && k === 'route' ? Array.from(new Float32Array(Uint8Array.from(Buffer.from(v.b64, 'base64')).buffer)) : v));
+  old.version = 2;
+  const opened = restore(JSON.stringify(old, (k, v) => (ArrayBuffer.isView(v) ? {$typed: v.constructor.name, b64: Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('base64')} : v)));
+  assert.equal(opened.version, 3);
+  assert.equal(serialize(opened), text, 'migrated to the same town');
 });

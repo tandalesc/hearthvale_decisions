@@ -722,7 +722,7 @@ function stepTo(state, p, task, spot, plan, now) {
   if (plan.occ) gatheringSpot(p, task, spot);
   standAdd(spot.x, spot.z, p.id, p.householdId);
   if (Math.hypot(spot.x - p.x, spot.z - p.z) < 0.02) return true;
-  pushSkirted(state, p, task.route, spot.via ? [spot.via[0], spot.via[1], spot.x, spot.z] : [spot.x, spot.z]);
+  pushSkirted(state, p, task, spot.via ? [spot.via[0], spot.via[1], spot.x, spot.z] : [spot.x, spot.z]);
   setVelocity(state, p, task, now);
   return false;
 }
@@ -737,10 +737,20 @@ function deckKeep(state) {
 // Points added to a walker's route from where it is (its route's last point, or where
 // it stands), round the corner of any drawn plinth, step or wing they cut (roads.js
 // skirtOutlines).
-function pushSkirted(state, p, route, pts) {
-  const n = route.length;
+function pushSkirted(state, p, task, pts) {
+  const route = task.route, n = route.length;
   const leg = skirtOutlines(state, [n >= 2 ? route[n - 2] : p.x, n >= 2 ? route[n - 1] : p.z, ...pts], deckKeep(state));
-  for (let k = 2; k < leg.length; k++) route.push(leg[k]);
+  task.route = extendRoute(route, leg, 2);
+}
+
+// Routes are Float32Arrays of [x, z, ...] (half the memory of a list of doubles, and
+// saved compactly): built once, and replaced, never grown in place.
+export const toRoute = (list) => (list instanceof Float32Array ? list : Float32Array.from(list));
+function extendRoute(route, pts, from = 0) {
+  const out = new Float32Array(route.length + pts.length - from);
+  out.set(route);
+  for (let k = from; k < pts.length; k++) out[route.length + k - from] = pts[k];
+  return out;
 }
 
 // An activity's spot (gatherings.js occasionSpot) taken: what the walker does there
@@ -819,7 +829,7 @@ function leaveDeck(state, p, task, now) {
   if (waterAt(qx, qz) || deckAt(state, qx, qz) || !clearOfWalls(state, footprints(state).walls, qx, qz)) return false;
   if (!legOpen(state, ex, ez, qx, qz)) return false;
   task.leaving = 1;
-  task.route.push(ex, ez, qx, qz);
+  task.route = extendRoute(task.route, [ex, ez, qx, qz]);
   setVelocity(state, p, task, now);
   return true;
 }
@@ -831,7 +841,7 @@ function wander(state, p, task, now) {
   const pts = wanderRoute(state, p, task, occ);
   if (!pts) return false;
   standAdd(task.spot[0], task.spot[1], p.id, p.householdId);   // a new spot, held from now
-  pushSkirted(state, p, task.route, pts);
+  pushSkirted(state, p, task, pts);
   setVelocity(state, p, task, now);
   return true;
 }
@@ -1239,7 +1249,7 @@ function reskirt(state, p, now) {
     else skirtMemos.set(task, {route, clear: skirtMemo(state, route, task.seg)});
     return;
   }
-  task.route = out;
+  task.route = toRoute(out);
   task.seg = 2;
   setVelocity(state, p, task, now);
 }
@@ -1832,7 +1842,7 @@ function startTask(state, ctx, p, kind, target, now, keep = null) {
     tz: target.z,
     tail: target.tail ?? null,
     seat: target.seat ?? null,
-    route: [],
+    route: new Float32Array(0),
     seg: 0,
     elapsed: 0,
     dwell: 0,
@@ -1933,16 +1943,17 @@ function setRoute(state, p, task, route, reachable = true) {
   // A copy: planner routes are shared through its cache. Each walker keeps to its own
   // side of the path's centre line.
   // Last, legs that cut the corner of a drawn plinth, step or wing go round it.
-  task.route = skirtOutlines(state, roundRoute(state, laneOffset(state, p.id, alongDecks(state, Array.from(route), laneFraction(p.id)))), deckKeep(state));
+  const walk = skirtOutlines(state, roundRoute(state, laneOffset(state, p.id, alongDecks(state, Array.from(route), laneFraction(p.id)))), deckKeep(state));
   // A gathering's claimed spot is where this route goes (given up if it cannot be reached).
   if (task.claim && !reachable) task.claim = 0;
   if (!task.claim) task.spot = null;
   // The last step off the street (into a field) is checked again: something may have
   // been built there since the task began.
-  const n = task.route.length;
-  if (task.tail && reachable && n >= 2 && !segmentBlocked(state, task.route[n - 2], task.route[n - 1], task.tail[0], task.tail[1])) {
-    task.route.push(task.tail[0], task.tail[1]);
+  const n = walk.length;
+  if (task.tail && reachable && n >= 2 && !segmentBlocked(state, walk[n - 2], walk[n - 1], task.tail[0], task.tail[1])) {
+    walk.push(task.tail[0], task.tail[1]);
   }
+  task.route = toRoute(walk);
   task.seg = 0;
   task.waiting = false;
 }

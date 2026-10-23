@@ -176,7 +176,7 @@ export function createRoutePlanner({ worker = true, maxPending = 1024, maxCache 
           if (!live()) return;
           task.pending = false;
           task.seg = 0;
-          task.route = route ?? [];
+          task.route = Float32Array.from(route ?? []);
           task.blocked = !route;
           if (!route) task.retryAt = (task.elapsed ?? 0) + 3;
         },

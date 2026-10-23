@@ -51,11 +51,11 @@ test('approval is deterministic and draws no random numbers', () => {
   assert.equal(strip(a), rest);
 });
 
-test('an old save without approval gains it on restore, keeps version 2, and its history grows', () => {
+test('an old save without approval gains it on restore, opens as version 3, and its history grows', () => {
   // The cached city fixture was saved before approval existed.
   const s = fixtureState('city');
   assert.equal(s.version, SAVE_VERSION);
-  assert.equal(SAVE_VERSION, 2);
+  assert.equal(SAVE_VERSION, 3);
   const a = s.approval;
   assert.ok(a.overall > 0.05 && a.overall < 0.95, `overall ${a.overall}`);
   assert.equal(a.history.length, 1);
