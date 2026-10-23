@@ -118,3 +118,70 @@ test('inspector replaces validated previews with fallback without saving drafts 
   expect(await inSim(page,state=>JSON.stringify(state.notes))).not.toContain('The town carries on.');
   expect(errors).toEqual([]);
 });
+
+async function quoteSurface(page, {reduced = false} = {}) {
+  await page.route('**/quote-test', route => route.fulfill({contentType:'text/html',body:'<!doctype html><body style="padding:24px;max-width:390px"></body>'}));
+  await page.goto('/quote-test');
+  await page.evaluate(async reduced => {
+    await import('/src/ui/tokens.css');
+    await import('/src/ui/layout.css');
+    await import('/src/ui/components.css');
+    const {mountSprite}=await import('/src/ui/icons.js');mountSprite();
+    const {setReducedMotion}=await import('/src/ui/motion.js');setReducedMotion(reduced);
+    const {createCardNarration}=await import('/src/ui/components/card-narration.js');
+    window.quoteCard={id:'quote-test',why:'The lanes are muddy. A bridge would shorten the journey.'};
+    window.quoteView=createCardNarration(window.quoteCard);document.body.append(window.quoteView.el);
+    window.setQuote=patch=>{window.quoteCard={...window.quoteCard,...patch};window.quoteView.update(window.quoteCard);};
+  },reduced);
+}
+
+test('a streamed quote replaces the explanation, and a player selection survives finalization',async({page})=>{
+  await quoteSurface(page);
+  await expect(page.locator('.card-why')).toBeVisible();
+  await expect(page.locator('.card-narration-toggle')).toBeHidden();
+  await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:''}}));
+  await expect(page.locator('.card-why')).toBeVisible();
+  await expect(page.locator('.card-narration-loading')).toBeVisible();
+  await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:'The muddy lanes make every journey longer.'}}));
+  await expect(page.locator('.card-why')).toBeHidden();
+  await expect(page.locator('.card-flavour')).toBeVisible();
+  await expect(page.locator('.card-quote-text')).toHaveCSS('font-style','italic');
+  await expect(page.locator('.card-quote-text')).toHaveCSS('font-weight','600');
+  expect(await page.locator('.card-quote-text').evaluate(el=>getComputedStyle(el,'::before').content)).toContain('“');
+  const toggle=page.getByRole('button',{name:'Show game explanation'});
+  await toggle.focus();await page.keyboard.press('Enter');
+  await expect(page.locator('.card-why')).toBeVisible();
+  await expect(page.locator('.card-flavour')).toBeHidden();
+  await page.evaluate(()=>window.setQuote({streamingProse:null,prose:{source:'llm',why:'A bridge would spare us the muddy lanes.'}}));
+  await expect(page.locator('.card-why')).toBeVisible();
+  await expect(page.locator('.card-narration-loading')).toBeHidden();
+  await expect(page.getByRole('button',{name:'Show town quote'})).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.card-flavour')).toHaveText('A bridge would spare us the muddy lanes.');
+  await expect(page.locator('.card-why')).toHaveText('The lanes are muddy. A bridge would shorten the journey.');
+});
+
+test('rejected quote restores the explanation and never styles template fallback as a quote',async({page})=>{
+  await quoteSurface(page);
+  await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:'A temporary checked sentence.'}}));
+  await page.getByRole('button',{name:'Show game explanation'}).focus();
+  await page.evaluate(()=>window.setQuote({streamingProse:null,prose:{source:'template',why:'A different local fallback.'}}));
+  await expect(page.locator('.card-why')).toBeVisible();
+  await expect(page.locator('.card-why')).toBeFocused();
+  await expect(page.locator('.card-flavour')).toBeHidden();
+  await expect(page.locator('.card-narration-toggle')).toBeHidden();
+  await expect(page.locator('.card-prose-status')).toHaveText('Showing the game explanation.');
+});
+
+// The global reduced-motion CSS permits effectively instant (0.01ms) transitions.
+test('reduced motion keeps quote loading and swaps still',async({page})=>{
+  await quoteSurface(page,{reduced:true});
+  await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:''}}));
+  await expect(page.locator('.card-narration-loading i').first()).toHaveCSS('animation-name','none');
+  await page.evaluate(()=>window.setQuote({streamingProse:{pending:true,why:'The muddy lanes slow us down.'}}));
+  await expect(page.locator('.card-flavour')).toBeVisible();
+  expect(await page.locator('.card-narration').evaluate(el=>el.getAnimations({subtree:true}).filter(a=>a.effect.getComputedTiming().duration>1).map(a=>a.constructor.name))).toEqual([]);
+  await page.getByRole('button',{name:'Show game explanation'}).click();
+  await expect(page.locator('.card-why')).toBeVisible();
+  expect(await page.locator('.card-narration').evaluate(el=>el.getAnimations({subtree:true}).filter(a=>a.effect.getComputedTiming().duration>1).map(a=>a.constructor.name))).toEqual([]);
+});
