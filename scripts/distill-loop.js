@@ -35,8 +35,9 @@
 //      (distinct and traffic-weighted), each busy kind's traffic-weighted KL,
 //      the largest signed option bias overall and in young towns (hamlets and
 //      villages, where a lean on staying or leaving slows growth), rare-option
-//      ratios, KL on the held-out new rows, JS parity, bundle size and speed, and short canary towns (they must
-//      all finish, and the routine work share must stay near the current version's).
+//      ratios, KL on the held-out new rows, JS parity, bundle size and speed, and short canary towns played
+//      by the simulated player, as the complete-town comparison is (they must all finish, and the routine
+//      work share must stay near the current version's; their population is reported beside it).
 //   6. With --publish and every gate passed: the bundle goes to
 //      public/students/decisions.vN.json, manifest.json names it latest, and
 //      the state file moves on. Otherwise the report says what failed.
@@ -307,20 +308,25 @@ gate('JS parity', check.code === 0, {output: check.text.trim().split('\n').at(-1
 const b = JSON.parse(readFileSync(bundle, 'utf8'));
 const kb = (JSON.stringify(b.weights).length + JSON.stringify(b.vocab).length) / 1024;
 gate('size and speed', kb <= cfg.maxBundleKB && us <= cfg.maxCachedUs, {kb: Math.round(kb), cachedUs: us});
-// Canary towns: the same seeds under the current and the next version.
+// Canary towns: the same seeds under the current and the next version, played
+// by the simulated player (the complete-town comparison's setting).
 const canary = async (name, file) => {
   const dir = join(out, `canary-${name}`);
   const r = await run('node', ['--max-old-space-size=8000', 'scripts/distill-collect.js', dir, '--seeds', String(cfg.canary.seeds), '--start', String(cfg.canary.start),
-    '--years', String(cfg.canary.years), '--workers', String(cfg.canary.seeds), '--answer', 'student', '--student', file], {allowFail: true});
+    '--years', String(cfg.canary.years), '--workers', String(cfg.canary.seeds), '--answer', 'student', '--student', file, '--player', '--no-record'], {allowFail: true});
   const towns = existsSync(join(dir, 'towns.json')) ? JSON.parse(readFileSync(join(dir, 'towns.json'), 'utf8')).towns : [];
   const work = towns.map((t) => { const m = t.shares?.morning ?? {}; const s = Object.values(m).reduce((x, y) => x + y, 0); return s ? 100 * (m.work ?? 0) / s : NaN; });
-  return {ok: r.code === 0 && towns.length === cfg.canary.seeds, work: work.reduce((x, y) => x + y, 0) / work.length};
+  // Geometric mean of the final population.
+  const pops = towns.map((t) => t.town?.at(-1)?.pop).filter((v) => v > 0);
+  const pop = pops.length ? Math.round(Math.exp(pops.reduce((x, v) => x + Math.log(v), 0) / pops.length)) : null;
+  return {ok: r.code === 0 && towns.length === cfg.canary.seeds, work: work.reduce((x, y) => x + y, 0) / work.length, pop};
 };
 const currentBundle = S.current.bundle ? p(S.current.bundle) : null;
 const cNew = await canary('next', bundle);
 const cOld = currentBundle ? await canary('current', currentBundle) : null;
 gate('canary towns', cNew.ok && (!cOld || Math.abs(cNew.work - cOld.work) <= cfg.workShareDelta),
-  {finished: cNew.ok, workShareNext: Number(cNew.work.toFixed(1)), workShareCurrent: cOld ? Number(cOld.work.toFixed(1)) : null});
+  {finished: cNew.ok, workShareNext: Number(cNew.work.toFixed(1)), workShareCurrent: cOld ? Number(cOld.work.toFixed(1)) : null,
+    popNext: cNew.pop, popCurrent: cOld?.pop ?? null});
 const passed = Object.values(report.gates).every((g) => g.pass);
 report.passed = passed;
 save();
