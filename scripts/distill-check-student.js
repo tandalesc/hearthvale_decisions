@@ -22,15 +22,24 @@ for (const row of student.fixture) {
   }
 }
 if (student.hasConfidence) console.log(`confidence head: largest relative difference in expected KL ${worstConf.toExponential(2)}`);
-// Time it uncached, and with each row's snapshot memory cached as in play.
+// Time it three ways: cold (every cache cleared before each question), a new
+// snapshot whose facts have been seen before (fact caches warm), and with each
+// row's snapshot cached as in play.
 const stateOf = (row) => JSON.stringify(row.triples.filter((t) => bundle.vocab.state_scopes.includes(t[0])));
-const time = (cached) => {
+const time = (mode) => {
   const reps = Math.max(1, Math.ceil(2000 / Math.max(1, student.fixture.length)));
-  for (const row of student.fixture) student.fromTriples(row.kind, row.triples, row.options, cached ? stateOf(row) : null);
-  const t0 = performance.now();
-  for (let r = 0; r < reps; r++) for (const row of student.fixture) student.fromTriples(row.kind, row.triples, row.options, cached ? stateOf(row) : null);
-  return ((performance.now() - t0) / (reps * student.fixture.length)) * 1000;
+  const ask = (row) => student.fromTriples(row.kind, row.triples, row.options, mode === 'cached' ? stateOf(row) : null);
+  for (const row of student.fixture) ask(row);
+  let ms = 0;
+  for (let r = 0; r < reps; r++) for (const row of student.fixture) {
+    if (mode === 'cold') student.clearCaches?.();
+    const t0 = performance.now();
+    ask(row);
+    ms += performance.now() - t0;
+  }
+  return (ms / (reps * student.fixture.length)) * 1000;
 };
+const cold = time('cold'), facts = time('facts'), cached = time('cached');
 console.log(`${file}: ${bundle.config.arch}, ${student.fixture.length} fixture rows, largest difference ${worst.toExponential(2)}; ` +
-  `${time(false).toFixed(0)} µs a question uncached, ${time(true).toFixed(0)} µs with its state cached (${student.kinds.size} kinds)`);
+  `${cold.toFixed(0)} µs a question cold, ${facts.toFixed(0)} µs with its facts seen before, ${cached.toFixed(0)} µs with its state cached (${student.kinds.size} kinds)`);
 process.exitCode = worst < 1e-4 && worstConf < 1e-3 ? 0 : 1;

@@ -20,8 +20,10 @@
 //          snapshot, so it is cached per state. Question triples and one token
 //          per offered option run through decoder layers (self-attention, then
 //          attention into the memory); each option token gives one logit.
-//   'mlp'  the triple embeddings summed, an MLP, and a dot product with each
-//          option's embedding.
+//   'mlp'  Deep Sets: each triple's scope, attribute and value embeddings side
+//          by side through a small per-triple network (phi), summed, an MLP, and
+//          a dot product with each option's embedding. (Bundles without phi sum
+//          the triple embeddings directly.)
 //   'fm'   a factorization machine: pairwise products of the triple embeddings
 //          (½((Σe)² − Σe²)) and their sum, each layer-normed and added, then a
 //          dot product with each option's embedding. With fm_order 3, every
@@ -51,6 +53,78 @@ export function loadStudent(bundle) {
   // The MLP's later layers: with dropout modules (mlp.4, mlp.7) or without (mlp.3, mlp.5).
   const [mlpHidden, mlpOut] = W['mlp.7.weight'] ? ['mlp.4', 'mlp.7'] : ['mlp.3', 'mlp.5'];
   const id = (map, key) => map[key] ?? 1;
+
+  // A fact's encoding depends only on the fact (its number included) and these
+  // weights, so it is kept across snapshots and questions, in a bounded cache.
+  const FACT_CACHE = 20000;
+  const factMemo = new Map();
+  function factGet(t, make) {
+    const key = `${t[0]}\u0001${t[1]}\u0001${t[2]}\u0001${t[3] ?? ''}`;
+    let f = factMemo.get(key);
+    if (!f) {
+      f = make();
+      if (factMemo.size >= FACT_CACHE) factMemo.delete(factMemo.keys().next().value);
+      factMemo.set(key, f);
+    }
+    return f;
+  }
+
+  // Deep Sets MLP. φ's first layer reads [scope; attribute; value + num · dir],
+  // so it folds into one table row per vocabulary entry (made on first use):
+  // W0·[s; a; v + num·dir] = W0s·s + W0a·a + W0v·v + num · W0v·dir.
+  const phiH = W['phi.0.weight']?.shape[0] ?? 0;
+  const folded = {scope: new Map(), attr: new Map(), value: new Map(), dir: new Map()};
+  function foldRow(part, table, i, col) {
+    let r = folded[part].get(i);
+    if (!r) {
+      const w = W['phi.0.weight'].data, e = W[table].data;
+      r = new Float32Array(phiH);
+      for (let o = 0; o < phiH; o++) {
+        let sum = 0;
+        const base = o * 3 * d + col;
+        for (let j = 0; j < d; j++) sum += w[base + j] * e[i * d + j];
+        r[o] = sum;
+      }
+      folded[part].set(i, r);
+    }
+    return r;
+  }
+  function phiFact(t) {
+    return factGet(t, () => {
+      const [scope, attr, value, num] = t;
+      const a = id(voc.attrs, attr);
+      const b0 = W['phi.0.bias'].data, u = new Float32Array(phiH);
+      const rs = foldRow('scope', 'embed.scope.weight', id(voc.scopes, scope), 0);
+      const ra = foldRow('attr', 'embed.attr.weight', a, d);
+      const rv = foldRow('value', 'embed.value.weight', id(voc.values, value), 2 * d);
+      for (let o = 0; o < phiH; o++) u[o] = b0[o] + rs[o] + ra[o] + rv[o];
+      if (num !== null && num !== undefined) {
+        const rd = foldRow('dir', 'embed.num_dir.weight', a, 2 * d);
+        for (let o = 0; o < phiH; o++) u[o] += num * rd[o];
+      }
+      return linearRaw(W['phi.2.weight'].data, W['phi.2.bias'].data, gelu(u), d);
+    });
+  }
+  // The snapshot's facts summed once per snapshot; each question adds its own.
+  function phiPooled(triples, cacheKey) {
+    let town = cacheKey ? memo.get(cacheKey) : null;
+    if (!town) {
+      town = new Float32Array(d);
+      for (const t of triples) if (stateScopes.has(t[0])) add(town, phiFact(t));
+      if (cacheKey) {
+        if (memo.size >= STATE_CACHE) memo.delete(memo.keys().next().value);
+        memo.set(cacheKey, town);
+      }
+    }
+    const sum = Float32Array.from(town);
+    let unk = 0;
+    for (const t of triples) {
+      if (id(voc.attrs, t[1]) === 1 || id(voc.values, t[2]) === 1) unk++;
+      if (!stateScopes.has(t[0])) add(sum, phiFact(t));
+    }
+    last = {hidden: null, unk, n: triples.length};
+    return sum;
+  }
 
   // Triples -> embedded vectors, split into snapshot and question tokens.
   function embed(triples) {
@@ -134,6 +208,26 @@ export function loadStudent(bundle) {
   }
 
   // Snapshot tokens -> each question layer's keys and values over the memory.
+  // With no snapshot encoder, each memory token is its own fact's (norm, then
+  // each question layer's key and value projections): kept per fact, so a new
+  // snapshot pays only for facts not seen before. Same arithmetic per row.
+  function factMemory(triples, sx, sn) {
+    const L = cfg.question_layers;
+    const kv = Array.from({length: L}, () => ({k: new Float32Array(sn * d), v: new Float32Array(sn * d), m: sn}));
+    let r = 0;
+    for (const t of triples) {
+      if (!stateScopes.has(t[0])) continue;
+      const at = r * d;
+      const f = factGet(t, () => {
+        const tok = lnFlat(sx.subarray(at, at + d), 1, d, W, 'state_norm');
+        return Array.from({length: L}, (_, l) => projectFlat(W, `question.layers.${l}.multihead_attn`, tok, 1, d));
+      });
+      for (let l = 0; l < L; l++) { kv[l].k.set(f[l].k, at); kv[l].v.set(f[l].v, at); }
+      r++;
+    }
+    return kv;
+  }
+
   function stateMemory(x, n) {
     for (let l = 0; l < cfg.state_layers; l++) {
       const p = `state_encoder.layers.${l}`;
@@ -149,7 +243,7 @@ export function loadStudent(bundle) {
   // Option logits for one question. `cacheKey` names its snapshot: the
   // set model's memory depends only on the snapshot triples, so it is kept.
   function logits(kind, triples, options, cacheKey) {
-    const {state, question} = cfg.arch === 'set' ? {} : embed(triples);
+    const {state, question} = cfg.arch === 'set' || phiH ? {} : embed(triples);
     if (cfg.arch === 'fm') {
       const sum = new Float32Array(d), squares = new Float32Array(d);
       for (const v of [...state, ...question]) {
@@ -173,8 +267,13 @@ export function loadStudent(bundle) {
       return optionVectors(kind, options).map((o) => dot(p, o));
     }
     if (cfg.arch === 'mlp') {
-      const sum = new Float32Array(d);
-      for (const v of [...state, ...question]) add(sum, v);
+      let sum;
+      if (phiH) {
+        sum = phiPooled(triples, cacheKey);
+      } else {
+        sum = new Float32Array(d);
+        for (const v of [...state, ...question]) add(sum, v);
+      }
       let h = layerNorm([sum], W, 'mlp.0')[0];
       h = gelu(linear(W, 'mlp.1', h));
       h = gelu(linear(W, mlpHidden, h));
@@ -187,7 +286,7 @@ export function loadStudent(bundle) {
       memo.delete(cacheKey);
     } else {
       // A question with no snapshot attends to its first triple (the kind), as in training.
-      mem = sn ? stateMemory(sx, sn) : stateMemory(qx.slice(0, d), 1);
+      mem = !sn ? stateMemory(qx.slice(0, d), 1) : cfg.state_layers === 0 ? factMemory(triples, sx, sn) : stateMemory(sx, sn);
       if (cacheKey && memo.size >= STATE_CACHE) memo.delete(memo.keys().next().value);
     }
     if (cacheKey) memo.set(cacheKey, mem);
@@ -321,7 +420,10 @@ export function loadStudent(bundle) {
   }
   const fingerprint = fp.toString(16).padStart(8, '0');
 
-  return {kinds: new Set(bundle.kinds), model, version: bundle.version, id: fingerprint, answer, unknownIn, fromTriples, expectedFromTriples, hasConfidence: !!head,
+  // For timing: forget every snapshot, fact and answer (folded tables, made from the weights alone, stay).
+  const clearCaches = () => { memo.clear(); factMemo.clear(); answers.clear(); };
+
+  return {kinds: new Set(bundle.kinds), model, version: bundle.version, id: fingerprint, answer, unknownIn, fromTriples, expectedFromTriples, hasConfidence: !!head, clearCaches,
     thresholds: bundle.confidence?.thresholds ?? null, quantiles: bundle.confidence?.quantiles ?? null, fixture: bundle.fixture ?? []};
 }
 
