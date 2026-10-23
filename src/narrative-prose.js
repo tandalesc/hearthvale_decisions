@@ -397,6 +397,7 @@ const EXAMPLE_WHYS = CARD_EXAMPLES.map((e) => e.card.why).join(' ');
 const CLAIMS_RULING = /\bwe (put off|refused|approved|turned down|let lapse|delayed)\b/i;
 
 function whyProblem(text, facts) {
+  if (text === facts.why) return 'unchanged game explanation';
   if (STIFF.test(text)) return `stiff phrasing: ${text.match(STIFF)[0]}`;
   if (CLAIMS_RULING.test(text)) return 'claims your rulings as theirs';
   // Shared town names and ordinary words are not copied prose. Require a
@@ -412,12 +413,20 @@ function whyProblem(text, facts) {
   // 'Ivo thinks we should...' from Ivo himself. Role names ('The town crier') do not count.
   const name = facts.asker?.name?.split(' ')[0];
   if (name && name.length > 2 && !/^(the|a|an)$/i.test(name) && new RegExp(`\\b${name}\\b`).test(text)) return 'speaks of themselves by name';
-  if (facts.why && overlapWithTemplate(text, facts.why) > MAX_TEMPLATE_OVERLAP) return 'restates the template';
-  // Nor may it open with, or carry, a template sentence nearly word for word.
-  const copied = facts.why && sentencesOf(text).some((x) => contentTokens(x).size >= 3 && overlapWithTemplate(x, facts.why) >= 0.8);
-  if (copied) return 'copies a template sentence';
-  const details = detailTokens(facts);
+  // The quote replaces the reason, so repeating its meaning is desirable.
+  const details = new Set([...detailTokens(facts), ...contentTokens(facts.why), ...contentTokens(facts.title)]);
   if (details.size && ![...contentTokens(text)].some((w) => details.has(w) || details.has(w.replace(/s$/, '')))) return 'no concrete detail';
+  // Batched proposals have x_/y_ keys. A simple lexical guard catches a lost
+  // plan, including in previews; this is not a general semantic verifier.
+  const plans = facts.options.filter((o) => /^[xy]_/.test(o.key));
+  if (plans.some((o) => o.key.startsWith('x_')) && plans.some((o) => o.key.startsWith('y_'))) {
+    const spoken = contentTokens(text);
+    for (const plan of plans) {
+      const subject = plan.label.split(/\b(?:at|in|on|for)\b/i)[0];
+      const anchors = [...contentTokens(subject)].filter((w) => !['build', 'form', 'make', 'start', 'hold', 'fund', 'adopt'].includes(w));
+      if (anchors.length && !anchors.some((w) => spoken.has(w) || spoken.has(w.replace(/s$/, '')))) return 'omits a competing plan';
+    }
+  }
   return null;
 }
 
@@ -454,9 +463,8 @@ export function checkCardProse(facts, out) {
   const used = {why: 'template', options: {}};
   const prose = {why: facts.why ?? '', options: {}};
 
-  // A why that runs to a fourth sentence keeps its first three.
-  const whyText = typeof out.why === 'string' ? (sentencesOf(cleanProse(out.why, 2000)).slice(0, 3).join('').trim() || out.why) : out.why;
-  const why = checkText(whyText, {maxSentences: 3, maxWords: 60, maxChars: 380, nums, words});
+  // Never truncate a quote: the last sentence may contain the actual choice.
+  const why = checkText(out.why, {maxSentences: 4, maxWords: 80, maxChars: 560, nums, words});
   const whyBad = why.text ? whyProblem(why.text, facts) : why.reason;
   if (whyBad) reasons.why = whyBad;
   else { prose.why = why.text; used.why = 'llm'; }
