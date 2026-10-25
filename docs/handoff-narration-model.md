@@ -133,6 +133,18 @@ All runs: 4 decoder layers, d 96, pretrain 6 + fine-tune 30 epochs. Scored on 60
 - **int4 after training** costs 7–14 points out of 100: 408 KB with groups of 32, 452 KB with groups of 16, 526 KB with int8 embeddings. Needs quantization-aware training.
 - **Trainer memory:** rows now stream into compact numpy examples, 2 GB per run instead of 7.3 GB. Four runs at 7.3 GB ran rrh-llm-1 out of memory once. `~/narration/runs.sh` refuses to start without 12 GB free.
 
+## 1f. Four times the Haiku data (25 October 2026)
+
+Three more Batch runs, one reply each for the 25,668 training cards ($2.26 + $2.23 + $2.26). About 25% pass the checks each time, so there are now about 25K passing quotes (was 6.2K). Pretraining covers about 103K quotes and 335K option lines. BPE-2048 was relearned on this corpus. Trained with BPE-2048 + SwiGLU, 3 pretrain + 12 fine-tune epochs, on the same held-out towns:
+
+| | params | held-out loss | test top / any of 4 pass | JS: shown of 100, median |
+|---|---|---|---|---|
+| seed 0 | 652K | 1.687 | **66.7% / 70.5%** | 64, 132 ms |
+| seed 1 | 652K | 1.672 | **65.7% / 70.5%** | 67, 129 ms |
+| before (1× data, BPE-2048) | 652K | 1.87–1.88 | 51.8–62.0% / 55.5–66.0% | 49–60 |
+
+More data helped more than any architecture change, and the two seeds now agree. Not yet re-judged with Haiku for fact errors; the earlier rate was 54% before the fact check. The runs are on rrh-llm-1 (`~/narration/scale-s*`), and the int8 bundles are in this session's scratchpad, not in the game.
+
 ## 2. What we learned
 
 - **The game only asks the narrator for two things today:** Council card quotes (`card.why`, on request from the open view) and inspector notes for people, households, buildings and bodies. The prose keeper never asks for year or end-page prose (`createProseKeeper` in `src/narrator-client.js` has no clock-driven work).
