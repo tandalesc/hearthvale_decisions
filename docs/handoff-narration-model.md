@@ -161,6 +161,24 @@ v2's setup (seed 1) with QAT:
 
 Rounding to int4 after training cost 7–14 points; with QAT it costs about 3, inside seed noise. Not shipped yet.
 
+## 1h. v3 attempt: fact fixes with QAT int4. Not shipped (25 October 2026)
+
+Three changes at once, trained with QAT int4:
+1. Fine-tune only on Haiku quotes that also pass the fact check (23,912 of about 25.3K).
+2. A record token per list item (`past:0`), added to the triple's scope parts (`vocab.record_scopes`).
+3. The runtime beam drops a beam whose text, at the end of a sentence, fails the fact check.
+
+Pruning lives in the runtime, so v2 gets it too.
+
+Judged the same way (the runtime's shown quotes for 450 held-out cards, 300 judged):
+
+| | shown of 450 | contradicts the facts | grammar clean |
+|---|---|---|---|
+| v2, int8 (shipped) | 332 | **19.7%** | **76.0%** |
+| v3, seed 0, int4 QAT | 341 | 26.0% | 71.7% |
+
+v3 shows a few more cards but makes more fact errors. The three changes and int4 are confounded. Next: train v3 at int8 (`--qat 0`), and record tokens alone, to see which change hurts. Test pass rates, before pruning: v3 62.8% and 60.5% top, against 65.7% for v2.
+
 ## 2. What we learned
 
 - **The game only asks the narrator for two things today:** Council card quotes (`card.why`, on request from the open view) and inspector notes for people, households, buildings and bodies. The prose keeper never asks for year or end-page prose (`createProseKeeper` in `src/narrator-client.js` has no clock-driven work).

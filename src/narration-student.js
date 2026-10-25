@@ -139,6 +139,7 @@ export function loadNarrationStudent(bundle, blob = null) {
     triples.forEach(([scope, attr, value, num, type], r) => {
       const o = r * e, add = (vec, s = 1) => { for (let i = 0; i < e; i++) x[o + i] += vec[i] * s; };
       for (const p of scope.split(/[:/]/).slice(0, 4)) add(row('scope', sc.get(p) ?? UNK));
+      if (voc.record_scopes && scope.includes(':')) add(row('scope', sc.get(scope) ?? UNK));
       const a = at.get(attr) ?? UNK;
       add(row('attr', a));
       if (type === 'text') {
@@ -226,7 +227,9 @@ export function loadNarrationStudent(bundle, blob = null) {
 
   const inputRow = (tok) => linFlat(row('word', tok), 1, e, W['up.weight'].data, null, d);
 
-  async function beam(encoded, task, {k = cfg.beam, alpha = cfg.alpha, block = cfg.block, pause} = {}) {
+  // check (optional): text so far -> true when it says something the card contradicts; such a
+  // beam is dropped at the end of a sentence, so the others get the room.
+  async function beam(encoded, task, {k = cfg.beam, alpha = cfg.alpha, block = cfg.block, pause, check} = {}) {
     const {mem, n, ban} = encoded, maxT = cfg.max_tgt;
     const cross = Array.from({length: L}, (_, l) => projectFlat(W, `decoder.layers.${l}.multihead_attn`, mem, n, d));
     const fresh = () => Array.from({length: L}, () => ({k: new Float32Array(maxT * d), v: new Float32Array(maxT * d)}));
@@ -267,6 +270,7 @@ export function loadNarrationStudent(bundle, blob = null) {
         const p = o.parent, tokLp = p.out.lp[o.tok];
         const child = {toks: [...p.toks, o.tok], score: o.s, sumLp: p.sumLp + tokLp, minLp: Math.min(p.minLp, tokLp),
           sumEnt: p.sumEnt + p.out.ent, sumH: p.sumH.map((v, i) => v + p.out.h[i])};
+        if (check && o.tok !== EOS && /[.!?]$/.test(voc.words[o.tok]) && check(untok(child.toks.map((i) => voc.words[i])))) continue;
         if (o.tok === EOS || t === maxT - 1) finished.push({...child, norm: o.s / child.toks.length ** alpha});
         else {
           // The first child takes its parent's cache; others copy only the rows filled so far.
@@ -303,11 +307,12 @@ export function loadNarrationStudent(bundle, blob = null) {
   async function quote(facts, {pause, beam: width = cfg.beam, adaptive = true} = {}) {
     const {triples, roles} = roleTriples(narrationTriples(facts));
     const encoded = encode(triples, roles);
+    const check = (text) => !!factProblem(relex(text, roles), facts);
     if (adaptive && width > 1) {
-      const first = await pick(facts, roles, encoded, await beam(encoded, tk.get('card.quote'), {pause, k: 1}));
+      const first = await pick(facts, roles, encoded, await beam(encoded, tk.get('card.quote'), {pause, k: 1, check}));
       if (first?.confident) return first;
     }
-    return pick(facts, roles, encoded, await beam(encoded, tk.get('card.quote'), {pause, k: width}));
+    return pick(facts, roles, encoded, await beam(encoded, tk.get('card.quote'), {pause, k: width, check}));
   }
 
   function pick(facts, roles, encoded, cands) {

@@ -153,6 +153,8 @@ def build_vocab(train, bpe=None):
             words.update(tokens(r['target']))
         for scope, attr, value, num, typ in r['triples']:
             scopes.update(re.split(r'[:/]', scope))
+            if ':' in scope:
+                scopes[scope] += 1   # the record itself ("past:0"), so its triples stay together
             attrs[attr] += 1
             if typ != 'text':
                 values[f'{typ}:{value}'] += 1
@@ -162,7 +164,7 @@ def build_vocab(train, bpe=None):
         vocab_words = SPECIALS + [w for w in dict.fromkeys(roles + bpe['symbols']) if w not in SPECIALS]
     else:
         vocab_words = SPECIALS + [w for w in keep(words, 3) if w not in SPECIALS]
-    return {'words': vocab_words, **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
+    return {'words': vocab_words, 'record_scopes': True, **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
             'scopes': ['<pad>', '<unk>'] + keep(scopes, 1), 'attrs': ['<pad>', '<unk>'] + keep(attrs, 1),
             'values': ['<pad>', '<unk>'] + keep(values, 3), 'tasks': ['card.quote', 'card.option']}
 
@@ -176,6 +178,7 @@ class Codec:
         self.va = {t: i for i, t in enumerate(vocab['values'])}
         self.tk = {t: i for i, t in enumerate(vocab['tasks'])}
         self.bpe = BPE(vocab['bpe']) if 'bpe' in vocab else None
+        self.records = bool(vocab.get('record_scopes'))
         self.tok = self.bpe.tokens if self.bpe else tokens
         self.detok = BPE.detok if self.bpe else detok
         self.max_bag = 40 if self.bpe else MAX_BAG
@@ -209,7 +212,9 @@ class Codec:
         facts_text = []
         for scope, attr, value, n, typ in r['triples']:
             parts = [self.sc.get(p, 1) for p in re.split(r'[:/]', scope)][:4]
-            sc.append(parts + [0] * (4 - len(parts)))
+            if self.records and ':' in scope:
+                parts.append(self.sc.get(scope, 1))
+            sc.append(parts + [0] * (5 - len(parts)))
             at.append(self.at.get(attr, 1))
             if typ == 'text':
                 ids = [self.w.get(t, UNK) for t in self.tok(value)][:self.max_bag] or [UNK]
@@ -257,7 +262,7 @@ def collate(batch, device):
     lens = lambda e: e['bag_len'] if 'bag_len' in e else [len(b) for b in e['bag']]
     L = -(-max([int(n) for e in batch for n in lens(e)] + [1]) // 8) * 8
     Y = -(-max(len(e['tgt']) for e in batch) // 16) * 16
-    sc = torch.zeros(B, T, 4, dtype=torch.long)
+    sc = torch.zeros(B, T, 5, dtype=torch.long)
     at = torch.zeros(B, T, dtype=torch.long)
     va = torch.zeros(B, T, dtype=torch.long)
     bag = torch.zeros(B, T, L, dtype=torch.long)

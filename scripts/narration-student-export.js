@@ -18,6 +18,7 @@ import {validateProseFacts} from '../src/narrative-prose.js';
 import {parseJsonReply} from '../server/narrator.js';
 import {sheetKey} from './narration-collect.js';
 import {modelRow} from './narration-export.js';
+import {factProblem} from '../src/narration-consistency.js';
 
 async function* readLines(file) {
   for await (const line of createInterface({input: createReadStream(file), crlfDelay: Infinity})) if (line) yield JSON.parse(line);
@@ -53,7 +54,9 @@ for (const file of labelFiles) {
     const base = {key, seeds: l.seeds ?? [], triples, roles};
     if (typeof l.text === 'string' && l.text.trim()) {
       write({...base, task: 'card.quote', source: 'pretrain', target: delex(l.text.trim(), roles)});
-      if (modelRow(facts, 'why', l.text).task) write({...base, task: 'card.quote', source: 'model', target: delex(l.text.trim(), roles)});
+      const passing = modelRow(facts, 'why', l.text);
+      // Fine-tune only on quotes that are also true to the facts (Haiku slips too).
+      if (passing.task && !factProblem(passing.target, facts)) write({...base, task: 'card.quote', source: 'model', target: delex(l.text.trim(), roles)});
     }
     const options = parseJsonReply(l.reply ?? '')?.options ?? {};
     for (const [optKey, line] of Object.entries(options)) {
