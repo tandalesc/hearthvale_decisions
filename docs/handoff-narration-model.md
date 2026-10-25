@@ -177,7 +177,11 @@ Judged the same way (the runtime's shown quotes for 450 held-out cards, 300 judg
 | v2, int8 (shipped) | 332 | **19.7%** | **76.0%** |
 | v3, seed 0, int4 QAT | 341 | 26.0% | 71.7% |
 
-v3 shows a few more cards but makes more fact errors. The three changes and int4 are confounded. Next: train v3 at int8 (`--qat 0`), and record tokens alone, to see which change hurts. Test pass rates, before pruning: v3 62.8% and 60.5% top, against 65.7% for v2.
+v3 shows a few more cards but makes more fact errors. Two follow-ups, judged the same way:
+- **QAT int4 alone** (v2's data): 22.7% contradicted.
+- **v4 = v3 without record tokens** (seed 1; seed 0 passed only 54.0% of test cards against seed 1's 63.5%): 24.7% contradicted, 67.3% grammar clean.
+
+At 300 judged quotes each number is about ±2.5 points. int4 costs a few points against int8, record tokens perhaps one more, and the fact-clean filter shows no gain. Record tokens are now off by default (`--record-scopes`). To separate these properly, judge about 1,000 quotes per model (about 10 cents each) across both seeds. The three changes and int4 are confounded. Next: train v3 at int8 (`--qat 0`), and record tokens alone, to see which change hurts. Test pass rates, before pruning: v3 62.8% and 60.5% top, against 65.7% for v2.
 
 ## 2. What we learned
 

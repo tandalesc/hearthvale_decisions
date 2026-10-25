@@ -146,15 +146,15 @@ def split_rows(rows, held_out, n_val):
     return part, sorted(val)
 
 
-def build_vocab(train, bpe=None):
+def build_vocab(train, bpe=None, records=False):
     words, scopes, attrs, values = Counter(), Counter(), Counter(), Counter()
     for r in train:
         if not bpe:
             words.update(tokens(r['target']))
         for scope, attr, value, num, typ in r['triples']:
             scopes.update(re.split(r'[:/]', scope))
-            if ':' in scope:
-                scopes[scope] += 1   # the record itself ("past:0"), so its triples stay together
+            if records and ':' in scope:
+                scopes[scope] += 1   # the record itself ("past:0"); off by default: it hurt (handoff 1h)
             attrs[attr] += 1
             if typ != 'text':
                 values[f'{typ}:{value}'] += 1
@@ -164,7 +164,7 @@ def build_vocab(train, bpe=None):
         vocab_words = SPECIALS + [w for w in dict.fromkeys(roles + bpe['symbols']) if w not in SPECIALS]
     else:
         vocab_words = SPECIALS + [w for w in keep(words, 3) if w not in SPECIALS]
-    return {'words': vocab_words, 'record_scopes': True, **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
+    return {'words': vocab_words, **({'record_scopes': True} if records else {}), **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
             'scopes': ['<pad>', '<unk>'] + keep(scopes, 1), 'attrs': ['<pad>', '<unk>'] + keep(attrs, 1),
             'values': ['<pad>', '<unk>'] + keep(values, 3), 'tasks': ['card.quote', 'card.option']}
 
@@ -539,6 +539,7 @@ def main():
     ap.add_argument('--max-tgt', type=int, default=MAX_TGT, help='longest text in tokens (BPE text is longer)')
     ap.add_argument('--qat', type=int, choices=[0, 4, 8], default=4, help='quantization-aware fine-tuning for this export width (0: off)')
     ap.add_argument('--qat-group', type=int, default=32)
+    ap.add_argument('--record-scopes', action='store_true', help='add a token per list item ("past:0"); hurt fact accuracy in v3')
     ap.add_argument('--bpe', help='subword vocabulary from scripts/narration-bpe.py (default: whole words)')
     ap.add_argument('--load', help='a trained run dir: skip training and only quote cards with its model')
     a = ap.parse_args()
@@ -555,7 +556,7 @@ def main():
     val = set([s for s in sorted(seeds, key=h) if s not in held][: a.val_seeds])
     val_seeds = sorted(val)
     is_train = lambda r: r['source'] != 'prompt' and part_of(r, held, val) == 'train'
-    vocab = json.load(open(f'{a.load}/vocab.json')) if a.load else build_vocab((r for r in stream(a.rows) if is_train(r)), json.load(open(a.bpe)) if a.bpe else None)
+    vocab = json.load(open(f'{a.load}/vocab.json')) if a.load else build_vocab((r for r in stream(a.rows) if is_train(r)), json.load(open(a.bpe)) if a.bpe else None, a.record_scopes)
     C = Codec(vocab)
     pre, fine, held_ex, prompts, counts = [], [], {'val': [], 'test': []}, {'val': [], 'test': []}, Counter()
     for r in stream(a.rows):
