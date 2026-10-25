@@ -291,6 +291,38 @@ def collate(batch, device):
 
 # ---------------------------------------------------------------- model
 
+class FakeQuant(nn.Module):
+    """Quantization-aware training: the weight as the int4/int8 export will store it (symmetric,
+    an fp16 scale per `group` values of a row; int8 one per row), gradients passed straight
+    through. Applied as a parametrization, so every use of the weight sees the rounded one."""
+    def __init__(self, bits, group):
+        super().__init__()
+        self.qmax, self.bits, self.group = (127 if bits == 8 else 7), bits, group
+
+    def forward(self, w):
+        rows, cols = w.shape
+        g = cols if self.bits == 8 else min(self.group, cols)
+        wp = F.pad(w, (0, (-cols) % g)).view(rows, -1, g)
+        scale = (wp.detach().abs().amax(2, keepdim=True) / self.qmax).half().float()
+        scale = torch.where(scale == 0, torch.ones_like(scale), scale)
+        q = torch.clamp(torch.round(wp / scale), -self.qmax, self.qmax) * scale
+        return (wp + (q - wp).detach()).view(rows, -1)[:, :cols]
+
+
+def quantize_aware(model, bits, group, on=True):
+    """Add (or remove, keeping the float weights) fake quantization on every 2-D weight."""
+    from torch.nn.utils import parametrize
+    modules = list(model.modules())   # registering adds modules: list them first
+    for module in modules:
+        if on:
+            for name, p in list(module.named_parameters(recurse=False)):
+                if p.dim() == 2 and not parametrize.is_parametrized(module, name):
+                    parametrize.register_parametrization(module, name, FakeQuant(bits, group))
+        elif parametrize.is_parametrized(module):
+            for name in list(module.parametrizations.keys()):
+                parametrize.remove_parametrizations(module, name, leave_parametrized=False)
+
+
 class DecoderLayer(nn.Module):
     """Pre-norm decoder layer, named as nn.TransformerDecoderLayer names its weights.
     ffn 'relu': linear2(relu(linear1 x)); 'swiglu': down(silu(gate x) * up x), no biases."""
@@ -500,6 +532,8 @@ def main():
     ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--max-tgt', type=int, default=MAX_TGT, help='longest text in tokens (BPE text is longer)')
+    ap.add_argument('--qat', type=int, choices=[0, 4, 8], default=4, help='quantization-aware fine-tuning for this export width (0: off)')
+    ap.add_argument('--qat-group', type=int, default=32)
     ap.add_argument('--bpe', help='subword vocabulary from scripts/narration-bpe.py (default: whole words)')
     ap.add_argument('--load', help='a trained run dir: skip training and only quote cards with its model')
     a = ap.parse_args()
@@ -546,6 +580,8 @@ def main():
         model.load_state_dict(torch.load(f'{a.load}/model.pt', map_location=a.device)['state'])
         a.pretrain_epochs = a.finetune_epochs = 0
     train_phase(model, pre if a.pretrain_epochs else [], a.pretrain_epochs, a.lr, a, rng, 'pretrain')
+    if a.qat:   # fine-tune (and evaluate) with the weights as the export will round them
+        quantize_aware(model, a.qat, a.qat_group)
     train_phase(model, fine, a.finetune_epochs, a.lr * 0.3, a, rng, 'finetune')
 
     # Held-out loss on passing quotes, then quotes for validation and test cards.
@@ -583,7 +619,9 @@ def main():
                'val_seeds': val_seeds, 'held_out': sorted(held), 'args': vars(a)}
     json.dump(metrics, open(f'{a.out}/metrics.json', 'w'), indent=1)
     json.dump(vocab, open(f'{a.out}/vocab.json', 'w'))
-    torch.save({'state': model.state_dict(), 'config': {k: getattr(a, k) for k in ('d', 'e', 'layers', 'ff', 'ffn', 'max_tgt')}}, f'{a.out}/model.pt')
+    if a.qat:   # save the float weights; the export rounds them exactly as training did
+        quantize_aware(model, a.qat, a.qat_group, on=False)
+    torch.save({'state': model.state_dict(), 'config': {k: getattr(a, k) for k in ('d', 'e', 'layers', 'ff', 'ffn', 'max_tgt', 'qat', 'qat_group')}}, f'{a.out}/model.pt')
     print(json.dumps(metrics))
 
 

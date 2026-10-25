@@ -145,6 +145,22 @@ Three more Batch runs, one reply each for the 25,668 training cards ($2.26 + $2.
 
 More data helped more than any architecture change, and the two seeds now agree. Not yet re-judged with Haiku for fact errors; the earlier rate was 54% before the fact check. The runs are on rrh-llm-1 (`~/narration/scale-s*`), and the int8 bundles are in this session's scratchpad, not in the game.
 
+## 1g. Quantization-aware training (25 October 2026)
+
+`narration-student.py --qat 4` is the default for future runs:
+- Pretraining runs in full precision; fine-tuning sees every 2-D weight rounded as the int4 export rounds it (groups of 32, fp16 scales), with gradients passed straight through.
+- Evaluation runs on the rounded weights, and float weights are saved.
+- The export picks int4 from the run's config.
+
+v2's setup (seed 1) with QAT:
+
+| | weights | test top / any pass (600) | JS: passing / shown of 100, median |
+|---|---|---|---|
+| v2, int8, no QAT | 660 KB | 65.7% / 70.5% | 72 / 67, 130 ms |
+| QAT, int4 | **370 KB** | 62.7% / 67.2% | 76 / 72, 119 ms |
+
+Rounding to int4 after training cost 7–14 points; with QAT it costs about 3, inside seed noise. Not shipped yet.
+
 ## 2. What we learned
 
 - **The game only asks the narrator for two things today:** Council card quotes (`card.why`, on request from the open view) and inspector notes for people, households, buildings and bodies. The prose keeper never asks for year or end-page prose (`createProseKeeper` in `src/narrator-client.js` has no clock-driven work).

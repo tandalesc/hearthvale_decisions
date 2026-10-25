@@ -89,7 +89,7 @@ def main():
     ap.add_argument('--version', type=int, default=1)
     ap.add_argument('--fixture', type=int, default=24)
     ap.add_argument('--share', type=float, default=0.9)
-    ap.add_argument('--bits', type=int, choices=[8, 4], default=8)
+    ap.add_argument('--bits', type=int, choices=[8, 4], help='default: the width the run was trained for (--qat), else 8')
     ap.add_argument('--group', type=int, default=32, help='int4: values per scale')
     ap.add_argument('--keep8', default='', help='regex of weight names kept at int8 when --bits 4 (e.g. the embedding tables)')
     ap.add_argument('--fixture-out', help='where the parity fixture goes (default OUT with .fixture.json); it is not shipped')
@@ -98,6 +98,8 @@ def main():
     vocab = json.load(open(f'{a.run}/vocab.json'))
     ck = torch.load(f'{a.run}/model.pt', map_location='cpu')
     cfg = ck['config']
+    a.bits = a.bits or cfg.get('qat') or 8
+    a.group = cfg.get('qat_group', a.group) if cfg.get('qat') == 4 else a.group
     S.MAX_TGT = cfg.get('max_tgt', S.MAX_TGT)
     model = S.NarrationStudent(vocab, d=cfg['d'], e=cfg['e'], layers=cfg['layers'], ff=cfg['ff'], ffn=cfg.get('ffn', 'relu'))
     model.load_state_dict(ck['state'])
