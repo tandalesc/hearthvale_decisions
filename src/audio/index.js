@@ -1,5 +1,7 @@
 // Procedural WebAudio for Hearthvale. Nothing plays until the first user
-// gesture. The context suspends while the tab is hidden.
+// gesture. The context suspends while the tab is hidden, and while sound is
+// off: a running context, even a silent one, counts as playing audio, and a
+// phone hands it the audio focus (pausing the player's music).
 import {createBus} from './bus.js';
 import {createAmbience} from './ambience.js';
 import * as ui from './ui-sounds.js';
@@ -25,8 +27,31 @@ export function createAudio(prefs) {
     bus.ramp(bus.ui.gain, Number(prefs.get('ui') ?? 0.7), 0.1);
   }
 
+  const muted = () => !!prefs.get('muted');
+  // iOS: 'playback' takes the audio focus; 'ambient' leaves other apps' audio alone.
+  const session = (type) => { try { if (navigator.audioSession) navigator.audioSession.type = type; } catch { /* older Safari */ } };
+  let suspendTimer = null;
+
+  // Sound off: fade out, then stop the context altogether. Sound on: start it
+  // (on this click, which counts as the gesture browsers ask for) or resume it.
+  function applyMute() {
+    clearTimeout(suspendTimer);
+    if (muted()) {
+      if (!bus.ctx) return;
+      suspendTimer = setTimeout(() => {
+        if (!muted()) return;
+        bus.ctx.suspend?.();
+        session('ambient');
+      }, 400);
+      return;
+    }
+    if (!started) return start();
+    session('playback');
+    if (!document.hidden) bus.ctx?.resume?.();
+  }
+
   function start() {
-    if (started) return;
+    if (started || muted()) return;
     if (!bus.ensure()) return;
     started = true;
     watchState();
@@ -47,6 +72,7 @@ export function createAudio(prefs) {
   const disarm = () => { for (const g of GESTURES) removeEventListener(g, unlock, true); };
   const arm = () => { for (const g of GESTURES) addEventListener(g, unlock, true); };
   function unlock() {
+    if (muted()) return;   // stay armed: sound starts when it is turned on
     start();
     if (bus.ctx?.state === 'running') { disarm(); return; }
     bus.ctx?.resume?.().then(() => { if (bus.ctx.state === 'running') disarm(); }).catch(() => {});
@@ -61,11 +87,12 @@ export function createAudio(prefs) {
   document.addEventListener('visibilitychange', () => {
     if (!bus.ctx) return;
     if (document.hidden) bus.ctx.suspend?.();
-    else bus.ctx.resume?.();
+    else if (!muted()) bus.ctx.resume?.();
   });
 
   prefs.onChange((key) => {
     if (['muted', 'master', 'ambience', 'ui'].includes(key)) levels();
+    if (key === 'muted') applyMute();
   });
 
   const ready = () => started && bus.ctx?.state === 'running' && !prefs.get('muted');
