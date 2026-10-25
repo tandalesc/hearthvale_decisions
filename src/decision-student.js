@@ -592,7 +592,7 @@ function bytes(b64) {
   return out;
 }
 
-function halfToFloat(h) {
+export function halfToFloat(h) {
   const sign = h & 0x8000 ? -1 : 1, exp = (h >> 10) & 0x1f, frac = h & 0x3ff;
   if (exp === 0) return sign * 2 ** -14 * (frac / 1024);
   if (exp === 31) return frac ? NaN : sign * Infinity;

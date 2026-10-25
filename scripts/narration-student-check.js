@@ -4,7 +4,7 @@
 //
 // SAMPLES.jsonl comes from scripts/narration-student.py: candidates per card with role
 // tokens. Each is put back into the card's words (relex) and judged as the game would
-// judge a hosted quote (modelRow), plus the fluency check. Prints, per split, how many
+// judge a hosted quote (modelRow), plus the fluency and fact checks. Prints, per split, how many
 // cards' top candidate passes and how many have any passing candidate, and writes one
 // verdict line per card for scripts/narration-quality.py.
 import {createReadStream, writeFileSync} from 'node:fs';
@@ -12,6 +12,7 @@ import {createInterface} from 'node:readline';
 import {relex, strayRoles} from '../src/narration-roles.js';
 import {modelRow} from './narration-export.js';
 import {fluency} from '../src/narration-fluency.js';
+import {factProblem} from '../src/narration-consistency.js';
 
 async function* readLines(file) {
   for await (const line of createInterface({input: createReadStream(file), crlfDelay: Infinity})) if (line) yield JSON.parse(line);
@@ -32,7 +33,10 @@ export function judge(text, f, roles) {
   const flu = fluency(words);
   if (flu) return {reason: `not fluent: ${flu}`, text: words};
   const row = modelRow(f, 'why', words);
-  return row.task ? {ok: true, text: row.target} : {reason: String(row.reason).split(':')[0], text: words};
+  if (!row.task) return {reason: String(row.reason).split(':')[0], text: words};
+  // The runtime's fact check (narration-consistency.js) too.
+  const fact = factProblem(row.target, f);
+  return fact ? {reason: `fact: ${fact.split(':')[0]}`, text: words} : {ok: true, text: row.target};
 }
 
 const tally = {};

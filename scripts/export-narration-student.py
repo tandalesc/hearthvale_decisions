@@ -11,6 +11,7 @@ confident `share` of test cards. The fixture is a few held-out cards quoted by t
 (rounded) weights, so the browser can check it computes the same thing.
 """
 import argparse
+import re
 import base64
 import importlib.util
 import json
@@ -32,14 +33,50 @@ def b64(a):
     return base64.b64encode(np.ascontiguousarray(a).tobytes()).decode('ascii')
 
 
-def export_weight(t):
+class Blob:
+    """The weights file: sections of raw little-endian bytes, each 4-byte aligned."""
+    def __init__(self):
+        self.parts, self.size = [], 0
+
+    def add(self, array):
+        pad = (-self.size) % 4
+        if pad:
+            self.parts.append(b'\0' * pad)
+            self.size += pad
+        data = np.ascontiguousarray(array).tobytes()
+        offset = self.size
+        self.parts.append(data)
+        self.size += len(data)
+        return offset, len(data)
+
+
+def export_weight(t, blob, bits=8, group=32):
+    """2-D tensors as symmetric integers with an fp16 scale per group of `group` values in a
+    row (int8: the whole row); 1-D tensors as fp16. -> (index entry, the weights as exported)."""
     t = t.detach().float().cpu()
     if t.dim() == 2:
-        scale = t.abs().amax(1).clamp(min=1e-8) / 127
-        q = torch.round(t / scale[:, None]).clamp(-127, 127).to(torch.int8)
-        return {'shape': list(t.shape), 'i8': b64(q.numpy()), 'scale': b64(scale.numpy().astype('<f4'))}, q.float() * scale[:, None]
+        rows, cols = t.shape
+        g = cols if bits == 8 else min(group, cols)
+        qmax = 127 if bits == 8 else 7
+        tp = torch.nn.functional.pad(t, (0, (-cols) % g))
+        tg = tp.view(rows, -1, g)
+        # Round the scale to fp16 first, so the browser's arithmetic is the same as this.
+        scale = (tg.abs().amax(2) / qmax).half().float()
+        scale[scale == 0] = 1.0
+        q = torch.round(tg / scale[..., None]).clamp(-qmax, qmax).to(torch.int8)
+        seen = (q.float() * scale[..., None]).view(rows, -1)[:, :cols]
+        qs = q.view(rows, -1)[:, :cols].contiguous().view(-1).numpy()
+        if bits == 4:
+            nib = (qs.astype(np.int16) & 0x0F).astype(np.uint8)
+            if len(nib) % 2:
+                nib = np.append(nib, np.uint8(0))
+            qs = nib[0::2] | (nib[1::2] << 4)
+        off, n = blob.add(qs)
+        soff, _ = blob.add(scale.numpy().astype('<f2'))
+        return {'shape': [rows, cols], 'dtype': f'i{bits}', 'group': g, 'groups': scale.shape[1], 'offset': off, 'bytes': n, 'scale_offset': soff}, seen
     half = t.half()
-    return {'shape': list(t.shape), 'f16': b64(half.numpy().astype('<f2'))}, half.float()
+    off, n = blob.add(half.numpy().astype('<f2'))
+    return {'shape': list(t.shape), 'dtype': 'f16', 'offset': off, 'bytes': n}, half.float()
 
 
 def main():
@@ -52,16 +89,22 @@ def main():
     ap.add_argument('--version', type=int, default=1)
     ap.add_argument('--fixture', type=int, default=24)
     ap.add_argument('--share', type=float, default=0.9)
+    ap.add_argument('--bits', type=int, choices=[8, 4], default=8)
+    ap.add_argument('--group', type=int, default=32, help='int4: values per scale')
+    ap.add_argument('--keep8', default='', help='regex of weight names kept at int8 when --bits 4 (e.g. the embedding tables)')
+    ap.add_argument('--fixture-out', help='where the parity fixture goes (default OUT with .fixture.json); it is not shipped')
     a = ap.parse_args()
 
     vocab = json.load(open(f'{a.run}/vocab.json'))
     ck = torch.load(f'{a.run}/model.pt', map_location='cpu')
     cfg = ck['config']
-    model = S.NarrationStudent(vocab, d=cfg['d'], e=cfg['e'], layers=cfg['layers'], ff=cfg['ff'])
+    S.MAX_TGT = cfg.get('max_tgt', S.MAX_TGT)
+    model = S.NarrationStudent(vocab, d=cfg['d'], e=cfg['e'], layers=cfg['layers'], ff=cfg['ff'], ffn=cfg.get('ffn', 'relu'))
     model.load_state_dict(ck['state'])
-    weights, seen = {}, {}
+    weights, seen, blob = {}, {}, Blob()
     for k, v in model.state_dict().items():
-        weights[k], seen[k] = export_weight(v)
+        bits = 8 if a.bits == 4 and a.keep8 and re.match(a.keep8, k) else a.bits
+        weights[k], seen[k] = export_weight(v, blob, bits, a.group)
     model.load_state_dict(seen)   # the fixture comes from the weights the browser will have
     model.eval()
 
@@ -100,18 +143,25 @@ def main():
         one = {k: v[j:j + 1].expand(len(cs), *v.shape[1:]) for k, v in b.items()}
         feats = torch.cat([model.score(one, seqs), torch.tensor([[s, ex['unk']] for _, s in cs])], 1)
         fixture.append({'facts': facts[ex['row']['key']],
-                        'outputs': [S.detok([vocab['words'][i] for i in ids if i != S.EOS]) for ids, _ in cs],
+                        'outputs': [C.detok([vocab['words'][i] for i in ids if i != S.EOS]) for ids, _ in cs],
                         'features': [[round(x, 5) for x in f] for f in feats.tolist()]})
 
     bundle = {'format': FORMAT, 'version': a.version, 'features': FEATURES_VERSION,
-              'teacher': 'claude-haiku-5-5', 'config': {**cfg, 'heads': 4, 'max_tgt': S.MAX_TGT, 'max_bag': S.MAX_BAG,
+              'teacher': 'claude-haiku-5-5', 'config': {**cfg, 'heads': 4, 'max_tgt': S.MAX_TGT, 'max_bag': C.max_bag,
                                                          'beam': 4, 'alpha': 0.7, 'block': 3},
-              'vocab': vocab, 'weights': weights, 'quality': quality, 'fixture': fixture,
+              'vocab': vocab, 'weights': weights, 'quality': quality, 'bits': a.bits,
+              'blob': os.path.basename(a.out).replace('.json', '.bin'), 'blob_bytes': blob.size,
               'params': sum(v.numel() for v in model.state_dict().values())}
     with open(a.out, 'w') as fh:
         json.dump(bundle, fh, separators=(',', ':'))
-    print(f'{a.out}: {os.path.getsize(a.out) / 1024:.0f} KB, {bundle["params"]:,} parameters, '
-          f'quality threshold {quality["threshold"]} (most confident {a.share:.0%}), fixture {len(fixture)} cards')
+    with open(a.out.replace('.json', '.bin'), 'wb') as fh:
+        fh.write(b''.join(blob.parts))
+    fixture_out = a.fixture_out or a.out.replace('.json', '.fixture.json')
+    with open(fixture_out, 'w') as fh:
+        json.dump({'version': a.version, 'bits': a.bits, 'cards': fixture}, fh, separators=(',', ':'))
+    print(f'{a.out}: {os.path.getsize(a.out) / 1024:.0f} KB header + {blob.size / 1024:.0f} KB int{a.bits} weights, '
+          f'{bundle["params"]:,} parameters, quality threshold {quality["threshold"]} (most confident {a.share:.0%}); '
+          f'fixture ({len(fixture)} cards) -> {fixture_out}')
 
 
 if __name__ == '__main__':

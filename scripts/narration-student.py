@@ -35,6 +35,7 @@ import re
 import time
 from collections import Counter
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -61,6 +62,43 @@ def tokens(text):
     return out
 
 
+SPACE = '\u2581'
+
+
+class BPE:
+    """Subword tokens (scripts/narration-bpe.py): a piece after a space starts with '▁';
+    role tokens stay whole; merges apply in rank order."""
+    def __init__(self, spec):
+        self.rank = {(a, b): i for i, (a, b) in enumerate(spec['merges'])}
+        self.cache = {}
+
+    def unit(self, u):
+        if u in self.cache:
+            return self.cache[u]
+        if u.lstrip(SPACE).startswith('<'):
+            word = [u]
+        else:
+            word = list(u)
+            while len(word) > 1:
+                r, i = min((self.rank.get((word[j], word[j + 1]), math.inf), j) for j in range(len(word) - 1))
+                if r == math.inf:
+                    break
+                word = word[:i] + [word[i] + word[i + 1]] + word[i + 2:]
+        self.cache[u] = word
+        return word
+
+    def tokens(self, text):
+        out = []
+        for chunk in str(text).split():
+            for i, p in enumerate(PIECE.findall(chunk)):
+                out += self.unit(p if i else SPACE + p)
+        return out
+
+    @staticmethod
+    def detok(toks):
+        return ''.join(toks).replace(SPACE, ' ').strip()
+
+
 def detok(toks):
     s = ''
     for t in toks:
@@ -73,6 +111,24 @@ def h(x):
 
 
 # ---------------------------------------------------------------- data
+
+def stream(path):
+    with open(path) as fh:
+        for line in fh:
+            if line.strip():
+                yield json.loads(line)
+
+
+def part_of(r, held_out, val):
+    ss = r.get('seeds') or []
+    if ss and all(s in held_out for s in ss):
+        return 'test'
+    if ss and all(s in val for s in ss):
+        return 'val'
+    if not any(s in held_out or s in val for s in ss):
+        return 'train'
+    return None
+
 
 def split_rows(rows, held_out, n_val):
     seeds = sorted({s for r in rows for s in r.get('seeds') or []}, key=h)
@@ -90,17 +146,23 @@ def split_rows(rows, held_out, n_val):
     return part, sorted(val)
 
 
-def build_vocab(train):
+def build_vocab(train, bpe=None):
     words, scopes, attrs, values = Counter(), Counter(), Counter(), Counter()
     for r in train:
-        words.update(tokens(r['target']))
+        if not bpe:
+            words.update(tokens(r['target']))
         for scope, attr, value, num, typ in r['triples']:
             scopes.update(re.split(r'[:/]', scope))
             attrs[attr] += 1
             if typ != 'text':
                 values[f'{typ}:{value}'] += 1
     keep = lambda c, n: [k for k, v in sorted(c.items(), key=lambda kv: -kv[1]) if v >= n]
-    return {'words': SPECIALS + [w for w in keep(words, 3) if w not in SPECIALS],
+    if bpe:
+        roles = [f for r in bpe['roles'] for f in (r, SPACE + r)]
+        vocab_words = SPECIALS + [w for w in dict.fromkeys(roles + bpe['symbols']) if w not in SPECIALS]
+    else:
+        vocab_words = SPECIALS + [w for w in keep(words, 3) if w not in SPECIALS]
+    return {'words': vocab_words, **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
             'scopes': ['<pad>', '<unk>'] + keep(scopes, 1), 'attrs': ['<pad>', '<unk>'] + keep(attrs, 1),
             'values': ['<pad>', '<unk>'] + keep(values, 3), 'tasks': ['card.quote', 'card.option']}
 
@@ -113,20 +175,36 @@ class Codec:
         self.at = {t: i for i, t in enumerate(vocab['attrs'])}
         self.va = {t: i for i, t in enumerate(vocab['values'])}
         self.tk = {t: i for i, t in enumerate(vocab['tasks'])}
-        self.number_words = {i: NUMBER_WORDS[t.lower()] for t, i in self.w.items() if t.lower() in NUMBER_WORDS}
-        self.drama = {i for t, i in self.w.items() if t.lower() in DRAMA}
-        self.digits = {i for t, i in self.w.items() if t.lstrip('#').isdigit()}
-        self.roles = {i for t, i in self.w.items() if t.startswith('<') and i >= len(SPECIALS)}
+        self.bpe = BPE(vocab['bpe']) if 'bpe' in vocab else None
+        self.tok = self.bpe.tokens if self.bpe else tokens
+        self.detok = BPE.detok if self.bpe else detok
+        self.max_bag = 40 if self.bpe else MAX_BAG
+        bare = (lambda t: t[1:] if t.startswith(SPACE) else None) if self.bpe else (lambda t: t)
+        self.bare = [bare(t) if i >= len(SPECIALS) else None for i, t in enumerate(vocab['words'])]
+        self.number_words = {i: NUMBER_WORDS[b.lower()] for i, b in enumerate(self.bare) if b and b.lower() in NUMBER_WORDS}
+        self.drama = {i for i, b in enumerate(self.bare) if b and b.lower() in DRAMA}
+        if self.bpe:   # numbers in the facts come as role tokens; any other digits are banned
+            self.digits = {i for t, i in self.w.items() if i >= len(SPECIALS) and re.search(r'\d', t) and not t.lstrip(SPACE).startswith('<')}
+        else:
+            self.digits = {i for t, i in self.w.items() if t.lstrip('#').isdigit()}
+        self.roles = {i for t, i in self.w.items() if t.lstrip(SPACE).startswith('<') and i >= len(SPECIALS)}
         # Word keys for repeat blocking, as the fluency check sees words: no punctuation, any case.
         self.key = [None] * len(vocab['words'])
         self.ids_of = {}
         for t, i in self.w.items():
-            k = t.lstrip('#').lower()
+            k = (self.bare[i] or '').lower() if self.bpe else t.lstrip('#').lower()
             if i >= len(SPECIALS) and re.match(r"^(<.*>|[a-z0-9']+)$", k):
                 self.key[i] = k
                 self.ids_of.setdefault(k, []).append(i)
 
-    def example(self, r):
+    def words_of(self, ids):
+        """The words written so far, as the fluency check sees them."""
+        if not self.bpe:
+            return [self.key[t] for t in ids if self.key[t]]
+        return re.findall(r"<[^<>\s]+>|[a-z0-9']+", self.detok([self.v['words'][t] for t in ids]).lower())
+
+    def example(self, r, compact=False):
+        """compact: numpy arrays only, no bans and no row (training rows; memory matters)."""
         sc, at, va, bag, num, hasn, unk = [], [], [], [], [], [], 0
         facts_text = []
         for scope, attr, value, n, typ in r['triples']:
@@ -134,7 +212,7 @@ class Codec:
             sc.append(parts + [0] * (4 - len(parts)))
             at.append(self.at.get(attr, 1))
             if typ == 'text':
-                ids = [self.w.get(t, UNK) for t in tokens(value)][:MAX_BAG] or [UNK]
+                ids = [self.w.get(t, UNK) for t in self.tok(value)][:self.max_bag] or [UNK]
                 va.append(0)
                 bag.append(ids)
                 unk += sum(i == UNK for i in ids) / len(ids)
@@ -146,7 +224,7 @@ class Codec:
                 unk += vid == 1
             num.append(float(n) if n is not None else 0.0)
             hasn.append(1.0 if n is not None else 0.0)
-        tgt = [self.w.get(t, UNK) for t in tokens(r['target'])][: MAX_TGT - 1] + [EOS] if r['target'] else [EOS]
+        tgt = [self.w.get(t, UNK) for t in self.tok(r['target'])][: MAX_TGT - 1] + [EOS] if r['target'] else [EOS]
         # What this card may not say: roles it lacks, numbers and dramatic words its facts lack.
         nums = {0, 1, 2}
         for t in ' '.join(facts_text + list(r.get('roles', {}).values())).split():
@@ -157,18 +235,27 @@ class Codec:
                 nums.add(NUMBER_WORDS[t])
         text = set(re.findall(r'[a-z]+', ' '.join(facts_text)))
         roles = r.get('roles', {})
-        ban = [i for i in self.roles if self.v['words'][i] not in roles]
+        ban = [i for i in self.roles if self.v['words'][i].lstrip(SPACE) not in roles]
         ban += [i for i, n in self.number_words.items() if n not in nums]
-        ban += [i for i in self.drama if self.v['words'][i].lower() not in text]
-        ban += [i for i in self.digits if int(self.v['words'][i].lstrip('#')) not in nums]
+        ban += [i for i in self.drama if self.bare[i].lower() not in text]
+        ban += list(self.digits) if self.bpe else [i for i in self.digits if int(self.v['words'][i].lstrip('#')) not in nums]
         return {'sc': sc, 'at': at, 'va': va, 'bag': bag, 'num': num, 'hasn': hasn, 'tgt': tgt,
                 'task': self.tk.get(r['task'], 0), 'unk': unk / max(1, len(at)), 'ban': ban, 'row': r}
+
+    def compact(self, r):
+        e = self.example(r)
+        i16 = lambda x: np.asarray(x, dtype=np.int16)
+        return {'sc': i16(e['sc']), 'at': i16(e['at']), 'va': i16(e['va']),
+                'bag_flat': i16([t for b in e['bag'] for t in b]), 'bag_len': i16([len(b) for b in e['bag']]),
+                'num': np.asarray(e['num'], dtype=np.float32), 'hasn': np.asarray(e['hasn'], dtype=np.float32),
+                'tgt': i16(e['tgt']), 'task': e['task'], 'unk': e['unk']}
 
 
 def collate(batch, device):
     B = len(batch)
     T = -(-max(len(e['at']) for e in batch) // 16) * 16
-    L = -(-max([len(b) for e in batch for b in e['bag']] + [1]) // 8) * 8
+    lens = lambda e: e['bag_len'] if 'bag_len' in e else [len(b) for b in e['bag']]
+    L = -(-max([int(n) for e in batch for n in lens(e)] + [1]) // 8) * 8
     Y = -(-max(len(e['tgt']) for e in batch) // 16) * 16
     sc = torch.zeros(B, T, 4, dtype=torch.long)
     at = torch.zeros(B, T, dtype=torch.long)
@@ -180,16 +267,23 @@ def collate(batch, device):
     tgt = torch.zeros(B, Y, dtype=torch.long)
     for i, e in enumerate(batch):
         n = len(e['at'])
-        sc[i, :n] = torch.tensor(e['sc'])
-        at[i, :n] = torch.tensor(e['at'])
-        va[i, :n] = torch.tensor(e['va'])
-        for j, b in enumerate(e['bag']):
-            if b:
-                bag[i, j, :len(b)] = torch.tensor(b)
-        num[i, :n] = torch.tensor(e['num'])
-        hasn[i, :n] = torch.tensor(e['hasn'])
+        sc[i, :n] = torch.as_tensor(np.asarray(e['sc'], dtype=np.int64))
+        at[i, :n] = torch.as_tensor(np.asarray(e['at'], dtype=np.int64))
+        va[i, :n] = torch.as_tensor(np.asarray(e['va'], dtype=np.int64))
+        if 'bag_flat' in e:
+            off = 0
+            for j, k in enumerate(e['bag_len'].tolist()):
+                if k:
+                    bag[i, j, :k] = torch.as_tensor(e['bag_flat'][off: off + k].astype(np.int64))
+                off += k
+        else:
+            for j, b in enumerate(e['bag']):
+                if len(b):
+                    bag[i, j, :len(b)] = torch.as_tensor(np.asarray(b, dtype=np.int64))
+        num[i, :n] = torch.as_tensor(np.asarray(e['num'], dtype=np.float32))
+        hasn[i, :n] = torch.as_tensor(np.asarray(e['hasn'], dtype=np.float32))
         mmask[i, :n] = False
-        tgt[i, :len(e['tgt'])] = torch.tensor(e['tgt'])
+        tgt[i, :len(e['tgt'])] = torch.as_tensor(np.asarray(e['tgt'], dtype=np.int64))
     task = torch.tensor([e['task'] for e in batch])
     d = dict(sc=sc, at=at, va=va, bag=bag, num=num, hasn=hasn, mmask=mmask, tgt=tgt, task=task)
     return {k: v.to(device) for k, v in d.items()}
@@ -197,8 +291,38 @@ def collate(batch, device):
 
 # ---------------------------------------------------------------- model
 
+class DecoderLayer(nn.Module):
+    """Pre-norm decoder layer, named as nn.TransformerDecoderLayer names its weights.
+    ffn 'relu': linear2(relu(linear1 x)); 'swiglu': down(silu(gate x) * up x), no biases."""
+    def __init__(self, d, heads, ff, dropout, ffn):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d, heads, dropout=dropout, batch_first=True)
+        self.multihead_attn = nn.MultiheadAttention(d, heads, dropout=dropout, batch_first=True)
+        self.norm1, self.norm2, self.norm3 = nn.LayerNorm(d), nn.LayerNorm(d), nn.LayerNorm(d)
+        self.drop = nn.Dropout(dropout)
+        self.ffn = ffn
+        if ffn == 'swiglu':
+            self.gate = nn.Linear(d, ff, bias=False)
+            self.up = nn.Linear(d, ff, bias=False)
+            self.down = nn.Linear(ff, d, bias=False)
+        else:
+            self.linear1 = nn.Linear(d, ff)
+            self.linear2 = nn.Linear(ff, d)
+
+    def forward(self, x, mem, causal, mmask):
+        a = self.norm1(x)
+        x = x + self.drop(self.self_attn(a, a, a, attn_mask=causal, need_weights=False)[0])
+        a = self.norm2(x)
+        x = x + self.drop(self.multihead_attn(a, mem, mem, key_padding_mask=mmask, need_weights=False)[0])
+        a = self.norm3(x)
+        if self.ffn == 'swiglu':
+            h = self.down(self.drop(F.silu(self.gate(a)) * self.up(a)))
+        else:
+            h = self.linear2(self.drop(F.relu(self.linear1(a))))
+        return x + self.drop(h)
+
 class NarrationStudent(nn.Module):
-    def __init__(self, vocab, d=96, e=64, heads=4, layers=4, ff=192, dropout=0.1):
+    def __init__(self, vocab, d=96, e=64, heads=4, layers=4, ff=192, dropout=0.1, ffn='relu'):
         super().__init__()
         V = len(vocab['words'])
         self.V = V
@@ -212,8 +336,8 @@ class NarrationStudent(nn.Module):
         self.state_norm = nn.LayerNorm(d)
         self.task = nn.Embedding(len(vocab['tasks']), d)
         self.pos = nn.Embedding(MAX_TGT + 1, d)
-        layer = nn.TransformerDecoderLayer(d, heads, ff, dropout, batch_first=True, norm_first=True)
-        self.decoder = nn.TransformerDecoder(layer, layers)
+        self.decoder = nn.Module()
+        self.decoder.layers = nn.ModuleList([DecoderLayer(d, heads, ff, dropout, ffn) for _ in range(layers)])
         self.out_norm = nn.LayerNorm(d)
         self.down = nn.Linear(d, e, bias=False)
         self.out_bias = nn.Parameter(torch.zeros(V))
@@ -239,7 +363,9 @@ class NarrationStudent(nn.Module):
         T = x.size(1)
         x = x + self.pos(torch.arange(T, device=x.device))
         causal = torch.triu(torch.full((T, T), float('-inf'), device=x.device), 1)
-        hdec = self.out_norm(self.decoder(x, mem, tgt_mask=causal, memory_key_padding_mask=mmask))
+        for layer in self.decoder.layers:
+            x = layer(x, mem, causal, mmask)
+        hdec = self.out_norm(x)
         return hdec, self.down(hdec) @ self.word.weight.t() + self.out_bias
 
     def forward(self, b):
@@ -286,7 +412,7 @@ def beam_search(model, b, bans, codec, k=4, alpha=0.7, block=3):
         _, logits = model.run(prev, task, mem, mmask)
         lp = logits[:, -1].log_softmax(-1).masked_fill(fixed, -1e9)
         for i, hst in enumerate(hist):
-            words = [codec.key[t] for t in hst if codec.key[t]]
+            words = codec.words_of(hst)
             banned = set()
             if words:
                 banned.add(words[-1])          # no word twice running
@@ -296,7 +422,8 @@ def beam_search(model, b, bans, codec, k=4, alpha=0.7, block=3):
                     if words[j: j + block - 1] == tail:
                         banned.add(words[j + block - 1])
             for w in banned:
-                lp[i, codec.ids_of[w]] = -1e9
+                if w in codec.ids_of:
+                    lp[i, codec.ids_of[w]] = -1e9
         total = (scores.view(-1, 1) + lp).view(B, -1)
         top, idx = total.topk(k, 1)
         parent = (idx // model.V) + torch.arange(B, device=mem.device)[:, None] * k
@@ -352,6 +479,7 @@ def train_phase(model, exs, epochs, lr, a, rng, label):
 
 
 def main():
+    global MAX_TGT
     ap = argparse.ArgumentParser()
     ap.add_argument('rows')
     ap.add_argument('--out', required=True)
@@ -365,28 +493,50 @@ def main():
     ap.add_argument('--e', type=int, default=64)
     ap.add_argument('--layers', type=int, default=4)
     ap.add_argument('--ff', type=int, default=192)
+    ap.add_argument('--ffn', choices=['relu', 'swiglu'], default='relu', help='feed-forward kind; swiglu at --ff 128 matches relu at 192 in size')
     ap.add_argument('--smoothing', type=float, default=0.05)
     ap.add_argument('--beam', type=int, default=4)
     ap.add_argument('--eval-max', type=int, default=600)
     ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--max-tgt', type=int, default=MAX_TGT, help='longest text in tokens (BPE text is longer)')
+    ap.add_argument('--bpe', help='subword vocabulary from scripts/narration-bpe.py (default: whole words)')
     ap.add_argument('--load', help='a trained run dir: skip training and only quote cards with its model')
     a = ap.parse_args()
+    MAX_TGT = a.max_tgt
     os.makedirs(a.out, exist_ok=True)
     torch.manual_seed(a.seed)
     rng = random.Random(a.seed)
 
-    rows = [json.loads(l) for l in open(a.rows) if l.strip()]
+    # Three passes over the rows file, keeping compact examples only: the file is large.
     held = {int(s) for s in a.held_out.split(',')}
-    part, val_seeds = split_rows(rows, held, a.val_seeds)
-    train = [r for r in part['train'] if r['source'] != 'prompt']
-    vocab = json.load(open(f'{a.load}/vocab.json')) if a.load else build_vocab(train)
+    seeds = set()
+    for r in stream(a.rows):
+        seeds.update(r.get('seeds') or [])
+    val = set([s for s in sorted(seeds, key=h) if s not in held][: a.val_seeds])
+    val_seeds = sorted(val)
+    is_train = lambda r: r['source'] != 'prompt' and part_of(r, held, val) == 'train'
+    vocab = json.load(open(f'{a.load}/vocab.json')) if a.load else build_vocab((r for r in stream(a.rows) if is_train(r)), json.load(open(a.bpe)) if a.bpe else None)
     C = Codec(vocab)
-    print(f'rows {len(rows)}; train {Counter((r["task"], r["source"]) for r in train)}')
+    pre, fine, held_ex, prompts, counts = [], [], {'val': [], 'test': []}, {'val': [], 'test': []}, Counter()
+    for r in stream(a.rows):
+        p = part_of(r, held, val)
+        if p == 'train' and r['source'] != 'prompt':
+            counts[(r['task'], r['source'])] += 1
+            if not a.load:
+                ex = C.compact(r)
+                pre.append(ex)
+                if r['source'] == 'model':
+                    fine.append(ex)
+        elif p in held_ex and r['source'] == 'model':
+            held_ex[p].append(C.compact(r))
+        elif p in prompts and r['source'] == 'prompt':
+            prompts[p].append(r)
+    print(f'train {dict(counts)}')
     print(f'vocab {len(vocab["words"])} words ({len(C.roles)} roles), {len(vocab["values"])} values, '
           f'{len(vocab["scopes"])} scope parts, {len(vocab["attrs"])} attrs; val seeds {val_seeds}')
 
-    model = NarrationStudent(vocab, d=a.d, e=a.e, layers=a.layers, ff=a.ff).to(a.device)
+    model = NarrationStudent(vocab, d=a.d, e=a.e, layers=a.layers, ff=a.ff, ffn=a.ffn).to(a.device)
     model.smoothing = a.smoothing
     nparam = sum(p.numel() for p in model.parameters())
     print(f'params {nparam:,} (~{nparam / 1024:.0f} KB at int8)')
@@ -395,24 +545,21 @@ def main():
     if a.load:
         model.load_state_dict(torch.load(f'{a.load}/model.pt', map_location=a.device)['state'])
         a.pretrain_epochs = a.finetune_epochs = 0
-    pre = [C.example(r) for r in train] if a.pretrain_epochs else []
-    train_phase(model, pre, a.pretrain_epochs, a.lr, a, rng, 'pretrain')
-    fine = [C.example(r) for r in train if r['source'] == 'model']
+    train_phase(model, pre if a.pretrain_epochs else [], a.pretrain_epochs, a.lr, a, rng, 'pretrain')
     train_phase(model, fine, a.finetune_epochs, a.lr * 0.3, a, rng, 'finetune')
 
     # Held-out loss on passing quotes, then quotes for validation and test cards.
     model.eval()
     held_loss = {}
     for name in ('val', 'test'):
-        exs = [C.example(r) for r in part[name] if r['source'] == 'model']
+        exs = held_ex[name]
         ls = [model(collate(bt, a.device))[0].item() for bt in batches(exs, 128, False)]
         held_loss[name] = round(sum(ls) / max(1, len(ls)), 4)
     print('held-out loss on passing quotes', held_loss)
     samples = []
     for name in ('val', 'test'):
-        prompts = [r for r in part[name] if r['source'] == 'prompt']
-        rng.shuffle(prompts)
-        exs = [C.example(r) for r in prompts[: a.eval_max]]
+        rng.shuffle(prompts[name])
+        exs = [C.example(r) for r in prompts[name][: a.eval_max]]
         for bt in batches(exs, 64, False):
             b = collate(bt, a.device)
             cands = beam_search(model, b, [e['ban'] for e in bt], C, k=a.beam)
@@ -426,7 +573,7 @@ def main():
                 feats = model.score(one, seqs)
                 feats = torch.cat([feats, torch.tensor([[s, ex['unk']] for _, s in cs], device=a.device)], 1)
                 samples.append({'key': ex['row']['key'], 'split': name, 'roles': ex['row']['roles'],
-                                'outputs': [detok([vocab['words'][i] for i in ids if i != EOS]) for ids, _ in cs],
+                                'outputs': [C.detok([vocab['words'][i] for i in ids if i != EOS]) for ids, _ in cs],
                                 'feats': [[round(x, 4) for x in f] for f in feats.tolist()]})
         print(f'{name}: {sum(s["split"] == name for s in samples)} cards quoted', flush=True)
     with open(f'{a.out}/samples.jsonl', 'w') as fh:
@@ -436,7 +583,7 @@ def main():
                'val_seeds': val_seeds, 'held_out': sorted(held), 'args': vars(a)}
     json.dump(metrics, open(f'{a.out}/metrics.json', 'w'), indent=1)
     json.dump(vocab, open(f'{a.out}/vocab.json', 'w'))
-    torch.save({'state': model.state_dict(), 'config': {k: getattr(a, k) for k in ('d', 'e', 'layers', 'ff')}}, f'{a.out}/model.pt')
+    torch.save({'state': model.state_dict(), 'config': {k: getattr(a, k) for k in ('d', 'e', 'layers', 'ff', 'ffn', 'max_tgt')}}, f'{a.out}/model.pt')
     print(json.dumps(metrics))
 
 

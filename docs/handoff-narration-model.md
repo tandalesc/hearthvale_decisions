@@ -115,6 +115,24 @@ The student mixes up details from different parts of a card: which past ruling, 
 - SwiGLU, thinner and deeper layers with shared weights, EMA, and early stopping.
 - Feed the judge's labels into the quality head.
 
+## 1e. Feed-forward, BPE and int4 (25 October 2026)
+
+All runs: 4 decoder layers, d 96, pretrain 6 + fine-tune 30 epochs. Scored on 600 held-out test cards, counting a pass only when the narrator's checks, the fluency check and the fact check all pass. Two seeds each; seed noise is about ±3 points, and more for BPE-2048.
+
+| model | params | int8 weights | top / any of 4 pass (seed 0; seed 1) | JS median |
+|---|---|---|---|---|
+| words, ReLU (v1) | 721K | 731 KB | 59.2 / 63.2; 55.5 / 61.3 | 142 ms |
+| words, SwiGLU (ff 128) | 720K | 729 KB | 60.2 / 63.7; 61.7 / 66.3 | 137 ms |
+| BPE-2048, SwiGLU | 652K | 660 KB | 51.8 / 55.5; 62.0 / 66.0 | 136–145 ms |
+| BPE-1024, SwiGLU | 586K | 592 KB | 45.3 / 49.8; 50.0 / 53.5 | 133–139 ms |
+
+- **SwiGLU beats ReLU** on held-out loss for both seeds (about −0.02) at the same size. It is now the default.
+- **BPE-2048** matches the word model at its best seed with 68K fewer parameters and no unknown words, but its seeds disagree. It is the base for scaling data; relearn the merges on the bigger corpus.
+- **BPE-1024** is clearly worse here.
+- **Binary bundles** (`export-narration-student.py --bits 8|4`): a JSON header, a `.bin` file of raw int8/int4 weights with fp16 scales, and the parity fixture in a separate file. v1 is about 800 KB instead of 1.2 MB.
+- **int4 after training** costs 7–14 points out of 100: 408 KB with groups of 32, 452 KB with groups of 16, 526 KB with int8 embeddings. Needs quantization-aware training.
+- **Trainer memory:** rows now stream into compact numpy examples, 2 GB per run instead of 7.3 GB. Four runs at 7.3 GB ran rrh-llm-1 out of memory once. `~/narration/runs.sh` refuses to start without 12 GB free.
+
 ## 2. What we learned
 
 - **The game only asks the narrator for two things today:** Council card quotes (`card.why`, on request from the open view) and inspector notes for people, households, buildings and bodies. The prose keeper never asks for year or end-page prose (`createProseKeeper` in `src/narrator-client.js` has no clock-driven work).

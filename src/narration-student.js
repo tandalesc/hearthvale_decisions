@@ -3,7 +3,7 @@
 // machinery and kernels (src/decision-student.js):
 //   memory   one token per triple (scope parts + attribute + value + num * num_dir, layer-
 //            normed); free text as the mean of its words. No encoder.
-//   decoder  4 causal layers with cached keys and values, cross-attending to the memory,
+//   decoder  4 causal layers (ReLU or SwiGLU feed-forward) with cached keys and values, cross-attending to the memory,
 //            output tied to the word table. Names, places and numbers are role tokens
 //            (src/narration-roles.js) put back afterwards.
 //   beam     4 candidates; never a role the card lacks, a number or dramatic word its facts
@@ -14,7 +14,7 @@
 //
 //   const student = loadNarrationStudent(bundle)
 //   await student.quote(facts) -> {why, quality, confident} | null
-import {decodeWeight, lnFlat, linFlat, ffnFlat, attendQ, projectFlat} from './decision-student.js';
+import {decodeWeight, halfToFloat, lnFlat, linFlat, ffnFlat, attendQ, projectFlat} from './decision-student.js';
 import {narrationTriples, NARRATION_FEATURES_VERSION} from './narration-features.js';
 import {roleTriples, relex, strayRoles} from './narration-roles.js';
 import {CHECKS} from './narrative-prose.js';
@@ -40,11 +40,73 @@ export function tokens(text) {
 }
 export const detok = (toks) => toks.reduce((s, t) => (t.startsWith('##') ? s + t.slice(2) : s ? `${s} ${t}` : t), '');
 
-export function loadNarrationStudent(bundle) {
+// Subword tokens (scripts/narration-bpe.py): a piece after a space starts with '▁', role
+// tokens stay whole, merges apply in rank order. Same as the trainer's BPE class.
+export const SPACE = '\u2581';
+export function bpeTokenizer(merges) {
+  const rank = new Map(merges.map(([a, b], i) => [`${a}\u0000${b}`, i]));
+  const cache = new Map();
+  const unit = (u) => {
+    let word = cache.get(u);
+    if (word) return word;
+    if (u.replace(/^\u2581/, '').startsWith('<')) word = [u];
+    else {
+      word = [...u];
+      while (word.length > 1) {
+        let best = Infinity, at = -1;
+        for (let j = 0; j + 1 < word.length; j++) {
+          const r = rank.get(`${word[j]}\u0000${word[j + 1]}`);
+          if (r !== undefined && r < best) { best = r; at = j; }
+        }
+        if (at < 0) break;
+        word = [...word.slice(0, at), word[at] + word[at + 1], ...word.slice(at + 2)];
+      }
+    }
+    cache.set(u, word);
+    return word;
+  };
+  const encode = (text) => {
+    const out = [];
+    for (const chunk of String(text).split(/\s+/).filter(Boolean)) {
+      (chunk.match(PIECE) ?? []).forEach((p, i) => out.push(...unit(i ? p : SPACE + p)));
+    }
+    return out;
+  };
+  encode.detok = (toks) => toks.join('').replaceAll(SPACE, ' ').trim();
+  return encode;
+}
+
+// One weight from the binary file (scripts/export-narration-student.py): fp16, or int8 / int4
+// with an fp16 scale per group of `group` values in a row.
+function decodeBinary(meta, blob) {
+  if (meta.dtype === 'f16') return Float32Array.from(new Uint16Array(blob, meta.offset, meta.bytes / 2), halfToFloat);
+  const [rows, cols] = meta.shape, n = rows * cols, g = meta.group, groups = meta.groups;
+  const scales = Float32Array.from(new Uint16Array(blob, meta.scale_offset, rows * groups), halfToFloat);
+  const out = new Float32Array(n);
+  const q8 = meta.dtype === 'i8' ? new Int8Array(blob, meta.offset, n) : null;
+  const q4 = meta.dtype === 'i4' ? new Uint8Array(blob, meta.offset, meta.bytes) : null;
+  for (let i = 0; i < n; i++) {
+    const r = Math.floor(i / cols), c = i - r * cols;
+    let q;
+    if (q8) q = q8[i];
+    else {
+      q = i & 1 ? q4[i >> 1] >> 4 : q4[i >> 1] & 15;
+      if (q > 7) q -= 16;
+    }
+    out[i] = q * scales[r * groups + Math.floor(c / g)];
+  }
+  return out;
+}
+
+// bundle: the JSON header; blob: the weights file's bytes (ArrayBuffer) when the header names one.
+export function loadNarrationStudent(bundle, blob = null) {
   if (bundle?.format !== NARRATION_STUDENT_FORMAT) throw new Error('Not a narration student bundle');
   if (bundle.features !== NARRATION_FEATURES_VERSION) throw new Error(`Narration features v${bundle.features}, game has v${NARRATION_FEATURES_VERSION}`);
+  if (bundle.blob && !(blob instanceof ArrayBuffer)) throw new Error(`Narration weights ${bundle.blob} missing`);
   const cfg = bundle.config, voc = bundle.vocab;
-  const W = Object.fromEntries(Object.entries(bundle.weights).map(([k, v]) => [k, {shape: v.shape, data: decodeWeight(v)}]));
+  const W = Object.fromEntries(Object.entries(bundle.weights).map(([k, v]) => [k, {shape: v.shape, data: bundle.blob ? decodeBinary(v, blob) : decodeWeight(v)}]));
+  const bpe = voc.bpe ? bpeTokenizer(voc.bpe.merges) : null;
+  const tok = bpe ?? tokens, untok = bpe ? bpe.detok : detok;
   const Q = Object.fromEntries(Object.entries(bundle.quality.weights).map(([k, v]) => [k, {shape: v.shape, data: decodeWeight(v)}]));
   const d = cfg.d, e = cfg.e, L = cfg.layers, heads = cfg.heads, V = voc.words.length;
   const index = (list) => new Map(list.map((t, i) => [t, i]));
@@ -56,13 +118,14 @@ export function loadNarrationStudent(bundle) {
   const key = new Array(V).fill(null), idsOf = new Map();
   voc.words.forEach((t, i) => {
     if (i < SPECIALS) return;
-    const bare = t.replace(/^#+/, ''), lower = bare.toLowerCase();
-    if (t.startsWith('<')) roleIds.push(i);
-    // As the trainer: number and dramatic words are matched on the token as written.
-    if (Object.hasOwn(NUMBER_WORDS, t.toLowerCase())) numberWords.push(i);
-    if (DRAMA.has(t.toLowerCase())) drama.push(i);
-    if (/^\d+$/.test(bare)) digits.push(i);
-    if (/^(<.*>|[a-z0-9']+)$/.test(lower)) {
+    // As the trainer: whole words are '▁word' tokens with BPE; with words, the token as written.
+    const word = bpe ? (t.startsWith(SPACE) ? t.slice(1) : null) : t;
+    const lower = bpe ? word?.toLowerCase() : t.replace(/^#+/, '').toLowerCase();
+    if (t.replace(/^\u2581/, '').startsWith('<')) roleIds.push(i);
+    if (word && Object.hasOwn(NUMBER_WORDS, word.toLowerCase())) numberWords.push(i);
+    if (word && DRAMA.has(word.toLowerCase())) drama.push(i);
+    if (bpe ? /\d/.test(t) && !t.replace(/^\u2581/, '').startsWith('<') : /^\d+$/.test(t.replace(/^#+/, ''))) digits.push(i);
+    if (lower && /^(<.*>|[a-z0-9']+)$/.test(lower)) {
       key[i] = lower;
       if (!idsOf.has(lower)) idsOf.set(lower, []);
       idsOf.get(lower).push(i);
@@ -79,7 +142,7 @@ export function loadNarrationStudent(bundle) {
       const a = at.get(attr) ?? UNK;
       add(row('attr', a));
       if (type === 'text') {
-        let ids = tokens(value).map((t) => w.get(t) ?? UNK).slice(0, cfg.max_bag);
+        let ids = tok(value).map((t) => w.get(t) ?? UNK).slice(0, cfg.max_bag);
         if (!ids.length) ids = [UNK];
         for (const id of ids) add(row('word', id), 1 / ids.length);
         unk += ids.filter((id) => id === UNK).length / ids.length;
@@ -103,10 +166,12 @@ export function loadNarrationStudent(bundle) {
     const text = new Set(factsText.join(' ').match(/[a-z]+/g) ?? []);
     const ban = new Uint8Array(V);
     for (const i of [PAD, UNK, BOS]) ban[i] = 1;
-    for (const i of roleIds) if (roles[voc.words[i]] === undefined) ban[i] = 1;
-    for (const i of numberWords) if (!nums.has(NUMBER_WORDS[voc.words[i].toLowerCase()])) ban[i] = 1;
-    for (const i of drama) if (!text.has(voc.words[i].toLowerCase())) ban[i] = 1;
-    for (const i of digits) if (!nums.has(Number(voc.words[i].replace(/^#+/, '')))) ban[i] = 1;
+    const bare = (i) => (bpe ? voc.words[i].replace(/^\u2581/, '') : voc.words[i]);
+    for (const i of roleIds) if (roles[bare(i)] === undefined) ban[i] = 1;
+    for (const i of numberWords) if (!nums.has(NUMBER_WORDS[bare(i).toLowerCase()])) ban[i] = 1;
+    for (const i of drama) if (!text.has(bare(i).toLowerCase())) ban[i] = 1;
+    // With BPE, numbers in the facts come as role tokens and any other digits are banned.
+    for (const i of digits) if (bpe || !nums.has(Number(voc.words[i].replace(/^#+/, '')))) ban[i] = 1;
     return {mem, n, unk: unk / Math.max(1, n), ban};
   }
 
@@ -128,7 +193,7 @@ export function loadNarrationStudent(bundle) {
       const q2 = linFlat(b2, 1, d, W[`${ca}.in_proj_weight`].data, W[`${ca}.in_proj_bias`].data, d, 0);
       const crossOut = attendQ(W, ca, q2, 1, d, cross[l], heads);
       for (let i = 0; i < d; i++) h[i] += crossOut[i];
-      const ff = ffnFlat(W, p, lnFlat(h, 1, d, W, `${p}.norm3`), 1, d);
+      const ff = feedForward(p, lnFlat(h, 1, d, W, `${p}.norm3`));
       for (let i = 0; i < d; i++) h[i] += ff[i];
     }
     h = lnFlat(h, 1, d, W, 'out_norm');
@@ -147,6 +212,18 @@ export function loadNarrationStudent(bundle) {
     return {lp: logits, ent, h};
   }
 
+  // ReLU (linear1/linear2) or SwiGLU (gate/up/down, no biases), as the bundle was trained.
+  function feedForward(p, x) {
+    if (!W[`${p}.gate.weight`]) return ffnFlat(W, p, x, 1, d);
+    const hdim = W[`${p}.gate.weight`].shape[0];
+    const g = linFlat(x, 1, d, W[`${p}.gate.weight`].data, null, hdim), u = linFlat(x, 1, d, W[`${p}.up.weight`].data, null, hdim);
+    for (let i = 0; i < hdim; i++) g[i] = (g[i] / (1 + Math.exp(-g[i]))) * u[i];
+    return linFlat(g, 1, hdim, W[`${p}.down.weight`].data, null, d);
+  }
+
+  // The words written so far, as the fluency check sees them.
+  const wordsOf = (ids) => (bpe ? untok(ids.map((i) => voc.words[i])).toLowerCase().match(/<[^<>\s]+>|[a-z0-9']+/g) ?? [] : ids.map((i) => key[i]).filter(Boolean));
+
   const inputRow = (tok) => linFlat(row('word', tok), 1, e, W['up.weight'].data, null, d);
 
   async function beam(encoded, task, {k = cfg.beam, alpha = cfg.alpha, block = cfg.block, pause} = {}) {
@@ -163,7 +240,7 @@ export function loadNarrationStudent(bundle) {
         b.out = out;
         const lp = out.lp.slice();
         for (let i = 0; i < V; i++) if (ban[i]) lp[i] = -1e9;
-        const words = b.toks.map((tok) => key[tok]).filter(Boolean);
+        const words = wordsOf(b.toks);
         const banned = new Set(words.length ? [words.at(-1)] : []);
         if (words.length >= block - 1) {
           const tail = words.slice(-(block - 1)).join(' ');
@@ -237,7 +314,7 @@ export function loadNarrationStudent(bundle) {
     const options = Object.fromEntries((facts.options ?? []).map((o) => [o.key, o.tradeoff ?? '']));
     let best = null;
     for (const c of cands) {
-      const text = detok(c.toks.map((i) => voc.words[i]));
+      const text = untok(c.toks.map((i) => voc.words[i]));
       if (strayRoles(text, roles).length) continue;
       const words = relex(text, roles);
       if (fluency(words)) continue;
@@ -249,7 +326,7 @@ export function loadNarrationStudent(bundle) {
     return best && {...best, confident: best.quality >= bundle.quality.threshold};
   }
 
-  return {version: bundle.version, params: bundle.params, quote, encode, beam, tokens, words: voc.words, threshold: bundle.quality.threshold, fixture: bundle.fixture};
+  return {version: bundle.version, params: bundle.params, quote, encode, beam, tokens: tok, detok: untok, words: voc.words, threshold: bundle.quality.threshold};
 }
 
 // Fetch the newest narration student through /api/students/narration/ (static assets as a fallback).
@@ -261,7 +338,10 @@ export async function fetchNarrationStudent({base = '/api/students/', fallbackBa
       const file = manifest.versions?.[manifest.latest];
       if (!file) continue;
       const response = await fetcher(new URL(file, dir).href);
-      if (response.ok) return loadNarrationStudent(await response.json());
+      if (!response.ok) continue;
+      const bundle = await response.json();
+      const blob = bundle.blob ? await (await fetcher(new URL(bundle.blob, dir).href)).arrayBuffer() : null;
+      return loadNarrationStudent(bundle, blob);
     } catch {
       // Try the next root.
     }
