@@ -3,6 +3,8 @@
 //
 //   node scripts/narration-collect.js OUT_DIR [--seeds 40] [--years 150] [--start 1] [--workers N] [--entities 8]
 //
+// A stopped run picks up where it left off: seeds already in OUT_DIR/parts are not rerun.
+//
 // Each seed grows a town as scripts/distill-collect.js does (water archetype and
 // council style rotate with the seed; decisions get the game's own fallback
 // answers; people are not stepped) and records, as the game would ask for them:
@@ -20,7 +22,7 @@
 import {fork} from 'node:child_process';
 import {availableParallelism} from 'node:os';
 import {createHash} from 'node:crypto';
-import {mkdirSync, createWriteStream, createReadStream, rmSync} from 'node:fs';
+import {mkdirSync, createWriteStream, createReadStream, rmSync, existsSync} from 'node:fs';
 import {createInterface} from 'node:readline';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -34,7 +36,7 @@ async function runChild() {
   const {fallbackFor} = await import('../src/sim/decisions/effects.js');
   const {ARCHETYPES} = await import('../src/waters.js');
   const {hash32} = await import('../src/sim/rng.js');
-  const {cardFacts, narrativeFacts, chronicleFacts} = await import('../src/sim/narrative-facts.js');
+  const {cardFacts, cardsNeedingProse, narrativeFacts, chronicleFacts} = await import('../src/sim/narrative-facts.js');
   const {validateFacts} = await import('../src/narrative-schema.js');
   const {validateProseFacts} = await import('../src/narrative-prose.js');
 
@@ -86,7 +88,8 @@ async function runChild() {
     while (state.time.year < years) {
       stepTick(state, 1, {decisions: bus}, {skipPeople: true});
       // Cards as the narrator sees them: before the council rules on them.
-      for (const card of state.docket ?? []) {
+      // Only the cards the game would narrate (cardsNeedingProse: no budget cards).
+      for (const card of cardsNeedingProse(state)) {
         const id = `${card.id}:${card.proseRevision ?? 0}`;
         if (seenCards.has(id)) continue;
         seenCards.add(id);
@@ -141,11 +144,14 @@ async function runParent() {
   mkdirSync(parts, {recursive: true});
   const jobs = [];
   for (let k = 0; k < seeds; k++) jobs.push({seed: 1000 + (start + k) * 7919, index: start + k, years, entities, dir: parts});
-  const results = await pool(jobs, workers);
+  // A stopped run resumes: seeds whose file is already in OUT_DIR/parts are kept as they are.
+  const todo = jobs.filter((j) => !existsSync(join(parts, `sheets-${j.seed}.jsonl`)));
+  if (todo.length < jobs.length) process.stderr.write(`resuming: ${jobs.length - todo.length} of ${jobs.length} seeds already collected\n`);
+  const results = await pool(todo, workers);
 
   // Merge: one line per distinct sheet across seeds.
   const sheets = new Map();
-  for (const r of results) {
+  for (const r of jobs) {
     for await (const s of readLines(join(parts, `sheets-${r.seed}.jsonl`))) {
       const seen = sheets.get(s.key);
       if (seen) {
@@ -175,6 +181,7 @@ async function runParent() {
 function pool(jobs, size) {
   return new Promise((resolve, reject) => {
     const results = [];
+    if (!jobs.length) return resolve(results);
     let next = 0;
     const self = fileURLToPath(import.meta.url);
     const launch = () => {

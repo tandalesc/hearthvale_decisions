@@ -28,8 +28,8 @@ import {createRenderMirror} from './sim/render-mirror.js';
 // The inline host: sim-session.js on this thread, stepping in a task of its own posted as
 // each drawn frame is handed to the GPU (the GPU draws that frame while the sim works out
 // the next). The renderer reads the live render view.
-export function createInlineHost({sim, routes = null, decisions = null, students = null, entitlement, pace = 1, budgetMs = 10, rowFloats = 20} = {}) {
-  const session = createSimSession({sim, routes, decisions, students, entitlement, pace, budgetMs, rowFloats});
+export function createInlineHost({sim, routes = null, decisions = null, students = null, entitlement, pace = 1, budgetMs = 10, rowFloats = 20, localProse = null} = {}) {
+  const session = createSimSession({sim, routes, decisions, students, entitlement, pace, budgetMs, rowFloats, localProse});
   let stepOwed = 0, posted = false, lastNow = 0, lastSpeed = 0, lib = null;
   const listeners = {step: [], fail: []};
   const host = {

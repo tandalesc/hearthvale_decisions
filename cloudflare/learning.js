@@ -3,6 +3,7 @@
 import initialManifest from '../public/students/manifest.json' with {type: 'json'};
 import {validateQuestion, validateState, stateKey} from '../src/decision-kinds.js';
 import {decisionOptions, FEATURES_VERSION} from '../src/decision-features.js';
+import {STUDENT_FAMILIES, studentPath} from '../src/student-families.js';
 const json = (body, status = 200) => Response.json(body, {status});
 const textEncoder = new TextEncoder();
 export const REQUIRED_GATES = ['real-play KL', 'real-play KL by traffic', 'no busy kind worse', 'largest option bias', 'young-town bias', 'rare options', 'JS parity', 'size and speed', 'canary towns', 'canary population', 'active kind coverage', 'held-out new rows'];
@@ -13,10 +14,14 @@ export async function recordLearningReport(env, report) { return coordinator(env
 export async function recordLearningLabels(env, report) { return coordinator(env).labels(report); }
 export async function handleLearningRequest(request, env) {
   const url = new URL(request.url), path = url.pathname.replace(/^\/api\/students\//, '/students/');
-  if (path === '/students/manifest.json' || path === '/students/manifest') return json(await coordinator(env).manifest());
-  const version = /^\/students\/decisions\.v(\d+)\.json$/.exec(path);
-  if (version) {
-    const manifest = await coordinator(env).manifest(), key = manifest.artifacts?.[version[1]];
+  const student = studentPath(path);
+  if (student && !STUDENT_FAMILIES[student.family].coordinated) {
+    // Static families: the manifest and bundles are assets ('/students/narration/manifest' included).
+    return env.ASSETS ? env.ASSETS.fetch(new Request(new URL(`/students/${student.file}`, url), request)) : null;
+  }
+  if (student?.manifest) return json(await coordinator(env).manifest());
+  if (student) {
+    const manifest = await coordinator(env).manifest(), key = manifest.artifacts?.[student.version];
     if (!key) return null; // Existing bundled versions can fall through to ASSETS.
     const object = await env.STUDENT_ARTIFACTS.get(key);
     return object ? new Response(object.body, {headers: {'content-type': 'application/json', 'cache-control': 'public,max-age=31536000,immutable'}}) : json({error: 'Bundle unavailable'}, 503);

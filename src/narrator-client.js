@@ -334,10 +334,25 @@ export async function noteFor(state, query, {signal, onToken, onMeta, peek = nul
 
 const PROSE_RETRY_MS = 30000;
 
-export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) => globalThis.fetch(...a), now = () => Date.now(), actions = findAction} = {}) {
+// local: the narration student (src/narration-student.js), async (facts) -> {why, confident} | null.
+// remote: whether this player may use the hosted narrator (Plus). Without it the student
+// writes the card's quote; with it, the student stands in when the hosted reply is refused
+// or cannot be had. A quote the student is not confident in leaves the template text.
+export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) => globalThis.fetch(...a), now = () => Date.now(), actions = findAction,
+  local = null, remote = () => true} = {}) {
   let pausedUntil = 0;
   const retryAt = new Map();   // item key -> time
-  const counts = {llm: 0, template: 0, failed: 0};
+  const counts = {llm: 0, template: 0, student: 0, failed: 0};
+
+  async function student(facts) {
+    if (!local || facts.type !== 'card') return null;
+    try {
+      const q = await local(facts);
+      return q?.confident ? {prose: {why: q.why, options: FALLBACKS.card(facts).options}, source: 'student'} : null;
+    } catch {
+      return null;
+    }
+  }
 
   const ready = (key) => (retryAt.get(key) ?? 0) <= now();
 
@@ -348,9 +363,20 @@ export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) =
     } catch {
       return null;   // facts that cannot be sent: nothing to store, try again much later
     }
+    if (!remote()) {
+      const mine = await student(facts);
+      if (signal?.aborted) return null;
+      return mine ?? {prose: FALLBACKS[facts.type](facts), source: 'template'};
+    }
+    const hosted = await runHosted(job.kind, facts, signal, onToken);
+    if (signal?.aborted || (hosted && hosted.source !== 'template')) return hosted;
+    return (await student(facts)) ?? hosted;
+  }
+
+  async function runHosted(kind, facts, signal, onToken) {
     let response;
     try {
-      response = await fetcher(endpoint, {method: 'POST', signal, headers: {'Content-Type': 'application/json', Accept: 'text/event-stream'}, body: JSON.stringify({kind: job.kind, facts})});
+      response = await fetcher(endpoint, {method: 'POST', signal, headers: {'Content-Type': 'application/json', Accept: 'text/event-stream'}, body: JSON.stringify({kind, facts})});
     } catch {
       if (signal?.aborted) return null;
       pausedUntil = now() + PROSE_RETRY_MS;

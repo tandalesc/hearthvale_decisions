@@ -1,7 +1,7 @@
 // Pair collected narration sheets with prose, as training rows for a small
 // model that writes narration from triples (src/narration-features.js).
 //
-//   node scripts/narration-export.js DIR [--out FILE=DIR/pairs.jsonl] [--labels FILE ...]
+//   node scripts/narration-export.js DIR [--out FILE=DIR/pairs.jsonl] [--labels FILE ...] [--prompts] [--composed]
 //
 // Two sources of prose, told apart by `task` so the model can learn both and be
 // asked for the voice it should use:
@@ -21,6 +21,11 @@
 //                entity.prose   the inspector's note
 // End pages have no template text; their sheets wait for model labels.
 //
+// --composed adds a game-written card.quote for every card (scripts/narration-compose.js,
+// source 'composed'), kept only if it passes the same checks as the hosted narrator's.
+// --prompts also writes, for every card sheet, a card.quote row with source 'prompt' and
+// an empty target: the cards a trained model is asked to quote, for checking.
+//
 // One line per row: {key, type, task, source, model?, triples, target, n, seeds}.
 // Prints counts per task and the targets' vocabulary.
 import {createReadStream, createWriteStream} from 'node:fs';
@@ -31,6 +36,7 @@ import {validateFacts} from '../src/narrative-schema.js';
 import {validateProseFacts, CHECKS} from '../src/narrative-prose.js';
 import {fallbackNote} from '../src/narrator-client.js';
 import {sheetKey} from './narration-collect.js';
+import {composeQuote} from './narration-compose.js';
 
 const ENTITY = new Set(['person', 'household', 'building', 'body']);
 
@@ -78,8 +84,11 @@ async function main() {
   const out = createWriteStream(outFile);
   const tasks = {}, refused = {};
   const vocab = new Set();
+  const prompts = args.includes('--prompts');
+  const composed = args.includes('--composed');
   const write = (row) => {
     out.write(`${JSON.stringify(row)}\n`);
+    if (row.source === 'prompt') return;
     const t = (tasks[row.task] ??= {rows: 0, words: 0, triples: 0});
     t.rows++;
     t.words += row.target.split(/\s+/).length;
@@ -90,6 +99,15 @@ async function main() {
   for await (const sheet of readLines(join(dir, 'sheets.jsonl'))) {
     for (const {task, target, drop} of templateRows(sheet.facts)) {
       write({key: sheet.key, type: sheet.type, task, source: 'template', triples: narrationTriples(sheet.facts, {drop}), target, n: sheet.n, seeds: sheet.seeds});
+    }
+    if (composed && sheet.type === 'card') {
+      const text = composeQuote(sheet.facts);
+      const row = text ? modelRow(sheet.facts, 'why', text) : {reason: 'nothing to add'};
+      if (row.task) write({key: sheet.key, type: sheet.type, task: row.task, source: 'composed', triples: narrationTriples(sheet.facts), target: row.target, n: sheet.n, seeds: sheet.seeds});
+      else refused[`composed: ${String(row.reason).split(':')[0]}`] = (refused[`composed: ${String(row.reason).split(':')[0]}`] ?? 0) + 1;
+    }
+    if (prompts && sheet.type === 'card') {
+      write({key: sheet.key, type: sheet.type, task: 'card.quote', source: 'prompt', triples: narrationTriples(sheet.facts), target: '', n: sheet.n, seeds: sheet.seeds});
     }
   }
   for (const file of labelFiles) {

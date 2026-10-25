@@ -14,6 +14,7 @@ import * as simView from './sim/view.js';
 import * as docket from './sim/docket.js';
 import {narrativeFacts} from './sim/narrative-facts.js';
 import {peekNote, keepNote, touchNote, startProseKeeper} from './narrator-client.js';
+import {createLocalNarration} from './narration-student.js';
 import {createDecisionClient} from './decision-client.js';
 import {createLocalAnswerer, createStudentVersions} from './decision-local.js';
 // Static, never import(): a chunk split off this worker imports its shared code back
@@ -61,6 +62,7 @@ const ops = {
       sim, lib, routes, decisions, students, entitlement: opts.entitlement,
       narrator: {facts: narrativeFacts, peekNote, keepNote, touchNote},
       startProse: opts.prose === false ? null : startProseKeeper,
+      localProse: opts.prose === false || opts.narrationStudent === false ? null : createLocalNarration({base: new URL('/api/students/', self.location.href).href, fallbackBase: new URL('/students/', self.location.href).href}),
       pace: opts.pace ?? sim.pace ?? 1,
       budgetMs: opts.budgetMs ?? 30,
       rowFloats: opts.rowFloats ?? 20,

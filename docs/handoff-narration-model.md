@@ -1,0 +1,190 @@
+# Handoff: a tiny narration model
+
+Goal: replace Haiku for the narrator's prose with a model under 1 MB that runs in the browser, the way the decision student replaced d1-3B for routine decisions. Written 23 October 2026 on branch `claude/mini-llm-narration-bfaf2b`, commit `e11a990` (main `880429b` merged in). Nothing is pushed and there is no PR.
+
+---
+
+## 1. Where it stands
+
+| Step | State |
+|---|---|
+| Fact sheets → triples (`src/narration-features.js`) | done, tested |
+| Collector (`scripts/narration-collect.js`) | done; 40 seeds collected (225,126 distinct sheets). Resumes a stopped run; asks only for the cards the game narrates (`cardsNeedingProse`) |
+| Export to training pairs (`scripts/narration-export.js`) | done; `--prompts` adds held-out cards to quote |
+| Trainer (`scripts/narration-train.py`) | first version done, see §1a |
+| Checker (`scripts/narration-check.js`) | done: the narrator's checks plus a fluency check |
+| Design doc (`docs/design/narration-distillation.md`) | not started |
+| JS forward pass, int8 export | not started |
+
+Tests: `tests/narration-features.test.js` passes. In the last full `npm test` run, 2 of 563 tests failed, neither in narration code (see §5).
+
+## 1a. First results (25 October 2026)
+
+Model: a set encoder over the triples' word pieces and a pointer-generator decoder with a task token. Names and numbers are left out of the vocabulary, so the model can copy them but never invent them. 551K parameters, about 540 KB at int8. 2 layers each side, d 96.
+
+Trained 4 epochs (about 12 minutes on MPS) on 32 seeds, with entity notes capped at 60K rows. Tested on 8 held-out seeds, 600 rows per task:
+
+| task | exact match | names/numbers right (precision / recall) |
+|---|---|---|
+| `card.why` | 87.8% | 99.6% / 97.8% |
+| `entity.note` | 73.8% | 96.4% / 93.9% |
+| `year.text` | 20.7% | 82% / 71% |
+| `card.quote` (Haiku voice, 24 training rows) | — | 20% pass the checks; read as gibberish |
+
+- **The narrator's `CHECKS` pass gibberish.** Before the fluency check was added, 75% of word-salad quotes passed. The checks were written for a fluent model, so a student also needs a fluency gate (no unknown pieces, no word twice running) and a read.
+- **24 Haiku quotes are far too few** to learn the voice. The template tasks show the copying machinery works. The voice needs Haiku labels (step 5): likely a few thousand cards.
+- **`year.text` is weak because the year line uses facts that aren't in its triples.** For example, "25 more people live here": 25 appears nowhere in the sheet, so the model can't copy it. Either the template derives it or the year sheet drops it. Look at `chronicleFacts` next.
+- **The model surfaced template oddities in the game's own text:** "The The ward Ward Council sits…", "a school for the ward: high hill", and "you approved festival Society: budget for year 122."
+
+To reproduce (Python with torch, e.g. `~/Projects/twm-decision-student/.venv`):
+
+```bash
+node scripts/narration-collect.js OUT --seeds 40 --years 150
+node scripts/narration-export.js OUT --labels OUT/bench-labels.jsonl --prompts
+python scripts/narration-train.py OUT/pairs.jsonl --out RUN --epochs 4 --batch-size 96 --max-per-task 60000
+node scripts/narration-check.js RUN/samples.jsonl --sheets OUT/sheets.jsonl --labels OUT/bench-labels.jsonl
+```
+
+## 1b. Haiku labels and the stability runs (25 October 2026)
+
+**Labels.** 25,968 cards went through the Message Batches API: production's card prompt (`buildProsePrompt`), one attempt each, thinking off. It cost $2.29, with the system prompt served from cache. Script: `scripts/narration-label-batch.js` (`build` runs locally; `send --yes`; `fetch`).
+- Only 24% of Haiku's first attempts pass `CHECKS.card` (6,124 of 25,668 training cards; 57 of 300 held-out). The main failures are **too many sentences** (12.5K) and **the asker speaking of themselves by name** (5.2K). Production retries once and then shows template text, so many live cards probably show template text. Worth checking the card prompt or checks against Haiku 5.5.
+
+**Game-written quotes.** `scripts/narration-compose.js` builds a first-person quote for every card from its facts: the reason, the strongest stance, the last ruling, and a closing. `narration-export.js --composed` adds them, about 29K that pass the checks.
+
+**Decoding and checks.** Beam search (4) that never repeats a word or any three-word phrase, may not write numbers or dramatic words the facts lack, and returns every candidate. `narration-check.js` adds a fluency gate (no unknown words, no repeated words or phrases, no numbers run into words) and reports best-of-N, as the game would pick before falling back to template text. Label smoothing 0.05. Batches are padded to fixed shapes, because MPS compiles a graph per shape and runs out of memory otherwise.
+
+**Results on new held-out cards (600), 651K parameters, 8 epochs on the 3090:**
+
+| training data | cards with a passing quote | notes |
+|---|---|---|
+| Haiku quotes only (greedy decoding, before) | 17% with the strict fluency gate | repeats phrases |
+| Haiku quotes only | 76% | varied, but some broken grammar the checks miss ("wants a metropolis") |
+| Haiku + game-written quotes | 97% | 54% are the game-written quote word for word; 95% open with the game's reason |
+
+Training on the 3090: under llm-manager's `training` strategy (GPU 1 free), `~/narration/run.sh` on rrh-llm-1.
+
+## 1c. The narration student (25 October 2026)
+
+Built on the decision student's machinery (`DecisionSetModel` with `state_layers=0`; paper Table 4: dropping the snapshot encoder improved every measure).
+- **Input:** one token per triple, scope parts + attribute + value + num·num_dir[attribute], layer-normed. No encoder.
+  - Values are closed tables: enums, role tokens and numbers.
+  - Free text comes in as the mean of its words' embeddings, shared with the tied output table.
+- **Role tokens** (`src/narration-roles.js`): names, places and numbers become placeholders such as `<asker.body>`, `<stances:0.where>`, `<place#0>` and `<options:do.cost>`, in the triples and in the targets. `relex()` puts the words back, and 99.6% of Haiku quotes round-trip exactly. The decoder may not emit a role the card lacks, so it can only name what is there.
+- **Decoder:** 4 layers, d 96, 64-dim factorised word table. 721K parameters, about 704 KB at int8; the vocabulary is 3,284 words at min count 3.
+- **Data** (`scripts/narration-student-export.js`): pretrain on every Haiku reply (26K quotes, passing or not, and 84K option lines), then fine-tune on the 6,181 passing quotes.
+- **Quality head** (`scripts/narration-quality.py`): the decision student's error-head idea. It learns on 4 validation towns which candidates pass, from log-probability, entropy, length, beam score, unknown share and the decoder state.
+- **Checking:** `scripts/narration-student-check.js` (relex, then the fluency gate and the narrator's checks).
+
+Results on 600 cards from the 8 held-out towns (the same towns as every earlier run):
+
+| | top candidate passes | quality head: most confident 90% |
+|---|---|---|
+| no pretraining | 75.8% | 83.9% pass |
+| pretrained on all Haiku text | **91.8%** | **97.4% pass** (AUC 0.91) |
+
+None of the 600 quotes copies a training quote. They read as grammatical, in the house voice. Remaining faults seen by reading: occasional contradictions ("most makers are for it, and the makers are not much moved"), occasional garbles, and some quotes that end "Which comes first?" without naming the second plan (the checks catch those).
+
+## 1d. Shipped pipeline and quality check (25 October 2026)
+
+**In the game.**
+- Bundle: `public/students/narration/narration.v1.json`, 1.2 MB. Served through the new student-family routes (`src/student-families.js`, `cloudflare/learning.js`), where decisions keep their paths and narration has `/students/narration/`.
+- Runtime: `src/narration-student.js` runs on the decision student's kernels (exported from `src/decision-student.js`).
+- Routing (`createProseKeeper` in `src/narrator-client.js`): free players get the student's quote when it is confident. Plus players get Haiku, and the student when Haiku's reply is refused or unreachable. Otherwise template text. Free players had no card quotes before.
+- The bundle loads lazily in the sim worker, or on the main thread when the page runs the sim inline (yielding every 4 steps). `?narrator=hosted` turns it off on the inline path.
+
+**Parity and speed.**
+- The JS top quote matches Python on 23 of 24 fixture cards (`tests/narration-student.test.js`). The one miss is an int8 rounding near-tie.
+- Adaptive decoding tries a single candidate first and runs the beam only when that one is not confident: 56 ms per card in Node on an M-series Mac (was 119 ms), without the fact check.
+- Two trainer bugs were fixed on the way: padding rows were not zero, and the tied word table leaked its padding row into the memory.
+
+**Grammar judge** (`scripts/narration-judge.js`, Haiku, $0.035, 300 student quotes vs Haiku's 57 passing held-out quotes):
+
+| | grammar clean / minor / broken | point conveyed | contradicts the facts |
+|---|---|---|---|
+| student | 66.7% / 32.7% / 0.7% | 98.7% | **54%** |
+| Haiku | 96.5% / 3.5% / 0% | 100% | 7% |
+
+The student mixes up details from different parts of a card: which past ruling, when, whose stance, how many asks. A past ruling is three separate triples (year, act, what), and with no encoder, triples never attend to each other, so the decoder has to bind them itself. The decision student never needed such binding, so its no-encoder result does not carry over fully.
+
+**Fact check** (`src/narration-consistency.js`, now in the runtime): it rejects a quote that gives a group a stance the facts do not, gets a past ruling's act or timing wrong, or gets an ask count wrong. It catches 100 of the judge's 162 flags and rejects 3 of Haiku's 57. With it, the student shows a quote on 61 of 100 held-out cards (90 without it). About a third of those still carry a slip by the judge's measure. Latency is about 105 ms.
+
+**Next (v2):**
+- Let triples bind: one memory token per record (a past ask, a stance) instead of one per attribute, a 1-layer triple encoder, or a prefix-LM.
+- 3–4 Haiku samples per card (about $2).
+- SwiGLU, thinner and deeper layers with shared weights, EMA, and early stopping.
+- Feed the judge's labels into the quality head.
+
+## 2. What we learned
+
+- **The game only asks the narrator for two things today:** Council card quotes (`card.why`, on request from the open view) and inspector notes for people, households, buildings and bodies. The prose keeper never asks for year or end-page prose (`createProseKeeper` in `src/narrator-client.js` has no clock-driven work).
+- **End of game:** the end summary is written at year 150 (`END_YEAR`, `src/sim/chronicle.js`). The Chronicle panel shows its preview from year 140 or the Metropolis era (`src/sim/view.js`). Play doesn't stop at 150.
+- **Haiku's output isn't kept anywhere reusable.**
+  - Production logs record only a result category and timings, on purpose (`cloudflare/narration-outcome.js`).
+  - The per-account Durable Object keeps one `narration-cache` row for 24 hours.
+  - Resolved cards drop their `prose`.
+  - Inspector notes and chronicle prose do stay in saves, but those are players' saves.
+  - The only Haiku text on hand is 46 outputs in `benchmarks/narration-*.json`; **28 pass the narrator's checks**.
+- **The domain is small.**
+  - Card reasons come from about 87 templates, with 120 distinct "why" texts and a vocabulary of about 450 words.
+  - Entity fact lines use about 430 words.
+  - About 71% of the content words in Haiku's accepted quotes appear in the facts it was given. The model mostly selects facts and copies them; it doesn't need to invent text.
+- **Logging Haiku output going forward** would give free training data, but it reverses the current no-text logging rule. That's the user's call.
+
+## 3. The data
+
+**Triples.** `narrationTriples(facts, {drop})` walks any sheet against its schema and gives `[scope, attribute, value, num, type]`:
+- `type` is `enum`, `num` or `text`.
+- Text keeps its case so the model can copy names, places and labels.
+- Year fields carry their offset from the sheet's year in `num`.
+- List items are scoped by key or index (`options:x_do`, `stances:0`).
+
+**Two sources of prose, told apart by `task`:**
+
+| task | source | target | left out of the triples |
+|---|---|---|---|
+| `card.why` | template | the card's reason | `card.why` |
+| `year.text` | template | the chronicle's year line | `year.template` |
+| `entity.note` | template | `fallbackNote(facts)` | nothing |
+| `card.quote` | model (`--labels`) | the asker's quote, checked by `CHECKS.card` | nothing |
+| `year.prose` | model | checked by `CHECKS.year` | nothing |
+| `entity.prose` | model | ≤ 60 words, ends a sentence | nothing |
+
+Template rows are unlimited and free. They teach copying and keeping the facts straight. Model rows teach the voice. At runtime the game would ask for the model task.
+
+**Sizes measured.**
+- One seed to year 40: 1,340 distinct sheets in 3 s.
+- One seed to year 150: 5,600–6,600 sheets in 2–6 minutes.
+- The stopped run's 16 seeds hold about 96,600 sheets before cross-seed dedupe: 24k body, 19k building, 19k household, 19k person, 13k card, 2.4k year, 16 end.
+- Those 16 seed files are in the other session's scratchpad (`/private/tmp/claude-501/…graphics-optimization-handoff-3f536a/c532a6f3-…/scratchpad/nc40/parts/`). They may be gone after a reboot, so plan to rerun.
+
+## 4. Next steps
+
+1. **Collect** (about 25–40 minutes for 40 seeds). Run it alone; it will compete with anything else for CPU.
+   ```bash
+   node scripts/narration-collect.js OUT --seeds 40 --years 150
+   ```
+   ```bash
+   node scripts/narration-export.js OUT --labels OUT/bench-labels.jsonl
+   ```
+   For `bench-labels.jsonl`, walk `benchmarks/narration-*.json` for rows with both `raw` and `facts`, parse `raw` as JSON, and write `{facts, field: 'why', text: raw.why, model: 'claude-haiku-5-5'}` per line. The export keeps only rows that pass the checks.
+2. **Design doc** `docs/design/narration-distillation.md`, in the style of `decision-distillation.md`.
+3. **Trainer.**
+   - Model: a triple-set encoder (reuse the decision student's set encoder) and a small decoder that can copy tokens straight from text triples. About 0.5M parameters: under 600 KB at int8, about 350 KB at 4-bit.
+   - A task token selects the template or the model voice.
+   - Pretrain on template rows, then fine-tune on model rows.
+   - Split train and test by seed, as the decision student does.
+4. **Gates.**
+   - On held-out seeds, the student's `CHECKS` pass rate is at least Haiku's (11 of 12 live in the benchmark).
+   - No stray names or numbers.
+   - A side-by-side read of a sample.
+5. **More Haiku labels** cost API money. Ask before any live calls. The Batch API would roughly halve the cost; the benchmark measured about 830 input and 56 output tokens per card.
+
+## 5. Loose ends
+
+- **Two unit test failures from the last full run**, neither in narration code:
+  - `150 headless years … stay finite and reach era 2` failed its time limit (85 s) while the collection was using the CPU.
+  - `household members at a gathering end up near each other` also failed before main was merged in.
+
+  Neither has been rerun on its own yet.
+- **The handed-off session** "Narration dataset and tiny triples-to-text model" (branch `claude/friendly-fermi-562b8c`) has the same commit. It kept restarting the collection after it was stopped, so it was stopped again. Archive it, or tell it plainly what to do, before relying on it.

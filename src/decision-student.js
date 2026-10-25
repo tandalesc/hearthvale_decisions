@@ -490,7 +490,7 @@ const linear = (W, name, x) => linearRaw(W[`${name}.weight`].data, W[`${name}.bi
 // Flat (rows × d) versions of the layers the set model runs, one allocation
 // per layer rather than per token.
 
-function lnFlat(x, n, d, W, name) {
+export function lnFlat(x, n, d, W, name) {
   const g = W[`${name}.weight`].data, b = W[`${name}.bias`].data;
   const out = new Float32Array(n * d);
   for (let r = 0; r < n; r++) {
@@ -507,7 +507,7 @@ function lnFlat(x, n, d, W, name) {
 }
 
 // rows × inDim times W(out, in) rows [off, off + outDim), plus bias.
-function linFlat(x, n, inDim, w, b, outDim, off = 0) {
+export function linFlat(x, n, inDim, w, b, outDim, off = 0) {
   const out = new Float32Array(n * outDim);
   for (let r = 0; r < n; r++) {
     const xr = r * inDim, or = r * outDim;
@@ -521,7 +521,7 @@ function linFlat(x, n, inDim, w, b, outDim, off = 0) {
   return out;
 }
 
-function ffnFlat(W, p, x, n, d) {
+export function ffnFlat(W, p, x, n, d) {
   const w1 = W[`${p}.linear1.weight`], w2 = W[`${p}.linear2.weight`];
   const h = linFlat(x, n, d, w1.data, W[`${p}.linear1.bias`].data, w1.shape[0]);
   for (let i = 0; i < h.length; i++) if (h[i] < 0) h[i] = 0;
@@ -529,7 +529,7 @@ function ffnFlat(W, p, x, n, d) {
 }
 
 // Keys and values of nn.MultiheadAttention's packed in_proj (rows q, k, v).
-function projectFlat(W, p, x, n, d) {
+export function projectFlat(W, p, x, n, d) {
   const w = W[`${p}.in_proj_weight`].data, b = W[`${p}.in_proj_bias`].data;
   return {k: linFlat(x, n, d, w, b, d, d), v: linFlat(x, n, d, w, b, d, 2 * d), m: n};
 }
@@ -542,7 +542,7 @@ function attendFlat(W, p, x, n, d, kv, heads) {
 }
 
 // The same from the queries q (n rows), already projected.
-function attendQ(W, p, q, n, d, {k, v, m}, heads) {
+export function attendQ(W, p, q, n, d, {k, v, m}, heads) {
   const dh = d / heads, scale = 1 / Math.sqrt(dh);
   const out = new Float32Array(n * d), scores = new Float32Array(m);
   for (let r = 0; r < n; r++) {
@@ -599,7 +599,7 @@ function halfToFloat(h) {
   return sign * 2 ** (exp - 15) * (1 + frac / 1024);
 }
 
-function decodeWeight(entry) {
+export function decodeWeight(entry) {
   if (entry.f32) return new Float32Array(bytes(entry.f32).buffer);
   if (entry.f16) return Float32Array.from(new Uint16Array(bytes(entry.f16).buffer), halfToFloat);
   const q = new Int8Array(bytes(entry.i8).buffer), scale = new Float32Array(bytes(entry.scale).buffer);
