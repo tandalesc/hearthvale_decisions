@@ -1,6 +1,7 @@
 {
-  "latest": 1,
+  "latest": 2,
   "versions": {
-    "1": "narration.v1.json"
+    "1": "narration.v1.json",
+    "2": "narration.v2.json"
   }
 }
