@@ -14,7 +14,8 @@ export function validateNarrationFacts(body) {
   }
   return validateFacts(body.facts);
 }
-export const NARRATION_REVISION = 3;
+// 4: the needs line reads "They feel tired, …" (was "Needs: energy low", read backwards).
+export const NARRATION_REVISION = 4;
 export const narrationKey = (facts) => JSON.stringify([NARRATION_REVISION, facts]);
 export async function* readAnthropicDeltas(body) {
   const reader = body.getReader(), decoder = new TextDecoder();

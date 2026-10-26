@@ -108,7 +108,7 @@ test('the prompt holds only the given facts', () => {
   // The user message is exactly the rendered fact lines, nothing else.
   const lines = last.content.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2));
   assert.deepEqual(lines, factLines(facts, {durable: true}));
-  assert.ok(!lines.some((l) => /^Right now|^Needs/.test(l)), 'passing details stay out of kept notes');
+  assert.ok(!lines.some((l) => /^Right now|^They feel/.test(l)), 'passing details stay out of kept notes');
   assert.match(last.content, /Edda Marsh/);
   assert.match(last.content, /a wage floor/);
   assert.doesNotMatch(last.content, /[{}"]/);
