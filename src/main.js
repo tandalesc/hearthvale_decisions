@@ -266,6 +266,10 @@ async function boot() {
   const narrator = await narrating;
   // The inline host keeps notes and card prose through this thread's narrator.
   host.useNarrator(narrator && {facts: narrator.facts, peekNote: narrator.peekNote, keepNote: narrator.keepNote, touchNote: narrator.touchNote}, narrator?.startProseKeeper ?? null);
+  // Plus players' narration preference (Settings): fast, the student first; quality, the hosted narrator first.
+  const applyNarration = () => host.narration?.configure?.({prefer: prefs.get('narration')});
+  applyNarration();
+  prefs.onChange(applyNarration);
   const audio = createAudio(prefs);
   // The town's terrain seed is set now: riffles and cascades get their own water sound.
   audio.setWaterSources(rapidsSources());

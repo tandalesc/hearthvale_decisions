@@ -339,7 +339,7 @@ const PROSE_RETRY_MS = 30000;
 // writes the card's quote; with it, the student stands in when the hosted reply is refused
 // or cannot be had. A quote the student is not confident in leaves the template text.
 export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) => globalThis.fetch(...a), now = () => Date.now(), actions = findAction,
-  local = null, remote = () => true} = {}) {
+  local = null, remote = () => true, prefer = () => 'fast'} = {}) {
   let pausedUntil = 0;
   const retryAt = new Map();   // item key -> time
   const counts = {llm: 0, template: 0, student: 0, failed: 0};
@@ -368,6 +368,15 @@ export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) =
       if (signal?.aborted) return null;
       return mine ?? {prose: FALLBACKS[facts.type](facts), source: 'template'};
     }
+    // Plus, fast (the default): the student first, the hosted narrator when it is unsure.
+    // Without a local student (?narrator=hosted) the hosted narrator is asked at once.
+    if (local && prefer() !== 'quality') {
+      const mine = await student(facts);
+      if (signal?.aborted) return null;
+      if (mine) return mine;
+      return runHosted(job.kind, facts, signal, onToken);
+    }
+    // Plus, quality: the hosted narrator first, the student when it cannot be had.
     const hosted = await runHosted(job.kind, facts, signal, onToken);
     if (signal?.aborted || (hosted && hosted.source !== 'template')) return hosted;
     return (await student(facts)) ?? hosted;
@@ -442,7 +451,7 @@ export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) =
   }
   // hosted: this player gets the hosted narrator (Plus); student: the local one's load state.
   return {tick: async () => {}, requestCard, peekCard: (id) => previews.get(id),
-    stats: () => ({...counts, busy: inflight.size > 0, paused: now() < pausedUntil, hosted: Boolean(remote()), student: local?.info?.() ?? null})};
+    stats: () => ({...counts, busy: inflight.size > 0, paused: now() < pausedUntil, hosted: Boolean(remote()), prefer: prefer(), student: local?.info?.() ?? null})};
 }
 
 export function startProseKeeper(getState, options = {}) {

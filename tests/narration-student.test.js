@@ -55,7 +55,7 @@ test('student routes: decisions keep their paths, narration has its own director
 });
 
 // The prose keeper's routing, on a real town's first card.
-async function route({remote, quote, hosted}) {
+async function route({remote, quote, hosted, prefer = 'fast'}) {
   const {fixtureState} = await import('../src/sim/fixtures.js');
   const {cardsNeedingProse} = await import('../src/sim/narrative-facts.js');
   const st = fixtureState('town');
@@ -64,6 +64,7 @@ async function route({remote, quote, hosted}) {
   let calls = 0;
   const k = createProseKeeper({
     remote: () => remote,
+    prefer: () => prefer,
     local: async () => quote,
     fetcher: async () => { calls++; return hosted(); },
     actions: (name) => (name === 'setCardProse' ? (_s, cid, prose) => stored.push({id: cid, ...prose}) : null),
@@ -87,12 +88,21 @@ test('an unsure student leaves template text', async () => {
   assert.equal(r.stored[0].source, 'template');
 });
 
-test('Plus players get the hosted quote, and the student when the hosted one cannot be had', async () => {
-  const down = await route({remote: true, quote: confident, hosted: refused});
+test('Plus on Quality gets the hosted quote, and the student when the hosted one cannot be had', async () => {
+  const down = await route({remote: true, prefer: 'quality', quote: confident, hosted: refused});
   assert.equal(down.calls, 1);
   assert.equal(down.stored[0]?.source, 'student', 'the student stands in for a narrator that is down');
-  const generic = await route({remote: true, quote: confident, hosted: () => new Response(JSON.stringify({prose: {why: 'We ask this now.', options: {}}, source: 'llm'}))});
+  const generic = await route({remote: true, prefer: 'quality', quote: confident, hosted: () => new Response(JSON.stringify({prose: {why: 'We ask this now.', options: {}}, source: 'llm'}))});
   assert.equal(generic.stored[0]?.source, 'student', 'and for a hosted quote the checks refuse');
+});
+
+test('Plus on Fast (the default) takes a confident student quote and asks the hosted narrator only when it is unsure', async () => {
+  const sure = await route({remote: true, quote: confident, hosted: refused});
+  assert.equal(sure.calls, 0, 'no hosted call when the student is confident');
+  assert.equal(sure.stored[0]?.source, 'student');
+  const unsure = await route({remote: true, quote: {why: 'x', confident: false}, hosted: refused});
+  assert.equal(unsure.calls, 1, 'an unsure student hands the card to the hosted narrator');
+  assert.equal(unsure.stats.prefer, 'fast');
 });
 
 const bundleFile = new URL('../public/students/narration/narration.v3.json', import.meta.url);
@@ -135,18 +145,21 @@ test('settings reports the narrator: hosted for Plus, else the student once it h
     return {ok: true, json: async () => JSON.parse(body), arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength)};
   };
   const narrate = createLocalNarration({base: 'http://test/students/', fallbackBase: 'http://test/students/', fetcher});
-  assert.deepEqual(narrate.info(), {state: 'idle', version: null});
+  assert.deepEqual(narrate.info(), {state: 'idle', version: null, id: null});
   const latest = JSON.parse(readFileSync(new URL('manifest.json', dir))).latest;
   const card = JSON.parse(readFileSync(fixtureFile, 'utf8')).cards[0].facts;
+  narrate.preload();
   await narrate(card);
-  assert.deepEqual(narrate.info(), {state: 'ready', version: latest});
+  const {id} = narrate.info();
+  assert.match(id, /^[0-9a-f]{8}$/);
+  assert.deepEqual(narrate.info(), {state: 'ready', version: latest, id});
 
   const free = createProseKeeper({local: narrate, remote: () => false}).stats();
   assert.equal(free.hosted, false);
-  assert.equal(narrationLabel(free), `v${latest} · student`);
-  assert.equal(narrationLabel(createProseKeeper({local: narrate, remote: () => true}).stats()), `hosted · v${latest} · student as backup`);
-  assert.equal(narrationLabel({hosted: false, student: {state: 'idle', version: null}}), 'student · loads with the first quote');
-  assert.equal(narrationLabel({hosted: false, student: {state: 'missing', version: null}}), 'student unavailable · template text');
-  assert.equal(narrationLabel(null), 'Off · template text');
+  assert.equal(narrationLabel(free), `v${latest} · ${id}`, 'version and fingerprint, as the decision line');
+  assert.equal(narrationLabel(createProseKeeper({local: narrate, remote: () => true}).stats()), `v${latest} · ${id}`);
+  assert.equal(narrationLabel({student: {state: 'loading'}}), '–');
+  assert.equal(narrationLabel({student: {state: 'missing'}}), 'None loaded');
+  assert.equal(narrationLabel(null), 'Off');
   assert.equal(narrationLabel(undefined), '–');
 });

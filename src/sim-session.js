@@ -23,6 +23,7 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
   let view = null;
   let modelEnabled = true;
   let proseKeeper = null;
+  let narrationPrefer = 'fast';   // Plus: 'fast' (student first) or 'quality' (hosted first)
   // With the model off every ask resolves to null, so actors use local rules.
   const decisions = client && new Proxy(client, {
     get(target, key) {
@@ -34,7 +35,7 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
   const services = {decisions, routes, now: 0, rate: 0};
 
   function syncProse() {
-    if (modelEnabled && state && !proseKeeper && startProse) proseKeeper = startProse(() => state, {local: localProse, remote: () => isPaid(entitlement)});
+    if (modelEnabled && state && !proseKeeper && startProse) proseKeeper = startProse(() => state, {local: localProse, remote: () => isPaid(entitlement), prefer: () => narrationPrefer});
     else if (!modelEnabled && proseKeeper) { proseKeeper.stop(); proseKeeper = null; }
   }
 
@@ -165,7 +166,12 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
       return {text: sim.serialize(state), meta: meta()};
     },
 
-    narration: {stats: () => proseKeeper?.stats?.() ?? null},
+    narration: {
+      stats: () => proseKeeper?.stats?.() ?? null,
+      // Settings: load the student if it has not been needed yet, and report.
+      refresh() { localProse?.preload?.(); return proseKeeper?.stats?.() ?? null; },
+      configure({prefer} = {}) { if (prefer === 'fast' || prefer === 'quality') narrationPrefer = prefer; },
+    },
 
     decisions: {
       stats: () => client?.stats() ?? null,
