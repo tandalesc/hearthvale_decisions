@@ -332,6 +332,45 @@ Runs: rrh-llm-1 `~/narration/note2x-*`. Labels: that session's scratchpad (`note
 - **Settings.** A "Notes model v1 · 4f0e8962" line; the Plus Fast/Quality setting covers notes.
 - **Checked in the dev server.** A villager's note came from the student within 1.5 s. Of three buildings, two notes came from the student and one from the template (below the threshold).
 
+## 1o. Notes v2: graded for being a good note, not only for facts (26 October 2026)
+
+The user cares more about a note being pertinent and good than about contradictions. A second rubric (`QUALITY_SYSTEM` in `scripts/narration-note-grade.js`) scores a note 1–5:
+- 5: particular and worth knowing;
+- 4: good with a small weakness;
+- 3: correct but bland (filler, small talk);
+- 2: repetitive, rambling or plainly wrong;
+- 1: broken.
+
+`narration-note-verdicts.js --rubric quality` counts 4–5 as good. Its first run lost 2,746 of 3,937 grades to a reply cut off at 80 tokens; the limit is now 200, with `--resume`.
+
+**Decoding.** `--no-repeat` (trainer, exporter, runtime config `no_repeat`): no content word of five letters or more twice in a note, besides a short list of function words. Also beam 8.
+
+**Head.** Trained on rubric grades of beam-8 validation candidates ($0.34; 31.5% score 4–5).
+
+**Judged** on 317 test entities with the same rubric ($0.15; `narration-note-judge.js --picks NAME=FILE --rubric quality`; picks from `scripts/narration-note-pick.py`):
+
+| | mean | good (4–5) | poor (1–2) |
+|---|---|---|---|
+| Haiku | 3.40 | 50% | 13% |
+| template | 2.58 | 17% | 55% |
+| notes v1, every note shown | 3.12 | 36% | 25% |
+| notes v1 as shipped (old head, top 70%, template for the rest) | 2.98 | 33% | — |
+| v1 decoding, new head | 3.17 | 39% | 22% |
+| no-repeat, beam 4, new head | 3.18 | 40% | 22% |
+| **no-repeat, beam 8, new head (notes v2)** | **3.24** | **42%** | 19% |
+
+- **Gating to the template lowers quality,** because even the student's least confident notes beat it on average (top 90% plus template: 3.18; all shown: 3.24). Free players therefore get any student note that passes the rules.
+- **Gating to Haiku raises quality for Plus:** the top 80% plus Haiku for the rest scores 3.32.
+- **By kind,** student / Haiku / template: people 3.03 / 3.15 / 2.47; households 3.55 / 3.68 / 3.21; buildings 3.35 / 3.49 / 2.68; bodies 2.88 / 3.10 / 1.88.
+
+**Shipped as notes v2** (`public/students/notes/notes.v2.json`, sharing `notes.v1.bin`: same weights):
+- beam 8, `no_repeat`, the quality head, threshold = its most confident 80% (0.0008);
+- `note()` runs the full beam (no single-candidate shortcut);
+- the client shows free players any student note that passes the rules, and Plus on Fast the confident ones, else Haiku;
+- parity 24/24; 163 ms median per note in Node.
+
+**Upstream fix not made yet:** the fact line "Needs: energy high" is misread as "full of energy" by Haiku's labels (so by the student) and by Plus notes. Rewording it in `factLines` would fix the prompt and future labels; it changes production prompts and the narration cache key.
+
 ## 1j. Side results: speed, and an int4 decision student (25 October 2026)
 
 **Would WebAssembly help?** Measured with hand-assembled WASM kernels on narration v2's layer shapes (515K multiply-adds per beam step, Node 24, M-series Mac):

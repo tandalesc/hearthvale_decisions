@@ -112,6 +112,9 @@ function yearsAgo(scope, attr, num, type) {
 const pyRound = (v) => { const f = Math.floor(v), d = v - f; return d > 0.5 || (d === 0.5 && f % 2 === 1) ? f + 1 : f; };
 const agoPart = (k) => (k < 0 ? 'ago:ahead' : k <= 5 ? `ago:${k}` : k <= 10 ? 'ago:6-10' : 'ago:11+');
 
+// Function words a note may repeat (config no_repeat; the trainer's REPEATABLE).
+const REPEATABLE = new Set(['their', 'there', 'these', 'those', 'which', 'would', 'could', 'should', 'about', 'other', 'still', 'while', 'where', 'being', 'after', 'again', 'every', 'since', 'under', 'because', 'though', 'through', 'before', 'never', 'always', 'right']);
+
 // bundle: the JSON header; blob: the weights file's bytes (ArrayBuffer) when the header names one.
 export function loadNarrationStudent(bundle, blob = null) {
   if (bundle?.format !== NARRATION_STUDENT_FORMAT) throw new Error('Not a narration student bundle');
@@ -257,7 +260,7 @@ export function loadNarrationStudent(bundle, blob = null) {
 
   // check (optional): text so far -> true when it says something the card contradicts; such a
   // beam is dropped at the end of a sentence, so the others get the room.
-  async function beam(encoded, task, {k = cfg.beam, alpha = cfg.alpha, block = cfg.block, pause, check} = {}) {
+  async function beam(encoded, task, {k = cfg.beam, alpha = cfg.alpha, block = cfg.block, pause, check, noRepeat = !!cfg.no_repeat} = {}) {
     const {mem, n, ban} = encoded, maxT = cfg.max_tgt;
     const cross = Array.from({length: L}, (_, l) => projectFlat(W, `decoder.layers.${l}.multihead_attn`, mem, n, d));
     const fresh = () => Array.from({length: L}, () => ({k: new Float32Array(maxT * d), v: new Float32Array(maxT * d)}));
@@ -273,6 +276,8 @@ export function loadNarrationStudent(bundle, blob = null) {
         for (let i = 0; i < V; i++) if (ban[i]) lp[i] = -1e9;
         const words = wordsOf(b.toks);
         const banned = new Set(words.length ? [words.at(-1)] : []);
+        // A notes bundle (config no_repeat): no content word twice, as the trainer decodes.
+        if (noRepeat) for (const w of words) if (w.length >= 5 && /^[a-z]+$/.test(w) && !REPEATABLE.has(w)) banned.add(w);
         if (words.length >= block - 1) {
           const tail = words.slice(-(block - 1)).join(' ');
           for (let j = 0; j + block - 1 < words.length; j++) if (words.slice(j, j + block - 1).join(' ') === tail) banned.add(words[j + block - 1]);
@@ -347,8 +352,9 @@ export function loadNarrationStudent(bundle, blob = null) {
   }
 
   // An inspector note (a notes bundle: task entity.note): a beam whose finished sentence fails
-  // noteProblem is dropped; the pick must pass the worker's own rules for a note.
-  async function note(facts, {pause, beam: width = cfg.beam, adaptive = true} = {}) {
+  // noteProblem is dropped; the pick must pass the worker's own rules for a note. No single-
+  // candidate shortcut by default: the full beam (config beam, 8 for notes v2) is what was judged.
+  async function note(facts, {pause, beam: width = cfg.beam, adaptive = false} = {}) {
     const {triples, roles} = rolesOf(facts);
     const encoded = encode(triples, roles);
     const task = tk.get('entity.note');

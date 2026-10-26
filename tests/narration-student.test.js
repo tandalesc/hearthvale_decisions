@@ -182,8 +182,8 @@ test('role tokens, version 2: a token per number fact, the sheet\'s own fields f
   assert.equal(relex(d, roles), note);
 });
 
-const notesBundle = new URL('../public/students/notes/notes.v1.json', import.meta.url);
-const notesFixture = new URL('./fixtures/notes.v1.fixture.json', import.meta.url);
+const notesBundle = new URL('../public/students/notes/notes.v2.json', import.meta.url);
+const notesFixture = new URL('./fixtures/notes.v2.fixture.json', import.meta.url);
 test('the shipped notes student reproduces its training run, and writes notes the game would show', {skip: !existsSync(notesBundle)}, async () => {
   const bundle = JSON.parse(readFileSync(notesBundle, 'utf8'));
   const bin = readFileSync(new URL(bundle.blob, notesBundle));
@@ -205,7 +205,7 @@ test('the shipped notes student reproduces its training run, and writes notes th
   assert.deepEqual(studentPath('/api/students/notes/manifest'), {family: 'notes', manifest: true, file: 'notes/manifest.json'});
 });
 
-test('inspector notes: free players get the student or the template; Plus fast asks Haiku only when it is unsure', async () => {
+test('inspector notes: free players get any student note, else the template; Plus fast asks Haiku only when it is unsure', async () => {
   const {createNarratorClient} = await import('../src/narrator-client.js');
   const facts = JSON.parse(readFileSync(notesFixture, 'utf8')).cards.find((c) => c.facts.kind === 'person').facts;
   const hostedReply = () => new Response(JSON.stringify({text: 'A hosted note.', source: 'llm'}), {headers: {'content-type': 'application/json'}});
@@ -220,7 +220,9 @@ test('inspector notes: free players get the student or the template; Plus fast a
   let r = await run({paid: false, mine: sure});
   assert.deepEqual([r.text, r.source, r.calls], ['A student note.', 'student', 0]);
   r = await run({paid: false, mine: unsure});
-  assert.equal(r.source, 'fallback'); assert.equal(r.calls, 0, 'free players make no hosted request');
+  assert.deepEqual([r.source, r.calls], ['student', 0], 'free players: even an unsure student note beats the template, and no hosted request');
+  r = await run({paid: false, mine: null});
+  assert.equal(r.source, 'fallback', 'no note that passes the rules: the template');
   r = await run({paid: true, mine: sure});
   assert.deepEqual([r.source, r.calls], ['student', 0]);
   r = await run({paid: true, mine: unsure});

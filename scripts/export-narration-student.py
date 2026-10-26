@@ -92,6 +92,8 @@ def main():
     ap.add_argument('--bits', type=int, choices=[8, 4], help='default: the width the run was trained for (--qat), else 8')
     ap.add_argument('--group', type=int, default=32, help='int4: values per scale')
     ap.add_argument('--keep8', default='', help='regex of weight names kept at int8 when --bits 4 (e.g. the embedding tables)')
+    ap.add_argument('--beam', type=int, default=4, help='beam width the runtime decodes with')
+    ap.add_argument('--no-repeat', action='store_true', help='the runtime decodes without reusing a content word (notes)')
     ap.add_argument('--task', default=None, help='the fixture\'s prompts from this task only (entity.note for a notes bundle)')
     ap.add_argument('--roles', type=int, default=1, help='role tokens version the run was exported with (src/narration-roles.js); 2 for notes')
     ap.add_argument('--fixture-out', help='where the parity fixture goes (default OUT with .fixture.json); it is not shipped')
@@ -142,7 +144,7 @@ def main():
             facts[s['key']] = s['facts']
     exs = [C.example(r) for r in rows]
     b = S.collate(exs, 'cpu')
-    cands = S.beam_search(model, b, [e['ban'] for e in exs], C, k=4)
+    cands = S.beam_search(model, b, [e['ban'] for e in exs], C, k=a.beam, no_repeat=a.no_repeat)
     fixture = []
     for j, (ex, cs) in enumerate(zip(exs, cands)):
         seqs = torch.zeros(len(cs), S.MAX_TGT, dtype=torch.long)
@@ -156,7 +158,7 @@ def main():
 
     bundle = {'format': FORMAT, 'version': a.version, 'features': FEATURES_VERSION, **({'task': a.task} if a.task else {}),
               'teacher': 'claude-haiku-5-5', 'config': {**cfg, 'heads': 4, 'max_tgt': S.MAX_TGT, 'max_bag': C.max_bag,
-                                                         'beam': 4, 'alpha': 0.7, 'block': 3},
+                                                         'beam': a.beam, 'alpha': 0.7, 'block': 3, **({'no_repeat': True} if a.no_repeat else {})},
               'vocab': vocab, 'weights': weights, 'quality': quality, 'bits': a.bits,
               'blob': os.path.basename(a.out).replace('.json', '.bin'), 'blob_bytes': blob.size,
               'params': sum(v.numel() for v in model.state_dict().values())}
