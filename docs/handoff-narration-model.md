@@ -235,7 +235,10 @@ The model reads years 2–3× more but times past rulings no better, and seed 1 
   - Parity: 23/24 (seed 0) and 24/24 (seed 1); 18 of the 24 fixture cards have two or more stances.
   - Shown on 100 held-out cards: 78 and 73 (v2: 76).
   - Median latency: 34 ms and 131 ms (v2: 127). Seed 0's quality head trusts its first candidate more often, so it skips the beam.
-- **Not yet judged by Haiku** for contradictions (v2: 19.7% on 300 quotes). Judging seed 0's runtime quotes the same way would cost about $0.04 and is the check before shipping.
+- **Haiku judge, seed 0, runtime quotes judged as for v2** (333 of 450 cards shown, 300 judged, $0.029): 20.7% contradict the facts against v2's 19.7%. Grammar clean 78.3% (v2 76.0%); point conveyed 100% (99.3%).
+  - The 1-point gap is 62 quotes against 59, well inside noise (about ±3.3 points for a difference at n = 300). Still, it missed the shipping bar of "no worse than v2", so it is **not shipped**.
+  - By rough claim type (regex buckets that overlap; the judge does not say which claim was wrong): quotes stating a stance were contradicted 23% (v2 28%), and quotes stating counts or numbers more often (16% and 32%, against 7% and 25%).
+  - To settle it: judge about 1,000 quotes for each of v2 and stance-who seed 0, plus seed 1, at about $0.10 per 1,000. Judge file: that session's scratchpad, `judge-who0.jsonl`.
 - Runs: rrh-llm-1 `~/narration/who-s*`. Bundles are in that session's scratchpad (`bundles/who-s*.json`).
 - The same idea could carry a past ruling's `what` words into its act token. Rulings are now the largest fault (54–66 of 159–169).
 
