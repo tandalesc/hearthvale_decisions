@@ -244,6 +244,40 @@ The model reads years 2–3× more but times past rulings no better, and seed 1 
 - Runs: rrh-llm-1 `~/narration/who-s*`. Bundles are in that session's scratchpad (`bundles/who-s*.json`).
 - The same idea could carry a past ruling's `what` words into its act token. Rulings are now the largest fault (54–66 of 159–169).
 
+## 1l. Inspector notes: labels, a notes student, and a worker fix (26 October 2026)
+
+**Labels.** 25,600 production note requests went through the Batch API for $0.87: 6,250 training sheets of each kind (person, household, building, body) and 150 held-out of each. They use the worker's own prompt (`narrationSystem` and `noteMessage` in `cloudflare/narration.js`; `narration-label-batch.js build --notes`).
+- **The worker refused 59% of Haiku's notes:** 78% of person notes and 69% of households. Most were wrapped whole in quotation marks, so they didn't end a sentence; others ran to three sentences. Plus players were getting template notes.
+- `cleanNote` now unwraps a note quoted whole (not one that quotes its speaker mid-note): 64% pass, up from 41%. Shipped in PR #24.
+
+**Shared or separate?** All runs use v3's setup on the same 600 held-out cards and notes:
+
+| run | card top pass | stance fact-fails | note loss (371 held-out) |
+|---|---|---|---|
+| v3, cards only | 69.7% | 48 | — |
+| shared, cards + 25% / 50% / 100% notes | 70.0 / 63.8 / 53.7% | 49 / 45 / 124 | 2.36 / 2.03 / 1.80 |
+| notes only, 3 + 12 epochs | — | — | 1.98 |
+| notes only, started from v3 (`--init`), 6 + 30 epochs | — | — | 1.42 |
+| notes only, from scratch, 20 + 40 epochs | — | — | **1.41** |
+
+- **Sharing costs card quotes,** and more notes cost more (stance binding comes undone), so notes get their own model.
+- **Starting from v3 speeds training** (loss 2.66 against 5.19 at step 200), but a longer from-scratch run ends level with it.
+- **Note loss falls about 0.3 per doubling of the data** and hasn't flattened: more labels would help.
+
+**Judge** (`scripts/narration-note-judge.js`, Haiku, 280 held-out entities × 3 notes, $0.06):
+
+| | grammar clean / broken | contradicts the facts | specific |
+|---|---|---|---|
+| Haiku (Plus) | 93% / 0% | 28% | 80% |
+| template (free) | 60% / 12% | **21%** | 48% |
+| student, notes only (scratch, long) | 69% / 2% | **47%** | 61% |
+
+- **The student reads better than the template but gets facts wrong twice as often,** so it is not shipped.
+- **Worst kinds:** buildings 69% and bodies 59% contradicted; people 15% (template 7%).
+- **The errors are attribute slips:** material or type ("old stone terrace" for a concrete tower), street, mood ("content" when uneasy), wealth. A note fact check over those attributes could prune them in the beam, as `factProblem` does for cards.
+- **Next:** a `noteProblem` check, then about 2× the labels (~$0.90 per 25K).
+- Runs: rrh-llm-1 `~/narration/note-*`. Data and judge files: that session's scratchpad (`notes-batch/`, `notes-*.jsonl`, `judge-note-*.jsonl`).
+
 ## 1j. Side results: speed, and an int4 decision student (25 October 2026)
 
 **Would WebAssembly help?** Measured with hand-assembled WASM kernels on narration v2's layer shapes (515K multiply-adds per beam step, Node 24, M-series Mac):

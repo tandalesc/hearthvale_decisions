@@ -579,6 +579,7 @@ def main():
     ap.add_argument('--year-ago', action='store_true', help='add a closed "years ago" part to list items\' years; read 2-3x more, no gain (handoff 1i)')
     ap.add_argument('--bpe', help='subword vocabulary from scripts/narration-bpe.py (default: whole words)')
     ap.add_argument('--load', help='a trained run dir: skip training and only quote cards with its model')
+    ap.add_argument('--init', help='a trained run dir to start from: its vocab, grown with the new rows\' scopes, attrs and values, and its weights')
     a = ap.parse_args()
     MAX_TGT = a.max_tgt
     os.makedirs(a.out, exist_ok=True)
@@ -594,6 +595,14 @@ def main():
     val_seeds = sorted(val)
     is_train = lambda r: r['source'] != 'prompt' and part_of(r, held, val) == 'train'
     vocab = json.load(open(f'{a.load}/vocab.json')) if a.load else build_vocab((r for r in stream(a.rows) if is_train(r)), json.load(open(a.bpe)) if a.bpe else None, a.record_scopes, a.year_ago, a.stance_who)
+    if a.init:
+        # Keep the starting run's indices and flags; append what the new rows add.
+        base = json.load(open(f'{a.init}/vocab.json'))
+        grown = dict(base)
+        for k in ('scopes', 'attrs', 'values'):
+            grown[k] = base[k] + [t for t in vocab[k] if t not in set(base[k])]
+        grown['tasks'] = base['tasks'] + [t for t in vocab['tasks'] if t not in base['tasks']]
+        vocab = grown
     C = Codec(vocab)
     pre, fine, held_ex, prompts, counts = [], [], {'val': [], 'test': []}, {'val': [], 'test': []}, Counter()
     for r in stream(a.rows):
@@ -614,6 +623,16 @@ def main():
           f'{len(vocab["scopes"])} scope parts, {len(vocab["attrs"])} attrs; val seeds {val_seeds}')
 
     model = NarrationStudent(vocab, d=a.d, e=a.e, layers=a.layers, ff=a.ff, ffn=a.ffn).to(a.device)
+    if a.init:
+        old = torch.load(f'{a.init}/model.pt', map_location=a.device)['state']
+        own = model.state_dict()
+        with torch.no_grad():
+            for k, v in old.items():
+                if k in own and own[k].shape == v.shape:
+                    own[k].copy_(v)
+                elif k in own and own[k].dim() == v.dim() and own[k].shape[1:] == v.shape[1:] and own[k].shape[0] >= v.shape[0]:
+                    own[k][: v.shape[0]].copy_(v)   # a grown table: the old rows, new ones as initialised
+        print(f'started from {a.init}')
     model.smoothing = a.smoothing
     nparam = sum(p.numel() for p in model.parameters())
     print(f'params {nparam:,} (~{nparam / 1024:.0f} KB at int8)')

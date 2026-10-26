@@ -17,7 +17,7 @@ import {join} from 'node:path';
 import {relex, strayRoles} from '../src/narration-roles.js';
 import {fluency} from '../src/narration-fluency.js';
 import {fallbackNote} from '../src/narrator-client.js';
-import {noteOk, noteMessage} from '../cloudflare/narration.js';
+import {noteOk, noteMessage, cleanNote} from '../cloudflare/narration.js';
 import {validateFacts} from '../src/narrative-schema.js';
 import {sheetKey} from './narration-collect.js';
 
@@ -58,7 +58,9 @@ for await (const l of readLines(arg('--labels'))) {
   if (l.split !== 'test' || !l.facts) continue;
   let facts;
   try { facts = validateFacts(l.facts); } catch { continue; }
-  haiku.set(sheetKey(facts), {facts, kind: l.kind, text: l.text, ok: l.ok});
+  // As the worker now shows it: a note wrapped whole in quotation marks is unwrapped.
+  const text = cleanNote(l.text);
+  haiku.set(sheetKey(facts), {facts, kind: l.kind, text, ok: noteOk(text)});
 }
 const rows = [];
 for (const [key, h] of haiku) {
