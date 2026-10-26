@@ -490,7 +490,7 @@ const linear = (W, name, x) => linearRaw(W[`${name}.weight`].data, W[`${name}.bi
 // Flat (rows × d) versions of the layers the set model runs, one allocation
 // per layer rather than per token.
 
-function lnFlat(x, n, d, W, name) {
+export function lnFlat(x, n, d, W, name) {
   const g = W[`${name}.weight`].data, b = W[`${name}.bias`].data;
   const out = new Float32Array(n * d);
   for (let r = 0; r < n; r++) {
@@ -507,7 +507,7 @@ function lnFlat(x, n, d, W, name) {
 }
 
 // rows × inDim times W(out, in) rows [off, off + outDim), plus bias.
-function linFlat(x, n, inDim, w, b, outDim, off = 0) {
+export function linFlat(x, n, inDim, w, b, outDim, off = 0) {
   const out = new Float32Array(n * outDim);
   for (let r = 0; r < n; r++) {
     const xr = r * inDim, or = r * outDim;
@@ -521,7 +521,7 @@ function linFlat(x, n, inDim, w, b, outDim, off = 0) {
   return out;
 }
 
-function ffnFlat(W, p, x, n, d) {
+export function ffnFlat(W, p, x, n, d) {
   const w1 = W[`${p}.linear1.weight`], w2 = W[`${p}.linear2.weight`];
   const h = linFlat(x, n, d, w1.data, W[`${p}.linear1.bias`].data, w1.shape[0]);
   for (let i = 0; i < h.length; i++) if (h[i] < 0) h[i] = 0;
@@ -529,7 +529,7 @@ function ffnFlat(W, p, x, n, d) {
 }
 
 // Keys and values of nn.MultiheadAttention's packed in_proj (rows q, k, v).
-function projectFlat(W, p, x, n, d) {
+export function projectFlat(W, p, x, n, d) {
   const w = W[`${p}.in_proj_weight`].data, b = W[`${p}.in_proj_bias`].data;
   return {k: linFlat(x, n, d, w, b, d, d), v: linFlat(x, n, d, w, b, d, 2 * d), m: n};
 }
@@ -542,7 +542,7 @@ function attendFlat(W, p, x, n, d, kv, heads) {
 }
 
 // The same from the queries q (n rows), already projected.
-function attendQ(W, p, q, n, d, {k, v, m}, heads) {
+export function attendQ(W, p, q, n, d, {k, v, m}, heads) {
   const dh = d / heads, scale = 1 / Math.sqrt(dh);
   const out = new Float32Array(n * d), scores = new Float32Array(m);
   for (let r = 0; r < n; r++) {
@@ -581,8 +581,9 @@ function gelu(x) {
 }
 
 // ---------------------------------------------------------------------------
-// Weights: base64 INT8 rows with a scale per row, fp16 or float32
-// (the trainer's scripts/export_decision_student.py).
+// Weights: base64 INT8 rows with a scale per row, INT4 with an fp16 scale per
+// `group` values of a row (two values a byte, low nibble first), fp16 or float32
+// (the trainer's scripts/export_decision_student.py, --bits 8|4).
 // ---------------------------------------------------------------------------
 
 function bytes(b64) {
@@ -592,15 +593,27 @@ function bytes(b64) {
   return out;
 }
 
-function halfToFloat(h) {
+export function halfToFloat(h) {
   const sign = h & 0x8000 ? -1 : 1, exp = (h >> 10) & 0x1f, frac = h & 0x3ff;
   if (exp === 0) return sign * 2 ** -14 * (frac / 1024);
   if (exp === 31) return frac ? NaN : sign * Infinity;
   return sign * 2 ** (exp - 15) * (1 + frac / 1024);
 }
 
-function decodeWeight(entry) {
+export function decodeWeight(entry) {
   if (entry.f32) return new Float32Array(bytes(entry.f32).buffer);
+  if (entry.i4) {
+    const [rows, cols] = entry.shape, g = entry.group, groups = Math.ceil(cols / g);
+    const q4 = bytes(entry.i4), scale = Float32Array.from(new Uint16Array(bytes(entry.scale16).buffer), halfToFloat);
+    const out = new Float32Array(rows * cols);
+    for (let i = 0; i < out.length; i++) {
+      let q = i & 1 ? q4[i >> 1] >> 4 : q4[i >> 1] & 15;
+      if (q > 7) q -= 16;
+      const r = Math.floor(i / cols);
+      out[i] = q * scale[r * groups + Math.floor((i - r * cols) / g)];
+    }
+    return out;
+  }
   if (entry.f16) return Float32Array.from(new Uint16Array(bytes(entry.f16).buffer), halfToFloat);
   const q = new Int8Array(bytes(entry.i8).buffer), scale = new Float32Array(bytes(entry.scale).buffer);
   const cols = entry.shape[1], out = new Float32Array(q.length);

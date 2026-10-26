@@ -15,7 +15,10 @@ import {metaFromSave} from './save-meta.js';
 // startProse: narrator-client's startProseKeeper, run while the model is on
 // budgetMs:  real time a step may take before no new tick starts (Infinity: none)
 export function createSimSession({sim, narrator = null, routes = null, decisions: client = null, startProse = null, budgetMs = 10, pace = 1, rowFloats = 20, lib = null,
-  students = null, entitlement = {tier: 'free'}} = {}) {
+  students = null, entitlement = {tier: 'free'}, localProse = null} = {}) {
+  // Card quotes: Plus players through the hosted narrator, everyone through the local
+  // narration student when there is one (localProse, see narration-student.js).
+  const canProse = () => isPaid(entitlement) || !!localProse;
   let state = null;
   let view = null;
   let modelEnabled = true;
@@ -31,7 +34,7 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
   const services = {decisions, routes, now: 0, rate: 0};
 
   function syncProse() {
-    if (modelEnabled && state && !proseKeeper && startProse) proseKeeper = startProse(() => state);
+    if (modelEnabled && state && !proseKeeper && startProse) proseKeeper = startProse(() => state, {local: localProse, remote: () => isPaid(entitlement)});
     else if (!modelEnabled && proseKeeper) { proseKeeper.stop(); proseKeeper = null; }
   }
 
@@ -143,13 +146,14 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
       if (!state) return null;
       const snap = uiSnapshot(sim, state, req, narrator);
       // Narration previews belong only to the UI snapshot, never the saved town.
-      if (isPaid(entitlement) && proseKeeper?.peekCard && Array.isArray(snap.docket)) {
+      if (canProse() && proseKeeper?.peekCard && Array.isArray(snap.docket)) {
         snap.docket = snap.docket.map(card => {
           const preview = proseKeeper.peekCard(card.id);
           return preview ? {...card, streamingProse: preview} : card;
         });
       }
       if (client) snap.decisionStats = client.stats();
+      snap.narrationStats = proseKeeper?.stats?.() ?? null;
       return snap;
     },
 
@@ -161,6 +165,8 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
       return {text: sim.serialize(state), meta: meta()};
     },
 
+    narration: {stats: () => proseKeeper?.stats?.() ?? null},
+
     decisions: {
       stats: () => client?.stats() ?? null,
       configure: (settings) => { client?.configure(settings); },
@@ -171,9 +177,9 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
       },
     },
 
-    prefetchCardProse: (ids) => { if (isPaid(entitlement)) proseKeeper?.prefetchCards?.(ids); },
+    prefetchCardProse: (ids) => { if (canProse()) proseKeeper?.prefetchCards?.(ids); },
     cancelCardProse: () => proseKeeper?.cancel?.(),
-    requestCardProse: (id) => (isPaid(entitlement) ? proseKeeper?.requestCard?.(id) : null) ?? Promise.resolve(null),
+    requestCardProse: (id) => (canProse() ? proseKeeper?.requestCard?.(id) : null) ?? Promise.resolve(null),
 
     notes: {
       set: (ref, key, text) => { if (state) narrator?.keepNote?.(state, ref, key, text); },

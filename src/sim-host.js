@@ -28,8 +28,8 @@ import {createRenderMirror} from './sim/render-mirror.js';
 // The inline host: sim-session.js on this thread, stepping in a task of its own posted as
 // each drawn frame is handed to the GPU (the GPU draws that frame while the sim works out
 // the next). The renderer reads the live render view.
-export function createInlineHost({sim, routes = null, decisions = null, students = null, entitlement, pace = 1, budgetMs = 10, rowFloats = 20} = {}) {
-  const session = createSimSession({sim, routes, decisions, students, entitlement, pace, budgetMs, rowFloats});
+export function createInlineHost({sim, routes = null, decisions = null, students = null, entitlement, pace = 1, budgetMs = 10, rowFloats = 20, localProse = null} = {}) {
+  const session = createSimSession({sim, routes, decisions, students, entitlement, pace, budgetMs, rowFloats, localProse});
   let stepOwed = 0, posted = false, lastNow = 0, lastSpeed = 0, lib = null;
   const listeners = {step: [], fail: []};
   const host = {
@@ -58,6 +58,7 @@ export function createInlineHost({sim, routes = null, decisions = null, students
     check: (raw) => session.check(raw),
     setIndividualCap: (v) => session.setIndividualCap(v),
     decisions: session.decisions,
+    narration: session.narration,
     notes: session.notes,
     prefetchCardProse: (ids) => session.prefetchCardProse(ids),
     cancelCardProse: () => session.cancelCardProse(),
@@ -106,7 +107,7 @@ export function createWorkerHost(opts = {}) {
   const listeners = {step: [], fail: []};
   let nextId = 1, dead = null, started = false;
   let inFlight = false, stepOwed = 0;
-  let stats = null;
+  let stats = null, narrationStats;   // undefined until the worker reports (null: no narrator)
   let lastHeard = performance.now(), probing = false;
 
   const worker = new Worker(new URL('./sim-worker.js', import.meta.url), {type: 'module'});
@@ -198,12 +199,18 @@ export function createWorkerHost(opts = {}) {
     async ui(req) {
       const snap = await call('ui', [req]);
       if (snap?.decisionStats) stats = snap.decisionStats;
+      if (snap && 'narrationStats' in snap) narrationStats = snap.narrationStats;
       return snap;
     },
     inspect: (target) => call('inspect', [target]),
     save: () => call('save'),
     check: (raw) => call('check', [raw]),
     setIndividualCap: (v) => { call('setIndividualCap', [v]).catch(() => {}); },
+    narration: {
+      stats: () => narrationStats,
+      // The settings panel asks for fresh numbers while it is open; UI snapshots also carry them.
+      refresh: () => call('narration.stats').then((s) => { narrationStats = s; }, () => {}),
+    },
     decisions: {
       stats: () => stats,
       configure: (s) => { call('decisions.configure', [s]).catch(() => {}); },

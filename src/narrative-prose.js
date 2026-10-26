@@ -136,11 +136,11 @@ const EFFECT_WORDS = {
   delegate: (w) => `${w || 'they'} decide and pay from their own purse`, negotiate: () => 'offers half; they may take it or insist',
   loan: (w) => `borrows ${w || 'coin'}`, nothing: () => 'nothing changes',
 };
-const LEAN_WORDS = {for: 'for it', against: 'against it', split: 'split', indifferent: 'not much moved', back: 'for it', oppose: 'against it'};
-const ACT_WORDS = {approved: 'you approved', refused: 'you refused', deferred: 'you put off', delegated: 'you let them decide', lapsed: 'you let lapse', heard: 'you heard'};
+export const LEAN_WORDS = {for: 'for it', against: 'against it', split: 'split', indifferent: 'not much moved', back: 'for it', oppose: 'against it'};
+export const ACT_WORDS = {approved: 'you approved', refused: 'you refused', deferred: 'you put off', delegated: 'you let them decide', lapsed: 'you let lapse', heard: 'you heard'};
 const countWord = (n) => (n === 1 ? 'one' : n === 2 ? 'two' : n === 3 ? 'three' : `${n}`);
 const lower = (s) => (s ? s[0].toLowerCase() + s.slice(1) : s);
-const pct = (p) => (p >= 0.7 ? 'most' : p >= 0.45 ? 'many' : p >= 0.25 ? 'some' : 'a few');
+export const pct = (p) => (p >= 0.7 ? 'most' : p >= 0.45 ? 'many' : p >= 0.25 ? 'some' : 'a few');
 
 export function effectText(e) {
   return (EFFECT_WORDS[e.act] ?? ((w) => w))(e.what ?? '');

@@ -205,6 +205,8 @@ export function createApp(host) {
     requestCardProse: (id) => host.requestCardProse?.(id),
     cancelCardProse: () => host.cancelCardProse?.(),
     decisionStats: () => host.decisions.stats(),
+    narrationStats: () => host.narration?.stats?.(),
+    refreshNarration: () => host.narration?.refresh?.(),
     renderStats: () => safe(() => world?.stats?.(), null),
     power: () => safe(() => world?.power?.(), null),
     simMs: () => host.simMs(),

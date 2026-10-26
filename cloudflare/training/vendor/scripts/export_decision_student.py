@@ -14,6 +14,11 @@ it about those and sends the rest to the hosted model.
 Weights follow scripts/export_jepa_weights.py: 2-D matrices (embeddings,
 projections) as per-row symmetric INT8 with an fp32 scale per row, 1-D
 parameters as fp16; both base64-encoded. ``--float`` keeps float32 instead.
+``--bits 4`` stores 2-D matrices as int4 instead: two values a byte (low nibble
+first), with an fp16 scale per ``--group`` values of a row, rounded to fp16
+before quantizing so the browser decodes exactly these weights. Train such a
+student with int4 rounding in its forward pass (QAT): rounding afterwards
+costs far more.
 The fixture is computed with the weights as exported (dequantized), so the
 JS check is exact either way; the KL the quantization costs is printed.
 """
@@ -45,11 +50,29 @@ def b64(array: np.ndarray) -> str:
     return base64.b64encode(np.ascontiguousarray(array).tobytes()).decode("ascii")
 
 
-def export_weight(t: torch.Tensor, as_float: bool) -> tuple[dict, torch.Tensor]:
+def int4_weight(t: torch.Tensor, group: int) -> tuple[dict, torch.Tensor]:
+    """A 2-D matrix as symmetric int4 with an fp16 scale per `group` values of a row."""
+    rows, cols = t.shape
+    g = min(group, cols)
+    tg = torch.nn.functional.pad(t, (0, (-cols) % g)).view(rows, -1, g)
+    scale = (tg.abs().amax(2) / 7).half().float()
+    scale[scale == 0] = 1.0
+    q = torch.round(tg / scale[..., None]).clamp(-7, 7).to(torch.int8)
+    seen = (q.float() * scale[..., None]).view(rows, -1)[:, :cols]
+    nib = (q.view(rows, -1)[:, :cols].contiguous().view(-1).numpy().astype(np.int16) & 0x0F).astype(np.uint8)
+    if len(nib) % 2:
+        nib = np.append(nib, np.uint8(0))
+    packed = nib[0::2] | (nib[1::2] << 4)
+    return {"shape": [rows, cols], "i4": b64(packed), "scale16": b64(scale.numpy().astype("<f2")), "group": g}, seen
+
+
+def export_weight(t: torch.Tensor, as_float: bool, bits: int = 8, group: int = 32) -> tuple[dict, torch.Tensor]:
     """-> (bundle entry, the tensor as the game will see it)."""
     t = t.detach().float().cpu()
     if as_float:
         return {"shape": list(t.shape), "f32": b64(t.numpy().astype("<f4"))}, t
+    if t.dim() == 2 and bits == 4:
+        return int4_weight(t, group)
     if t.dim() == 2:
         q, scale = _int8_quantize_per_channel(t)
         seen = torch.from_numpy(q.astype(np.float32) * scale[:, None])
@@ -68,6 +91,8 @@ def main() -> None:
     ap.add_argument("--exclude-kinds", default=None, help="kinds to leave to the hosted model (not answered locally)")
     ap.add_argument("--version", type=int, default=1)
     ap.add_argument("--float", action="store_true", help="float32 weights instead of INT8/fp16")
+    ap.add_argument("--bits", type=int, choices=[8, 4], default=8, help="2-D matrices as int8 (a scale per row) or int4")
+    ap.add_argument("--group", type=int, default=32, help="int4: values per fp16 scale within a row")
     args = ap.parse_args()
 
     ckpt = torch.load(Path(args.run) / "model.pt", map_location="cpu")
@@ -88,7 +113,7 @@ def main() -> None:
 
     weights, seen = {}, {}
     for name, t in ckpt["state_dict"].items():
-        weights[name], seen[name] = export_weight(t, args.float)
+        weights[name], seen[name] = export_weight(t, args.float, args.bits, args.group)
     # The confidence head (train_error_head.py), if trained: float32, it is tiny.
     confidence = None
     if "err_head" in ckpt:
@@ -134,7 +159,7 @@ def main() -> None:
     Path(args.out).write_text(json.dumps(bundle, separators=(",", ":")))
     n = sum(p.numel() for p in model.parameters())
     print(f"{args.out}: {cfg.arch}, {n:,} parameters, {len(kinds)} kinds, {Path(args.out).stat().st_size / 1024:.0f} KB; "
-          f"{'float32' if args.float else 'int8'} weights cost KL {cost:.2e} nats against float32 on the fixture")
+          f"{'float32' if args.float else f'int{args.bits}'} weights cost KL {cost:.2e} nats against float32 on the fixture")
 
 
 if __name__ == "__main__":

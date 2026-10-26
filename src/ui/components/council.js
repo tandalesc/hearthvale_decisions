@@ -20,7 +20,6 @@ import {icon} from '../icons.js';
 import {animate} from '../motion.js';
 import {explainer, EXPLAINERS} from './explainer.js';
 import {createDocket} from './docket.js';
-import {isPaid} from '../../entitlements.js';
 import {seasonSummary, seasonStrip} from './budget.js';
 import {createAdvisersView} from './advisers.js';
 
@@ -141,7 +140,7 @@ export function createCouncil(ctx) {
     if (!data) return;
     // A body that is gone (or a season that is over) takes the page back to the Town Council.
     if (page === BUDGETS ? !inSeason() && !data.season : page === ADVISERS ? !data.advisers : page !== TOWN && !body()) return setPage(TOWN, {quiet: true});
-    if (open && isPaid(ctx.entitlement?.())) {
+    if (open) {   // the session decides who writes: the hosted narrator (Plus) or the local student
       // Narrate ahead only the next few cards on this page, in the order shown;
       // the rest are narrated as they move up or when opened. Budgets never
       // show a quote.

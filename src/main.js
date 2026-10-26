@@ -25,6 +25,7 @@ import {rapidsSources} from './river.js';
 import {createSaveStore, metaFromSave, newSlotId} from './save-store.js';
 import {suggestName} from './ui/menu/names.js';
 import {version} from '../package.json';
+import {createLocalNarration} from './narration-student.js';
 
 const SAVE_KEY = 'hearthvale-save';
 // Town saves go to IndexedDB (gzip), one slot per town; SAVE_KEY is only the legacy localStorage key.
@@ -152,7 +153,9 @@ async function boot() {
       students = createStudentVersions({answerer: client, base: student, manifestURL: new URL('/api/students/manifest', document.baseURI).href, fallbackBase: new URL('students/', document.baseURI).href, pinned: studentPin});
       await students.start();
     }
-    const h = createInlineHost({sim, routes, decisions: client, students, entitlement, pace: pace(sim), budgetMs: SIM_BUDGET_MS, rowFloats: ROW_FLOATS});
+    // On the main thread the student yields between decoding steps.
+    const localProse = params.get('narrator') === 'hosted' ? null : createLocalNarration({base: new URL('/api/students/', document.baseURI).href, fallbackBase: new URL('students/', document.baseURI).href, yieldEvery: 4});
+    const h = createInlineHost({sim, routes, decisions: client, students, entitlement, pace: pace(sim), budgetMs: SIM_BUDGET_MS, rowFloats: ROW_FLOATS, localProse});
     h.decisions.configure(decisionSettings);
     h.decisions.setEnabled(modelEnabled);
     return h;
@@ -486,6 +489,10 @@ async function boot() {
     save, exportSave, importSave, newTown, toMenu,
     decisions: {
       stats: () => host.decisions.stats(),
+    },
+    narration: {
+      stats: () => host.narration?.stats(),
+      refresh: () => host.narration?.refresh?.(),
     },
   });
   if (notice) app.notices.toast(notice, 6000);

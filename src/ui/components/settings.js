@@ -47,6 +47,7 @@ export function createSettings(ctx) {
           ${field('Title cards', 'Full-screen cards for a new age, a new body or a disaster. They pause the town.', seg('moments', p.moments, [['fast', 'While sped up'], ['always', 'Always'], ['never', 'Never']]))}
           ${field('New requests', 'Pause the town and open the Council when a request arrives, so none slips by. The town picks up its pace when you close the Council.', seg('requests', p.requests, [['notify', 'Notify'], ['pause', 'Pause and open']]))}
           ${field('Decision model', 'The student that answers most of the town\'s questions in this browser.', '<b class="model-ver" style="font:500 13px var(--font-mono)">–</b>')}
+          ${field('Narration model', 'Writes the Council\'s card quotes. Free play uses the student in this browser; Plus uses the hosted narrator, with the student as a backup.', '<b class="narration-ver" style="font:500 13px var(--font-mono)">–</b>')}
         </fieldset>
         <fieldset><legend>Your town</legend>
           <p style="margin:0 0 8px;font-size:var(--fs-13);color:var(--ink-2)">The town saves itself every 30 seconds on this device.</p>
@@ -178,6 +179,8 @@ export function createSettings(ctx) {
     // fingerprint of its weights.
     const students = ctx.decisionStats()?.local?.students ?? [];
     setText(el.querySelector('.model-ver'), students.length ? students.map((st) => `v${st.version} · ${st.id}`).join(', ') : 'None loaded');
+    ctx.refreshNarration?.();
+    setText(el.querySelector('.narration-ver'), narrationLabel(ctx.narrationStats?.()));
     const w = ctx.renderStats() ?? {};
     const perf = [
       ['Frames a second', fmt(w.fps, 0)], ['Frame time', Number.isFinite(w.frameMs) ? `${w.frameMs.toFixed(1)} ms` : '–'],
@@ -213,6 +216,21 @@ export function createSettings(ctx) {
 function saverHint(power) {
   const what = 'While you watch, the town draws 30 frames a second and a little softer. Moving the view stays smooth.';
   return power && !power.batteryKnown ? `${what} This browser can't tell when you're unplugged, so choose Always to save power.` : what;
+}
+
+// The card narrator for this player, from the prose keeper's stats: the hosted narrator
+// (Plus) and/or the narration student, which loads with the first card quote.
+export function narrationLabel(stats) {
+  if (stats === undefined) return '–';   // not reported yet
+  if (!stats) return 'Off · template text';
+  const s = stats.student;
+  const student = !s ? null
+    : s.state === 'ready' ? `v${s.version} · student`
+      : s.state === 'loading' ? 'student · loading'
+        : s.state === 'missing' ? 'student unavailable'
+          : 'student · loads with the first quote';
+  if (stats.hosted) return student ? `hosted · ${student} as backup` : 'hosted';
+  return student ? (s.state === 'missing' ? `${student} · template text` : student) : 'template text';
 }
 
 function fmt(v, digits) {
