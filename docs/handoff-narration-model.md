@@ -307,7 +307,11 @@ The model reads years 2–3× more but times past rulings no better, and seed 1 
 
 - Households and people are now on par with Haiku; buildings are close.
 - Bodies are the gap: 17 of their 33 errors are which budget or ask was approved when ("backed the Green Ward budget every year since year 111"), and 7 are a misplaced "dissolved".
-- Next: the card fact check's ruling rules (`factProblem`: act and timing of a past ruling) adapted to a body's `rulings`, added to `noteProblem`.
+- **Ruling rules in `noteProblem`** (any sheet with `rulings`, in any phrasing: the act, "this year / last year / N years ago / in or since year N", a budget named by its year). On the judged notes they catch 6 of the best model's 33 body contradictions and flag 1 of 41 clean body notes, and none of Haiku's or the template's contradictions. 6.4% of the Haiku notes the worker shows fail `noteProblem` overall.
+- **Re-judged with full pruning** (260 entities, $0.07): the best model has 24.7% contradicted (Haiku 19.1%, template 12.0%) and 90% clean grammar (Haiku 96%, template 74%).
+  - By kind: people 8.6%, households 10.7%, buildings 32.4% (Haiku 26.7%), bodies 38.7% (Haiku 30.7%).
+  - Template body notes are 28% broken and 0% specific.
+  - With the check, the student shows a note on 85% of held-out entities; people are lowest at 59%.
 
 **`noteProblem`** (`src/narration-notes.js`, with `cleanNote` and `noteOk`, which the worker now imports): material, building type, street, condition, age, home, work, wealth, mood, rent, hunger, energy, body status and patience, plus a repeated-name garble. It rejects 5% of the Haiku notes the worker shows. On the first judged set it caught only 6–16% of contradictions, because most of those were other slips (years, rulings) or judge noise; its value is as a beam filter on top of the fixes above.
 

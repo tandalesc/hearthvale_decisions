@@ -90,6 +90,46 @@ function body(c, b = {}) {
   return null;
 }
 
+// Past rulings on the sheet (a body's budgets and asks, a household's petitions), as the card
+// check reads a card's past asks (src/narration-consistency.js), in any phrasing a note uses:
+// "the council has backed …", "the school that was put off last year", "budget for year 60".
+const ACTS = [[/\b(approved|said yes to|backed|granted|agreed to|passed)\b/, 'approved'], [/\b(refused|turned down|said no to|rejected|denied)\b/, 'refused'],
+  [/\b(put off|deferred|set aside|delayed|waited on)\b/, 'deferred']];
+const RULING_STOP = new Set(['their', 'year', 'years', 'last', 'budget', 'budgets', 'asks', 'ask', 'ward', 'town', 'council', 'this', 'that', 'with', 'from', 'have', 'been',
+  'every', 'since', 'again', 'still', 'them', 'they', 'were', 'once', 'ago', 'back', 'approved', 'backed', 'refused', 'deferred', 'granted', 'passed', 'turned', 'down', 'said']);
+const content = (s) => (String(s).toLowerCase().match(/[a-z]+/g) ?? []).filter((w) => w.length >= 4 && !RULING_STOP.has(w));
+const SMALL = {one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10};
+const budgetYear = (what) => Number((/budget for year (\d+)/.exec(String(what)) ?? [])[1]) || null;
+
+function rulingProblem(c, facts) {
+  const rulings = facts.rulings ?? [];
+  if (!rulings.length) return null;
+  const now = facts.year;
+  // A budget named by its year must be one of the sheet's.
+  const named = /\bbudget (?:for|of) (?:year )?(\d+)\b/.exec(c);
+  if (named && !rulings.some((r) => budgetYear(r.what) === Number(named[1]))) return `budget: year ${named[1]}`;
+  const act = ACTS.find(([re]) => re.test(c));
+  if (!act) return null;
+  const thing = content(c);
+  const overlap = rulings.map((r) => content(r.what).filter((w) => thing.includes(w)).length);
+  const most = Math.max(0, ...overlap);
+  // No shared word: a budget ruling is still the one meant when the clause speaks of a budget.
+  const matches = most ? rulings.filter((_, i) => overlap[i] === most) : /\bbudgets?\b/.test(c) ? rulings.filter((r) => budgetYear(r.what)) : [];
+  if (!matches.length) return null;
+  const same = matches.filter((r) => r.act === act[1]);
+  if (!same.length) return `ruling: ${act[1]}`;
+  // When: "this year", "last year", "N years ago", "in year N", "since year N".
+  let ago = null, exact = null;
+  if (/\bthis year\b/.test(c)) ago = 0;
+  else if (/\blast year\b/.test(c)) ago = 1;
+  else { const m = /\b(\w+) years? (ago|back)\b/.exec(c); if (m) ago = SMALL[m[1]] ?? (Number(m[1]) || null); }
+  const y = /\b(?:in|since) years? (\d+)\b/.exec(c);
+  if (y) exact = Number(y[1]);
+  if (ago !== null && !same.some((r) => now - r.year === ago)) return `when: ${ago} years ago`;
+  if (exact !== null && !same.some((r) => r.year === exact || budgetYear(r.what) === exact)) return `when: year ${exact}`;
+  return null;
+}
+
 export function noteProblem(text, facts) {
   if (!facts) return null;
   // A garble that names the same people twice running ("the Fairweathers and the Fairweathers").
@@ -97,9 +137,9 @@ export function noteProblem(text, facts) {
   for (const raw of clausesOf(text)) {
     if (HEDGE.test(raw)) continue;
     const c = raw.toLowerCase();
-    const p = facts.kind === 'building' ? building(c, facts.building ?? {}, facts.name)
+    const p = (facts.kind === 'building' ? building(c, facts.building ?? {}, facts.name)
       : facts.kind === 'body' ? body(c, facts.body)
-        : people(c, facts.who, facts.now);
+        : people(c, facts.who, facts.now)) ?? rulingProblem(c, facts);
     if (p) return p;
   }
   return null;
