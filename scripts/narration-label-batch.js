@@ -1,6 +1,6 @@
 // Haiku labels for the narration student, through the Message Batches API (half price).
 //
-//   node scripts/narration-label-batch.js build SHEETS.jsonl --out DIR [--train 4000] [--test 300] --held-out 1,2,3
+//   node scripts/narration-label-batch.js build SHEETS.jsonl --out DIR [--train 4000] [--test 300] --held-out 1,2,3 [--notes]
 //   node scripts/narration-label-batch.js send DIR --yes [--key-file ~/.config/hearthvale/anthropic-key]
 //   node scripts/narration-label-batch.js fetch DIR [--key-file ...]
 //
@@ -12,6 +12,10 @@
 //         Each request is the narrator's own card prompt (buildProsePrompt in
 //         server/narrator.js), one attempt, thinking off as production runs it. The system
 //         prompt is the same for every card, so it is marked for caching.
+// --notes labels inspector notes instead (people, households, buildings, bodies, an even share
+//         each): the worker's own note request (cloudflare/narration.js narrationSystem and
+//         noteMessage, max 180 tokens, thinking off, low effort), as Plus players get it.
+//         fetch keeps a note's text and whether the worker would show it (noteOk).
 // send    submits the batch (needs --yes) and writes DIR/batch.json.
 // fetch   when the batch has ended, writes DIR/labels.jsonl ({facts, field: 'why', text,
 //         model, seeds, split}) for scripts/narration-export.js --labels, and prints how many
@@ -27,6 +31,9 @@ import {join} from 'node:path';
 import {buildProsePrompt} from '../server/narrator.js';
 import {modelRow} from './narration-export.js';
 import {parseJsonReply} from '../server/narrator.js';
+import {narrationSystem, noteMessage, noteOk, NOTE_MAX_TOKENS, validateNarrationFacts} from '../cloudflare/narration.js';
+
+export const NOTE_KINDS = ['person', 'household', 'building', 'body'];
 
 export const MODEL = 'claude-haiku-5-5';
 const MAX_TOKENS = 420;               // PROSE_TOKENS.card in server/narrator.js
@@ -72,25 +79,52 @@ export function request(key, facts) {
   };
 }
 
+// An inspector note, asked for as the worker asks (cloudflare/narration.js narrateAnthropic).
+export function noteRequest(key, facts) {
+  const clean = validateNarrationFacts({facts});
+  return {
+    custom_id: key,
+    params: {
+      model: MODEL,
+      max_tokens: NOTE_MAX_TOKENS,
+      thinking: {type: 'disabled'},
+      output_config: {effort: 'low'},
+      system: [{type: 'text', text: narrationSystem(clean), cache_control: {type: 'ephemeral'}}],
+      messages: [{role: 'user', content: noteMessage(clean)}],
+    },
+  };
+}
+
+// Entity sheets, an even share of each kind (round-robin by kind, ranked by key).
+function spreadKinds(sheets, n) {
+  const by = new Map(NOTE_KINDS.map((k) => [k, []]));
+  for (const s of sheets.sort((a, b) => (rank(a.key) < rank(b.key) ? -1 : 1))) by.get(s.type)?.push(s);
+  const out = [], lists = [...by.values()];
+  for (let i = 0; out.length < n && lists.some((l) => i < l.length); i++) for (const l of lists) if (i < l.length && out.length < n) out.push(l[i]);
+  return {picked: out, templates: [...by.values()].filter((l) => l.length).length};
+}
+
 async function build(args) {
   const [sheetsFile] = args.filter((a, i) => !a.startsWith('--') && !args[i - 1]?.startsWith('--'));
   const dir = arg(args, '--out');
   const heldOut = new Set(String(arg(args, '--held-out', '')).split(',').filter(Boolean).map(Number));
   if (!sheetsFile || !dir || !heldOut.size) throw new Error('usage: build SHEETS.jsonl --out DIR --held-out 1,2,3 [--train 4000] [--test 300]');
   const nTrain = Number(arg(args, '--train', 4000)), nTest = Number(arg(args, '--test', 300));
+  const notes = args.includes('--notes');
 
   const train = [], test = [];
   for await (const s of readLines(sheetsFile)) {
-    if (s.type !== 'card') continue;
+    if (notes ? !NOTE_KINDS.includes(s.type) : s.type !== 'card') continue;
     if (s.seeds.every((x) => heldOut.has(x))) test.push(s);
     else if (!s.seeds.some((x) => heldOut.has(x))) train.push(s);
   }
-  const a = spread(train, nTrain), b = spread(test, nTest);
+  const pick = notes ? spreadKinds : spread;
+  const a = pick(train, nTrain), b = pick(test, nTest);
   const picked = [...a.picked.map((s) => ({s, split: 'train'})), ...b.picked.map((s) => ({s, split: 'test'}))];
   mkdirSync(dir, {recursive: true});
-  const requests = picked.map(({s}) => request(s.key, s.facts));
+  const requests = picked.map(({s}) => (notes ? noteRequest : request)(s.key, s.facts));
   writeLines(join(dir, 'requests.jsonl'), requests);
-  writeLines(join(dir, 'manifest.jsonl'), picked.map(({s, split}) => ({custom_id: s.key, split, seeds: s.seeds, template: s.facts.template})));
+  writeLines(join(dir, 'manifest.jsonl'), picked.map(({s, split}) => ({custom_id: s.key, split, seeds: s.seeds, ...(notes ? {note: true, kind: s.type} : {template: s.facts.template})})));
 
   const sysTokens = requests[0].params.system[0].text.length / CHARS_PER_TOKEN;
   const userTokens = requests.reduce((n, r) => n + r.params.messages[0].content.length, 0) / CHARS_PER_TOKEN;
@@ -99,14 +133,15 @@ async function build(args) {
     const sys = cached ? sysTokens * PRICE.cacheWrite + sysTokens * (n - 1) * PRICE.cacheRead : sysTokens * n * PRICE.input;
     return (sys + userTokens * PRICE.input + n * out * PRICE.output) / 1e6;
   };
-  console.log(`cards: ${train.length} on training seeds, ${test.length} on held-out seeds`);
+  const typical = notes ? 45 : OUTPUT_TOKENS.typical, worst = notes ? NOTE_MAX_TOKENS : OUTPUT_TOKENS.worst;
+  console.log(`${notes ? 'entity sheets' : 'cards'}: ${train.length} on training seeds, ${test.length} on held-out seeds`);
   console.log(`picked: ${a.picked.length} train over ${a.templates} templates, ${b.picked.length} test over ${b.templates} templates -> ${dir}`);
   console.log(`tokens (estimated): system prompt ${Math.round(sysTokens)}, user ${Math.round(userTokens / n)} per card on average`);
   console.log(`input, all requests: ${(n * sysTokens / 1e6).toFixed(2)}M system + ${(userTokens / 1e6).toFixed(2)}M user`);
   console.log(`cost at batch prices (${MODEL}):`);
-  console.log(`  ~${OUTPUT_TOKENS.typical} output tokens a card, no cache hits:   $${cost(OUTPUT_TOKENS.typical, false).toFixed(2)}`);
-  console.log(`  ~${OUTPUT_TOKENS.typical} output tokens a card, system prompt cached: $${cost(OUTPUT_TOKENS.typical, true).toFixed(2)}`);
-  console.log(`  worst case (every reply hits ${MAX_TOKENS} tokens, no cache):        $${cost(OUTPUT_TOKENS.worst, false).toFixed(2)}`);
+  console.log(`  ~${typical} output tokens a reply, no cache hits:   $${cost(typical, false).toFixed(2)}`);
+  console.log(`  ~${typical} output tokens a reply, system prompt cached: $${cost(typical, true).toFixed(2)}`);
+  console.log(`  worst case (every reply hits ${worst} tokens, no cache):  $${cost(worst, false).toFixed(2)}`);
 }
 
 async function client(args) {
@@ -160,10 +195,17 @@ async function fetchResults(args) {
     const msg = r.result.message;
     for (const k of Object.keys(usage)) usage[k] += msg.usage?.[k] ?? 0;
     const text = msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
-    const why = parseJsonReply(text)?.why;
     const f = sheetFacts.get(r.custom_id);
     const t = tally[m.split];
     t.n++;
+    if (m.note) {
+      // Plain text, as the worker streams it; ok: whether the worker would show it.
+      const note = text.trim(), ok = noteOk(note);
+      if (ok) t.pass++;
+      labels.push({facts: f ?? null, field: 'text', kind: m.kind, text: note, ok, model: MODEL, seeds: m.seeds, split: m.split});
+      continue;
+    }
+    const why = parseJsonReply(text)?.why;
     if (typeof why !== 'string') continue;
     if (f && modelRow(f, 'why', why).task) t.pass++;
     labels.push({facts: f ?? null, field: 'why', text: why, model: MODEL, seeds: m.seeds, split: m.split, reply: text});
@@ -172,7 +214,7 @@ async function fetchResults(args) {
   const cost = (usage.input_tokens * PRICE.input + usage.output_tokens * PRICE.output
     + usage.cache_creation_input_tokens * PRICE.cacheWrite + usage.cache_read_input_tokens * PRICE.cacheRead) / 1e6;
   console.log(`labels: ${labels.length} -> ${dir}/labels.jsonl`, Object.keys(failed).length ? failed : '');
-  if (sheets) for (const [split, t] of Object.entries(tally)) console.log(`${split}: ${t.pass}/${t.n} quotes pass the narrator's checks`);
+  if (sheets) for (const [split, t] of Object.entries(tally)) console.log(`${split}: ${t.pass}/${t.n} pass the narrator's checks`);
   console.log('usage', usage, `cost $${cost.toFixed(2)}`);
 }
 

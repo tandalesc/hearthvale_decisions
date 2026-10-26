@@ -2,6 +2,7 @@
 // triples and texts with names, places and numbers as role tokens (src/narration-roles.js).
 //
 //   node scripts/narration-student-export.js SHEETS.jsonl --labels LABELS.jsonl [--labels ...] --out FILE
+//       [--notes NOTES.jsonl ...] [--note-fraction 1] [--only-notes]
 //
 // LABELS are hosted-narrator replies for cards, as scripts/narration-label-batch.js
 // fetch writes them ({facts, field: 'why', text, reply, model, seeds}).
@@ -10,6 +11,15 @@
 //   card.quote  pretrain  every quote, passing or not: more of the hosted model's English
 //   card.option pretrain  each option line of every reply, with an ["ask", "option", key] triple
 //   card.quote  prompt    every card sheet, with no target: the cards to quote when testing
+// NOTES are inspector notes from scripts/narration-label-batch.js build --notes ({facts, field:
+// 'text', kind, text, ok, seeds, split}); ok: the worker would show it (cloudflare/narration.js).
+//   entity.note model     a note the worker would show
+//   entity.note pretrain  every note
+//   entity.note prompt    every labelled entity sheet, with no target: the notes to write when testing
+// A note wrapped whole in quotation marks is unwrapped first (Haiku often quotes the speaker;
+// the worker then refuses it for not ending a sentence), and kept as model text if noteOk.
+// --note-fraction keeps that share of training-town notes (by a hash of the key), for data-size
+// runs; held-out towns keep all theirs. --only-notes writes note rows alone (to join with card rows).
 import {createReadStream, createWriteStream} from 'node:fs';
 import {createInterface} from 'node:readline';
 import {narrationTriples} from '../src/narration-features.js';
@@ -19,6 +29,9 @@ import {parseJsonReply} from '../server/narrator.js';
 import {sheetKey} from './narration-collect.js';
 import {modelRow} from './narration-export.js';
 import {factProblem} from '../src/narration-consistency.js';
+import {validateFacts} from '../src/narrative-schema.js';
+import {createHash} from 'node:crypto';
+import {noteOk, cleanNote} from '../cloudflare/narration.js';
 
 async function* readLines(file) {
   for await (const line of createInterface({input: createReadStream(file), crlfDelay: Infinity})) if (line) yield JSON.parse(line);
@@ -27,6 +40,9 @@ async function* readLines(file) {
 const args = process.argv.slice(2);
 const [sheetsFile] = args.filter((a, i) => !a.startsWith('--') && !args[i - 1]?.startsWith('--'));
 const labelFiles = args.flatMap((a, i) => (args[i - 1] === '--labels' ? [a] : []));
+const noteFiles = args.flatMap((a, i) => (args[i - 1] === '--notes' ? [a] : []));
+const noteFraction = args.includes('--note-fraction') ? Number(args[args.indexOf('--note-fraction') + 1]) : 1;
+const onlyNotes = args.includes('--only-notes');
 const outFile = args[args.indexOf('--out') + 1];
 if (!sheetsFile || !outFile) throw new Error('usage: narration-student-export.js SHEETS.jsonl --labels FILE --out FILE');
 
@@ -39,12 +55,12 @@ const write = (row) => {
 };
 const cardRows = (facts) => roleTriples(narrationTriples(facts));
 
-for await (const s of readLines(sheetsFile)) {
+for await (const s of (onlyNotes ? [] : readLines(sheetsFile))) {
   if (s.type !== 'card') continue;
   const {triples, roles} = cardRows(s.facts);
   write({key: s.key, task: 'card.quote', source: 'prompt', seeds: s.seeds, triples, target: '', roles});
 }
-for (const file of labelFiles) {
+for (const file of onlyNotes ? [] : labelFiles) {
   for await (const l of readLines(file)) {
     if (!l.facts || l.field !== 'why') continue;
     let facts;
@@ -63,6 +79,25 @@ for (const file of labelFiles) {
       if (typeof line !== 'string' || !line.trim() || !facts.options.some((o) => o.key === optKey)) continue;
       write({...base, triples: [...triples, ['ask', 'option', optKey, null, 'enum']], task: 'card.option', source: 'pretrain', target: delex(line.trim(), roles)});
     }
+  }
+}
+// Inspector notes: one task for people, households, buildings and bodies.
+// Salted: narration-label-batch.js picks sheets by the unsalted hash, so the picked ones all hash low.
+const share = (key) => parseInt(createHash('sha256').update(`note-fraction:${key}`).digest('hex').slice(0, 8), 16) / 2 ** 32;
+for (const file of noteFiles) {
+  for await (const l of readLines(file)) {
+    if (!l.facts || l.field !== 'text') continue;
+    let facts;
+    try { facts = validateFacts(l.facts); } catch { continue; }
+    const key = sheetKey(facts);
+    const {triples, roles} = cardRows(facts);
+    const base = {key, seeds: l.seeds ?? [], triples, roles, task: 'entity.note'};
+    write({...base, source: 'prompt', target: ''});
+    if (l.split === 'train' && share(key) >= noteFraction) continue;
+    if (typeof l.text !== 'string' || !l.text.trim()) continue;
+    const text = cleanNote(l.text);
+    write({...base, source: 'pretrain', target: delex(text, roles)});
+    if (noteOk(text)) write({...base, source: 'model', target: delex(text, roles)});
   }
 }
 await new Promise((resolve) => out.end(resolve));

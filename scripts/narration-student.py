@@ -134,10 +134,12 @@ def h(x):
 # ---------------------------------------------------------------- data
 
 def stream(path):
-    with open(path) as fh:
-        for line in fh:
-            if line.strip():
-                yield json.loads(line)
+    """Rows from one file, or several joined with commas (card rows, note rows)."""
+    for one in str(path).split(','):
+        with open(one) as fh:
+            for line in fh:
+                if line.strip():
+                    yield json.loads(line)
 
 
 def part_of(r, held_out, val):
@@ -189,7 +191,7 @@ def build_vocab(train, bpe=None, records=False, year_ago=False, stance_who=False
         vocab_words = SPECIALS + [w for w in keep(words, 3) if w not in SPECIALS]
     return {'words': vocab_words, **({'record_scopes': True} if records else {}), **({'year_ago': True} if year_ago else {}), **({'stance_who': True} if stance_who else {}), **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
             'scopes': ['<pad>', '<unk>'] + keep(scopes, 1), 'attrs': ['<pad>', '<unk>'] + keep(attrs, 1),
-            'values': ['<pad>', '<unk>'] + keep(values, 3), 'tasks': ['card.quote', 'card.option']}
+            'values': ['<pad>', '<unk>'] + keep(values, 3), 'tasks': ['card.quote', 'card.option', 'entity.note']}
 
 
 class Codec:
@@ -636,7 +638,13 @@ def main():
     samples = []
     for name in ('val', 'test'):
         rng.shuffle(prompts[name])
-        exs = [C.example(r) for r in prompts[name][: a.eval_max]]
+        # Up to eval_max prompts of each task (card quotes, inspector notes).
+        taken, chosen = Counter(), []
+        for r in prompts[name]:
+            if taken[r['task']] < a.eval_max:
+                taken[r['task']] += 1
+                chosen.append(r)
+        exs = [C.example(r) for r in chosen]
         for bt in batches(exs, 64, False):
             b = collate(bt, a.device)
             cands = beam_search(model, b, [e['ban'] for e in bt], C, k=a.beam)
@@ -649,7 +657,7 @@ def main():
                 one = {k: v[j:j + 1].expand(len(cs), *v.shape[1:]) for k, v in b.items()}
                 feats = model.score(one, seqs)
                 feats = torch.cat([feats, torch.tensor([[s, ex['unk']] for _, s in cs], device=a.device)], 1)
-                samples.append({'key': ex['row']['key'], 'split': name, 'roles': ex['row']['roles'],
+                samples.append({'key': ex['row']['key'], 'split': name, 'task': ex['row']['task'], 'roles': ex['row']['roles'],
                                 'outputs': [C.detok([vocab['words'][i] for i in ids if i != EOS]) for ids, _ in cs],
                                 'feats': [[round(x, 4) for x in f] for f in feats.tolist()]})
         print(f'{name}: {sum(s["split"] == name for s in samples)} cards quoted', flush=True)
