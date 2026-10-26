@@ -69,6 +69,7 @@ export async function loadNarrator(simKind) {
     // Kept notes (saved in the town) and background prose for cards.
     peekNote: client.peekNote ?? null,
     noteFor: client.noteFor ?? null,
+    configureNotes: client.configureNotes ?? null,
     keepNote: client.keepNote ?? null,
     touchNote: client.touchNote ?? null,
     startProseKeeper: client.startProseKeeper ?? null,

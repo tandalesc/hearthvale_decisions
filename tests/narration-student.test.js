@@ -181,3 +181,52 @@ test('role tokens, version 2: a token per number fact, the sheet\'s own fields f
   assert.equal(d, 'Built in year <building.built_year>, it has stood <building.age:w> years.', 'the sheet\'s own fields win; number words too');
   assert.equal(relex(d, roles), note);
 });
+
+const notesBundle = new URL('../public/students/notes/notes.v1.json', import.meta.url);
+const notesFixture = new URL('./fixtures/notes.v1.fixture.json', import.meta.url);
+test('the shipped notes student reproduces its training run, and writes notes the game would show', {skip: !existsSync(notesBundle)}, async () => {
+  const bundle = JSON.parse(readFileSync(notesBundle, 'utf8'));
+  const bin = readFileSync(new URL(bundle.blob, notesBundle));
+  const student = loadNarrationStudent(bundle, bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength));
+  assert.equal(student.task, 'entity.note');
+  const cards = JSON.parse(readFileSync(notesFixture, 'utf8')).cards.slice(0, 8);
+  let same = 0, confident = 0;
+  for (const f of cards) {
+    const {triples, roles} = student.rolesOf(f.facts);
+    const c = await student.beam(student.encode(triples, roles), student.taskIndex('entity.note'));
+    if (student.detok(c[0].toks.map((i) => student.words[i])) === f.outputs[0]) same++;
+    const n = await student.note(f.facts);
+    if (n?.confident) confident++;
+    if (n) assert.ok(n.text.length <= 420 && /[.!?]$/.test(n.text), n.text);
+  }
+  assert.ok(same >= 6, `${same}/8 top notes match the trainer`);
+  assert.ok(confident >= 4, `${confident}/8 confident`);
+  assert.deepEqual(studentPath('/students/notes/notes.v1.json'), {family: 'notes', version: 1, file: 'notes/notes.v1.json'});
+  assert.deepEqual(studentPath('/api/students/notes/manifest'), {family: 'notes', manifest: true, file: 'notes/manifest.json'});
+});
+
+test('inspector notes: free players get the student or the template; Plus fast asks Haiku only when it is unsure', async () => {
+  const {createNarratorClient} = await import('../src/narrator-client.js');
+  const facts = JSON.parse(readFileSync(notesFixture, 'utf8')).cards.find((c) => c.facts.kind === 'person').facts;
+  const hostedReply = () => new Response(JSON.stringify({text: 'A hosted note.', source: 'llm'}), {headers: {'content-type': 'application/json'}});
+  const run = async ({paid, prefer = 'fast', mine, hosted = hostedReply}) => {
+    let calls = 0;
+    const client = createNarratorClient({fetcher: async () => { calls++; return hosted(); }, local: async () => mine, remote: () => paid, prefer: () => prefer});
+    const meta = [];
+    const text = await client.narrate(facts, {onMeta: (m) => meta.push(m.source)});
+    return {text, calls, source: meta.at(-1)};
+  };
+  const sure = {text: 'A student note.', confident: true}, unsure = {text: 'Not sure of this.', confident: false};
+  let r = await run({paid: false, mine: sure});
+  assert.deepEqual([r.text, r.source, r.calls], ['A student note.', 'student', 0]);
+  r = await run({paid: false, mine: unsure});
+  assert.equal(r.source, 'fallback'); assert.equal(r.calls, 0, 'free players make no hosted request');
+  r = await run({paid: true, mine: sure});
+  assert.deepEqual([r.source, r.calls], ['student', 0]);
+  r = await run({paid: true, mine: unsure});
+  assert.deepEqual([r.text, r.calls], ['A hosted note.', 1]);
+  r = await run({paid: true, prefer: 'quality', mine: sure});
+  assert.deepEqual([r.text, r.calls], ['A hosted note.', 1], 'quality: hosted first');
+  r = await run({paid: true, prefer: 'quality', mine: sure, hosted: () => new Response('{}', {status: 503})});
+  assert.equal(r.source, 'student', 'and the student when the hosted narrator cannot be had');
+});

@@ -26,8 +26,15 @@ export const whyLines = (facts, {limit} = {}) => whyOrder(facts, {limit});
 
 const DOWN_COOLDOWN_MS = 30000;
 
-export function createNarratorClient({endpoint = '/api/narrate', fetcher = (...a) => globalThis.fetch(...a), cacheSize = 200, now = () => Date.now()} = {}) {
-  const cache = new Map();      // material facts -> note (model text only)
+// local: the notes student (narration-student.js createLocalNotes), async (facts) -> {text, confident} | null.
+// remote: whether this player may use the hosted narrator (Plus). prefer: 'fast' | 'quality' (Settings).
+// Free players get the student's note when it is confident, else the template note, with no
+// request (the hosted route refuses them). Plus, fast: the student first, the hosted narrator
+// when it is unsure. Plus, quality: the hosted narrator first, the student when it cannot be had.
+export function createNarratorClient({endpoint = '/api/narrate', fetcher = (...a) => globalThis.fetch(...a), cacheSize = 200, now = () => Date.now(),
+  local = null, remote = null, prefer = () => 'fast'} = {}) {
+  const hooks = {local, remote, prefer};
+  const cache = new Map();      // material facts -> note (model or student text only)
   const inflight = new Map();   // canonical facts -> Promise<{text, source}>
   let downUntil = 0;
 
@@ -51,19 +58,40 @@ export function createNarratorClient({endpoint = '/api/narrate', fetcher = (...a
       const {text, source} = await inflight.get(key);
       return deliver(text, source === 'model' ? 'cache' : source, {onToken, onMeta});
     }
-    const job = request(clean, {signal, onToken, onMeta});
+    const job = route(clean, {signal, onToken, onMeta});
     inflight.set(key, job);
     try {
       const {text, source} = await job;
-      if (source === 'model') remember(key, text);
+      if (source === 'model' || source === 'student') remember(key, text);
       return text;
     } finally {
       inflight.delete(key);
     }
   }
 
+  // -> {text, source}: the student, the hosted narrator or the template, by tier and preference.
+  async function route(facts, opts) {
+    const {local: student, remote: paid, prefer: pref} = hooks;
+    const mine = async () => {
+      if (!student) return null;
+      try {
+        const n = await student(facts);
+        if (opts.signal?.aborted) throw abortError();
+        return n?.confident ? (deliver(n.text, 'student', opts), {text: n.text, source: 'student'}) : null;
+      } catch (error) {
+        if (opts.signal?.aborted) throw error;
+        return null;
+      }
+    };
+    if (paid && !paid()) return (await mine()) ?? fallback(facts, opts);
+    if (pref?.() !== 'quality') return (await mine()) ?? request(facts, opts);
+    const hosted = await request(facts, opts);
+    return hosted.source === 'fallback' ? (await mine()) ?? hosted : hosted;
+  }
+
   // -> {text, source}; streams tokens to onToken on the way.
   async function request(facts, {signal, onToken, onMeta}, retried = false) {
+    if (signal?.aborted) throw abortError();   // aborted while the student was asked first
     let response, announcedSource = null, previewText = null;
     const emitMeta = (meta) => {
       const source = noteSource(meta.source);
@@ -105,7 +133,9 @@ export function createNarratorClient({endpoint = '/api/narrate', fetcher = (...a
     return fallback(facts, {onToken, onMeta});
   }
 
-  return {narrate, clear: () => cache.clear(), stats: () => ({cached: cache.size, inflight: inflight.size, down: now() < downUntil})};
+  // Set the student, tier and preference after the client is made (main.js, once they are known).
+  const configure = (h) => { for (const k of ['local', 'remote', 'prefer']) if (h[k] !== undefined) hooks[k] = h[k]; };
+  return {narrate, configure, clear: () => cache.clear(), stats: () => ({cached: cache.size, inflight: inflight.size, down: now() < downUntil, student: hooks.local?.info?.() ?? null})};
 }
 
 function fallback(facts, {onToken, onMeta}) {
@@ -320,7 +350,7 @@ export async function noteFor(state, query, {signal, onToken, onMeta, peek = nul
   }
   let source = 'model';
   const text = await (client ?? {narrate}).narrate(p.facts, {signal, onToken, onMeta: (m) => { source = m.source; onMeta?.(m); }});
-  if (source === 'model' || source === 'cache') {
+  if (source === 'model' || source === 'cache' || source === 'student') {
     if (notes) notes.set(p.ref, p.key, text);
     else keepNote(state, p.ref, p.key, text);
   }
@@ -518,4 +548,9 @@ const shared = typeof window !== 'undefined' ? createNarratorClient() : null;
 
 export function narrate(facts, options) {
   return (shared ?? createNarratorClient()).narrate(facts, options);
+}
+
+// The inspector's notes: the notes student, the player's tier and their narration preference.
+export function configureNotes(hooks) {
+  shared?.configure(hooks);
 }

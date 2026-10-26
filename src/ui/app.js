@@ -207,6 +207,8 @@ export function createApp(host) {
     decisionStats: () => host.decisions.stats(),
     narrationStats: () => host.narration?.stats?.(),
     refreshNarration: () => host.narration?.refresh?.(),
+    notesStats: () => host.notesModel?.stats?.(),
+    refreshNotes: () => host.notesModel?.refresh?.(),
     renderStats: () => safe(() => world?.stats?.(), null),
     power: () => safe(() => world?.power?.(), null),
     simMs: () => host.simMs(),

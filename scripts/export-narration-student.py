@@ -92,10 +92,14 @@ def main():
     ap.add_argument('--bits', type=int, choices=[8, 4], help='default: the width the run was trained for (--qat), else 8')
     ap.add_argument('--group', type=int, default=32, help='int4: values per scale')
     ap.add_argument('--keep8', default='', help='regex of weight names kept at int8 when --bits 4 (e.g. the embedding tables)')
+    ap.add_argument('--task', default=None, help='the fixture\'s prompts from this task only (entity.note for a notes bundle)')
+    ap.add_argument('--roles', type=int, default=1, help='role tokens version the run was exported with (src/narration-roles.js); 2 for notes')
     ap.add_argument('--fixture-out', help='where the parity fixture goes (default OUT with .fixture.json); it is not shipped')
     a = ap.parse_args()
 
     vocab = json.load(open(f'{a.run}/vocab.json'))
+    if a.roles != 1:
+        vocab['roles'] = a.roles   # the runtime builds role tokens the way the rows were
     ck = torch.load(f'{a.run}/model.pt', map_location='cpu')
     cfg = ck['config']
     a.bits = a.bits or cfg.get('qat') or 8
@@ -124,6 +128,8 @@ def main():
         if '"source":"prompt"' not in line:
             continue
         r = json.loads(line)
+        if a.task and r['task'] != a.task:
+            continue
         if r['seeds'] and all(s in held for s in r['seeds']):
             rows.append(r)
         if len(rows) >= a.fixture:
@@ -148,7 +154,7 @@ def main():
                         'outputs': [C.detok([vocab['words'][i] for i in ids if i != S.EOS]) for ids, _ in cs],
                         'features': [[round(x, 5) for x in f] for f in feats.tolist()]})
 
-    bundle = {'format': FORMAT, 'version': a.version, 'features': FEATURES_VERSION,
+    bundle = {'format': FORMAT, 'version': a.version, 'features': FEATURES_VERSION, **({'task': a.task} if a.task else {}),
               'teacher': 'claude-haiku-5-5', 'config': {**cfg, 'heads': 4, 'max_tgt': S.MAX_TGT, 'max_bag': C.max_bag,
                                                          'beam': 4, 'alpha': 0.7, 'block': 3},
               'vocab': vocab, 'weights': weights, 'quality': quality, 'bits': a.bits,

@@ -317,6 +317,21 @@ The model reads years 2–3× more but times past rulings no better, and seed 1 
 
 Runs: rrh-llm-1 `~/narration/note2x-*`. Labels: that session's scratchpad (`notes-batch/`, `notes-batch2/`).
 
+## 1n. Notes v1 shipped, gated on confidence (26 October 2026)
+
+- **Confidence head.** Every candidate note (4 per entity) for the validation towns was labelled good or not ($0.18; `scripts/narration-note-verdicts.js`): good means it passes the game's rules and `noteProblem`, and Haiku finds no contradiction and no broken sentence (`scripts/narration-note-grade.js`, shared with the judge). 63% are good.
+  - The head (`narration-quality.py`) learns on validation towns and is scored on test towns, whose candidates were graded the same way ($0.17, `--eval`): candidate AUC 0.82.
+  - Good notes among the head's picks, most confident first: 83% of the top 50%, 77% of the top 70%, 59% of all. The game also drops rule-failing candidates before the head picks, so these numbers are pessimistic.
+- **Bundle.** `public/students/notes/notes.v1.json` + `.bin` (97 KB + 660 KB int8; role tokens version 2; threshold 0.43 = most confident 70%), from the role-tokens-2 + template-pretrained run; `export-narration-student.py --task entity.note --roles 2`. Parity fixture `tests/fixtures/notes.v1.fixture.json`: 24/24.
+- **Runtime.**
+  - The `notes` student family (`/students/notes/`).
+  - `loadNarrationStudent(...).note(facts)`: task `entity.note`, beam pruned by `noteProblem`, picks must pass `noteOk`. Median 66 ms in Node.
+  - `createLocalNotes` loads it on the first note, on the main thread, yielding every 4 steps.
+  - `createNarratorClient` routes by tier and preference (`configureNotes` from `main.js`). Free players get the student's note when it is confident, else the template, with no hosted request. Plus on Fast gets the student, then Haiku; Plus on Quality gets Haiku, then the student.
+  - Student notes are kept in saves as Haiku's are.
+- **Settings.** A "Notes model v1 · 4f0e8962" line; the Plus Fast/Quality setting covers notes.
+- **Checked in the dev server.** A villager's note came from the student within 1.5 s. Of three buildings, two notes came from the student and one from the template (below the threshold).
+
 ## 1j. Side results: speed, and an int4 decision student (25 October 2026)
 
 **Would WebAssembly help?** Measured with hand-assembled WASM kernels on narration v2's layer shapes (515K multiply-adds per beam step, Node 24, M-series Mac):

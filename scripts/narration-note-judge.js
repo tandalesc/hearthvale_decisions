@@ -25,8 +25,8 @@ import {noteOk, noteMessage, cleanNote} from '../cloudflare/narration.js';
 import {validateFacts} from '../src/narrative-schema.js';
 import {sheetKey} from './narration-collect.js';
 import {noteProblem} from '../src/narration-notes.js';
+import {SYSTEM, prompt, grade, MODEL} from './narration-note-grade.js';
 
-const MODEL = 'claude-haiku-5-5';
 const args = process.argv.slice(2);
 const arg = (name, fallback = null) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback);
 async function* readLines(file) {
@@ -43,14 +43,6 @@ export function studentNote(outputs, roles, facts = null) {
   return null;
 }
 
-const SYSTEM = `You grade one short note from a town-building game. Tapping a person, household, building or town body shows a note about it, written from the facts below.
-Grade only this note, not whether you would have written it differently.
-Return only JSON: {"grammar": "clean" | "minor" | "broken", "contradiction": true | false, "claim": "...", "specific": true | false}
-- grammar: "clean" reads naturally; "minor" has a small slip a reader glides over; "broken" has a sentence a reader stumbles on.
-- contradiction: true only if the note states something a fact line says is otherwise, or contradicts itself. Leaving a fact out is not a contradiction. "Needs: energy high" means they badly need rest (they are tired); "Needs: food high" means they are hungry; "Needs: company high" means they are lonely.
-- claim: when contradiction is true, the note's words that are wrong, copied exactly; else "".
-- specific: true if it tells the reader something particular about this one (their situation, mood, work, what happened to them); false if it could be said of almost any of its kind.`;
-const prompt = (facts, text) => `Facts:\n${noteMessage(facts)}\n\nNote: "${text}"\n\nReturn the JSON.`;
 
 const sampleArgs = args.flatMap((a, i) => (args[i - 1] === '--samples' ? [a] : []));
 const students = sampleArgs.map((a, i) => (a.includes('=') ? a.split(/=(.*)/s).slice(0, 2) : [sampleArgs.length > 1 ? `student${i + 1}` : 'student', a]));
@@ -105,12 +97,11 @@ async function worker() {
   while (next < jobs.length) {
     const j = jobs[next++];
     try {
-      const msg = await client.messages.create({model: MODEL, max_tokens: 160, thinking: {type: 'disabled'},
-        system: [{type: 'text', text: SYSTEM}], messages: [{role: 'user', content: prompt(j.facts, j.text)}]});
-      usage.input_tokens += msg.usage.input_tokens;
-      usage.output_tokens += msg.usage.output_tokens;
-      const text = msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
-      results.push({who: j.who, kind: j.kind, key: j.key, text: j.text, ...JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))});
+      const g = await grade(client, j.facts, j.text);
+      usage.input_tokens += g.tokens.input;
+      usage.output_tokens += g.tokens.output;
+      delete g.tokens;
+      results.push({who: j.who, kind: j.kind, key: j.key, text: j.text, ...g});
     } catch (e) {
       results.push({who: j.who, kind: j.kind, key: j.key, text: j.text, error: String(e.message ?? e).slice(0, 80)});
     }

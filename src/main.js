@@ -9,7 +9,7 @@
 //   ?student=0                  turn off the decision students (public/students/), which
 //                               otherwise answer the kinds they know in the browser
 //   ?student=N                  hold every town on decision student version N (testing)
-import {loadEntitlement, entitledSpeed} from './entitlements.js';
+import {loadEntitlement, entitledSpeed, isPaid} from './entitlements.js';
 import {createAccount} from './ui/account.js';
 import {createCloudSaves} from './cloud-saves.js';
 import {createDecisionClient} from './decision-client.js';
@@ -25,7 +25,7 @@ import {rapidsSources} from './river.js';
 import {createSaveStore, metaFromSave, newSlotId} from './save-store.js';
 import {suggestName} from './ui/menu/names.js';
 import {version} from '../package.json';
-import {createLocalNarration} from './narration-student.js';
+import {createLocalNarration, createLocalNotes} from './narration-student.js';
 
 const SAVE_KEY = 'hearthvale-save';
 // Town saves go to IndexedDB (gzip), one slot per town; SAVE_KEY is only the legacy localStorage key.
@@ -264,6 +264,11 @@ async function boot() {
   // This thread's valley: the renderer, picking, the camera and the water sounds read it.
   useTerrain(info.terrain.seed, info.terrain.version, info.terrain.archetype);
   const narrator = await narrating;
+  // Inspector notes: the notes student in this thread (it yields between decoding steps), the
+  // player's tier as it stands, and the Fast / Quality preference (Settings, Plus).
+  const localNotes = params.get('narrator') === 'hosted' ? null
+    : createLocalNotes({base: new URL('/api/students/', document.baseURI).href, fallbackBase: new URL('students/', document.baseURI).href, yieldEvery: 4});
+  narrator?.configureNotes?.({local: localNotes, remote: () => isPaid(entitlement), prefer: () => prefs.get('narration')});
   // The inline host keeps notes and card prose through this thread's narrator.
   host.useNarrator(narrator && {facts: narrator.facts, peekNote: narrator.peekNote, keepNote: narrator.keepNote, touchNote: narrator.touchNote}, narrator?.startProseKeeper ?? null);
   // Plus players' narration preference (Settings): fast, the student first; quality, the hosted narrator first.
@@ -497,6 +502,11 @@ async function boot() {
     narration: {
       stats: () => host.narration?.stats(),
       refresh: () => host.narration?.refresh?.(),
+    },
+    // The notes student (not host.notes, the town's kept notes): its load state for Settings.
+    notesModel: {
+      stats: () => (localNotes ? {student: localNotes.info()} : null),
+      refresh: () => localNotes?.preload(),
     },
   });
   if (notice) app.notices.toast(notice, 6000);
