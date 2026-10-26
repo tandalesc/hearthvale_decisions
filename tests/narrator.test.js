@@ -835,3 +835,19 @@ test('harvest request retains its risk and both plans through provider and clien
   assert.equal(checkCardProse(facts, result.prose).prose.why, why, 'browser also preserves all four sentences');
   assert.equal(checkHostedCardProse(facts, why + ' We wait.').used.why, 'template', 'never salvage a prefix of oversized output');
 });
+
+test('a note wrapped whole in quotation marks is shown unwrapped; inner quotes are left alone', async () => {
+  const {cleanNote, noteOk, narrateAnthropic} = await import('../cloudflare/narration.js');
+  assert.equal(cleanNote('"We are glad of the spring."'), 'We are glad of the spring.');
+  assert.equal(cleanNote('“The mill keeps us fed.”'), 'The mill keeps us fed.');
+  const spoken = '"We\'re short of work," the Quill family says. "We stay put."';
+  assert.equal(cleanNote(spoken), spoken, 'a note that quotes its speaker is not a wrapped note');
+  assert.equal(cleanNote('"We are glad.', {partial: true}), 'We are glad.', 'a streamed preview before its closing mark');
+  assert.ok(!noteOk('"Ada rests by the fire."') && noteOk(cleanNote('"Ada rests by the fire."')));
+  const sse = (text) => new Response(`data: ${JSON.stringify({type: 'content_block_delta', delta: {type: 'text_delta', text}})}\n\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n`, {headers: {'content-type': 'text/event-stream'}});
+  const previews = [];
+  const out = await narrateAnthropic({v: 1, kind: 'person', name: 'Ada', year: 1}, {ANTHROPIC_API_KEY: 'test'},
+    {fetcher: async () => sse('"Ada rests by the fire."'), onPreview: async (p) => { previews.push(p.text); }});
+  assert.deepEqual(out, {text: 'Ada rests by the fire.'});
+  assert.ok(previews.every((t) => !t.startsWith('"')), 'previews are unwrapped too');
+});
