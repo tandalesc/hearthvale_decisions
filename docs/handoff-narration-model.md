@@ -218,7 +218,7 @@ Run on the 1,200 Haiku-judged quotes of §1h, scoring only the records each quot
 
 The model reads years 2–3× more but times past rulings no better, and seed 1 lost 8 points. **The input was not the bottleneck,** so the flag is off by default. Likely next: Haiku's own quotes and the template text rarely time a ruling, so there is little to learn from. Count how often passing quotes state a time, and whether it is right, before changing the model again. Runs: rrh-llm-1 `~/narration/year-*`.
 
-## 1k. Stances bound in one token: better on both seeds. Not shipped yet (25 October 2026)
+## 1k. Stances bound in one token: shipped as narration v3 (25 October 2026)
 
 `--stance-who` (vocab `stance_who`) adds a stance's group words to its lean token: `stances:0 lean for` also carries the mean embedding of "farmers". The group is then in the same memory token as its lean, and the decoder no longer has to link two tokens. No new parameters. Mirrored in `src/narration-student.js` `encode`; bundles without the flag are unchanged. v2's setup (int8, no QAT, no year-ago), 600 held-out test cards, against v2's two seeds:
 
@@ -236,7 +236,9 @@ The model reads years 2–3× more but times past rulings no better, and seed 1 
   - Shown on 100 held-out cards: 78 and 73 (v2: 76).
   - Median latency: 34 ms and 131 ms (v2: 127). Seed 0's quality head trusts its first candidate more often, so it skips the beam.
 - **Haiku judge, seed 0, runtime quotes judged as for v2** (333 of 450 cards shown, 300 judged, $0.029): 20.7% contradict the facts against v2's 19.7%. Grammar clean 78.3% (v2 76.0%); point conveyed 100% (99.3%).
-  - The 1-point gap is 62 quotes against 59, well inside noise (about ±3.3 points for a difference at n = 300). Still, it missed the shipping bar of "no worse than v2", so it is **not shipped**.
+  - The 1-point gap is 62 quotes against 59, well inside noise (about ±3.3 points for a difference at n = 300).
+  - Paired on the 237 cards both models were judged on: 13 contradicted by both, 34 only by stance-who, 30 only by v2 (McNemar p = 0.71). Most contradictions are one-off slips, not systematic.
+  - **Shipped as narration v3** on the user's call (`public/students/narration/narration.v3.json` + `.bin`, manifest latest 3, parity fixture `tests/fixtures/narration.v3.fixture.json`, 23/24). It is now the benchmark. This "v3" is not the record-token v3 of §1h, which was never shipped.
   - By rough claim type (regex buckets that overlap; the judge does not say which claim was wrong): quotes stating a stance were contradicted 23% (v2 28%), and quotes stating counts or numbers more often (16% and 32%, against 7% and 25%).
   - To settle it: judge about 1,000 quotes for each of v2 and stance-who seed 0, plus seed 1, at about $0.10 per 1,000. Judge file: that session's scratchpad, `judge-who0.jsonl`.
 - Runs: rrh-llm-1 `~/narration/who-s*`. Bundles are in that session's scratchpad (`bundles/who-s*.json`).

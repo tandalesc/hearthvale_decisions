@@ -95,8 +95,8 @@ test('Plus players get the hosted quote, and the student when the hosted one can
   assert.equal(generic.stored[0]?.source, 'student', 'and for a hosted quote the checks refuse');
 });
 
-const bundleFile = new URL('../public/students/narration/narration.v2.json', import.meta.url);
-const fixtureFile = new URL('./fixtures/narration.v2.fixture.json', import.meta.url);
+const bundleFile = new URL('../public/students/narration/narration.v3.json', import.meta.url);
+const fixtureFile = new URL('./fixtures/narration.v3.fixture.json', import.meta.url);
 test('the shipped narration student reproduces its training run on the fixture', {skip: !existsSync(bundleFile)}, async () => {
   const bundle = JSON.parse(readFileSync(bundleFile, 'utf8'));
   let blob = null;
