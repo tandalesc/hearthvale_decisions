@@ -468,8 +468,13 @@ class NarrationStudent(nn.Module):
         return torch.cat([torch.stack([mean_lp, min_lp, mean_ent, n / MAX_TGT], 1), hmean], 1)
 
 
+# Function words a note may repeat; any other word of five letters or more it may use once
+# (beam_search no_repeat: "I'd love some company, and I'd love more company").
+REPEATABLE = {'their', 'there', 'these', 'those', 'which', 'would', 'could', 'should', 'about', 'other', 'still', 'while', 'where', 'being', 'after', 'again', 'every', 'since', 'under', 'because', 'though', 'through', 'before', 'never', 'always', 'right'}
+
+
 @torch.no_grad()
-def beam_search(model, b, bans, codec, k=4, alpha=0.7, block=3):
+def beam_search(model, b, bans, codec, k=4, alpha=0.7, block=3, no_repeat=False):
     mem = model.memory(b)
     B = mem.size(0)
     mem, mmask, task = mem.repeat_interleave(k, 0), b['mmask'].repeat_interleave(k, 0), b['task'].repeat_interleave(k, 0)
@@ -491,6 +496,8 @@ def beam_search(model, b, bans, codec, k=4, alpha=0.7, block=3):
             banned = set()
             if words:
                 banned.add(words[-1])          # no word twice running
+            if no_repeat:                      # no content word twice
+                banned.update(w for w in words if len(w) >= 5 and w.isalpha() and w not in REPEATABLE)
             if len(words) >= block - 1:        # no three-word phrase twice
                 tail = words[-(block - 1):]
                 for j in range(len(words) - block + 1):
@@ -571,6 +578,7 @@ def main():
     ap.add_argument('--ffn', choices=['relu', 'swiglu'], default='relu', help='feed-forward kind; swiglu at --ff 128 matches relu at 192 in size')
     ap.add_argument('--smoothing', type=float, default=0.05)
     ap.add_argument('--beam', type=int, default=4)
+    ap.add_argument('--no-repeat', action='store_true', help='decode without reusing a content word (notes)')
     ap.add_argument('--eval-max', type=int, default=600)
     ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
@@ -669,7 +677,7 @@ def main():
         exs = [C.example(r) for r in chosen]
         for bt in batches(exs, 64, False):
             b = collate(bt, a.device)
-            cands = beam_search(model, b, [e['ban'] for e in bt], C, k=a.beam)
+            cands = beam_search(model, b, [e['ban'] for e in bt], C, k=a.beam, no_repeat=a.no_repeat)
             for j, (ex, cs) in enumerate(zip(bt, cands)):
                 if not cs:
                     continue

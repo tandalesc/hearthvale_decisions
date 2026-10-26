@@ -1,6 +1,7 @@
 {
-  "latest": 1,
+  "latest": 2,
   "versions": {
-    "1": "notes.v1.json"
+    "1": "notes.v1.json",
+    "2": "notes.v2.json"
   }
 }

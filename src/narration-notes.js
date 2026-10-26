@@ -61,7 +61,7 @@ function building(c, b, name) {
 
 function people(c, who = {}, now = {}) {
   // "Needs: energy high" means they need rest; reading it as "full of energy" is the slip.
-  if (now.energy === 'high' && /\b(full of energy|well rested|rested|lively|bright and)\b/.test(c)) return 'energy: tired';
+  if (now.energy === 'high' && /\b(full of energy|plenty of energy|energy to spare|so much energy|full of beans|well rested|rested|lively|bright and|raring to go)\b/.test(c)) return 'energy: tired';
   if (now.energy === 'low' && /\b(tired|weary|worn out|exhausted)\b/.test(c)) return 'energy: rested';
   const home = String(who.home ?? '').toLowerCase();
   if (home && !/no home/.test(home)) for (const w of DWELLINGS) if (new RegExp(`\\b(our|their|my|his|her) (little |humble |old |small |new )?${w}\\b`).test(c) && !home.includes(w)) return `home: ${w}`;

@@ -28,9 +28,10 @@ const DOWN_COOLDOWN_MS = 30000;
 
 // local: the notes student (narration-student.js createLocalNotes), async (facts) -> {text, confident} | null.
 // remote: whether this player may use the hosted narrator (Plus). prefer: 'fast' | 'quality' (Settings).
-// Free players get the student's note when it is confident, else the template note, with no
-// request (the hosted route refuses them). Plus, fast: the student first, the hosted narrator
-// when it is unsure. Plus, quality: the hosted narrator first, the student when it cannot be had.
+// Free players get the student's note whenever it has one (it passes the game's rules; graded,
+// even its least confident notes beat the template), else the template, with no request (the
+// hosted route refuses them). Plus, fast: the student when it is confident, the hosted
+// narrator when it is unsure. Plus, quality: the hosted narrator, the student when it cannot be had.
 export function createNarratorClient({endpoint = '/api/narrate', fetcher = (...a) => globalThis.fetch(...a), cacheSize = 200, now = () => Date.now(),
   local = null, remote = null, prefer = () => 'fast'} = {}) {
   const hooks = {local, remote, prefer};
@@ -72,19 +73,19 @@ export function createNarratorClient({endpoint = '/api/narrate', fetcher = (...a
   // -> {text, source}: the student, the hosted narrator or the template, by tier and preference.
   async function route(facts, opts) {
     const {local: student, remote: paid, prefer: pref} = hooks;
-    const mine = async () => {
+    const mine = async ({sure = false} = {}) => {
       if (!student) return null;
       try {
         const n = await student(facts);
         if (opts.signal?.aborted) throw abortError();
-        return n?.confident ? (deliver(n.text, 'student', opts), {text: n.text, source: 'student'}) : null;
+        return n && (!sure || n.confident) ? (deliver(n.text, 'student', opts), {text: n.text, source: 'student'}) : null;
       } catch (error) {
         if (opts.signal?.aborted) throw error;
         return null;
       }
     };
     if (paid && !paid()) return (await mine()) ?? fallback(facts, opts);
-    if (pref?.() !== 'quality') return (await mine()) ?? request(facts, opts);
+    if (pref?.() !== 'quality') return (await mine({sure: true})) ?? request(facts, opts);
     const hosted = await request(facts, opts);
     return hosted.source === 'fallback' ? (await mine()) ?? hosted : hosted;
   }

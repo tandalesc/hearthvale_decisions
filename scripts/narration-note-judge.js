@@ -6,7 +6,9 @@
 //
 // Each --samples is one student (several can be judged together); its note is the first
 // candidate that passes the game's rules and noteProblem (src/narration-notes.js), as the
-// runtime picks it.
+// runtime picks it. --picks NAME=FILE takes a student's notes as already picked ({key, text,
+// score}; scripts/narration-note-pick.py), and --gate 0.7 then grades only its most confident
+// 70%, as the game shows them. --rubric quality grades how good a note each is (1-5) instead.
 //
 // Without --yes: the mechanical checks only (the game's own rules for a note: no role the
 // sheet lacks, fluent, and cloudflare/narration.js noteOk), and a cost estimate. With --yes,
@@ -25,7 +27,7 @@ import {noteOk, noteMessage, cleanNote} from '../cloudflare/narration.js';
 import {validateFacts} from '../src/narrative-schema.js';
 import {sheetKey} from './narration-collect.js';
 import {noteProblem} from '../src/narration-notes.js';
-import {SYSTEM, prompt, grade, MODEL} from './narration-note-grade.js';
+import {SYSTEM, prompt, grade, MODEL, QUALITY_SYSTEM, qualityPrompt, gradeQuality} from './narration-note-grade.js';
 
 const args = process.argv.slice(2);
 const arg = (name, fallback = null) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback);
@@ -44,6 +46,17 @@ export function studentNote(outputs, roles, facts = null) {
 }
 
 
+const rubric = arg('--rubric', 'facts');
+const gate = Number(arg('--gate', 1));
+const pickArgs = args.flatMap((a, i) => (args[i - 1] === '--picks' ? [a] : [])).map((a) => a.split(/=(.*)/s).slice(0, 2));
+const picks = new Map(pickArgs.map(([name]) => [name, new Map()]));
+for (const [name, file] of pickArgs) {
+  const rows = [];
+  for await (const p of readLines(file)) if (p.text) rows.push(p);
+  rows.sort((a, b) => b.score - a.score);
+  // The game shows the most confident share (the bundle's threshold); the rest get the template.
+  for (const p of rows.slice(0, Math.round(rows.length * gate))) picks.get(name).set(p.key, p.text);
+}
 const sampleArgs = args.flatMap((a, i) => (args[i - 1] === '--samples' ? [a] : []));
 const students = sampleArgs.map((a, i) => (a.includes('=') ? a.split(/=(.*)/s).slice(0, 2) : [sampleArgs.length > 1 ? `student${i + 1}` : 'student', a]));
 const samples = new Map(students.map(([name]) => [name, new Map()]));
@@ -59,12 +72,13 @@ for await (const l of readLines(arg('--labels'))) {
   const text = cleanNote(l.text);
   haiku.set(sheetKey(facts), {facts, kind: l.kind, text, ok: noteOk(text)});
 }
-const names = [...samples.keys()];
+const names = [...samples.keys(), ...picks.keys()];
 const rows = [];
 for (const [key, h] of haiku) {
-  if (!names.every((n) => samples.get(n).has(key))) continue;
+  if (![...samples.keys()].every((n) => samples.get(n).has(key)) || ![...picks.keys()].every((n) => picks.get(n).has(key))) continue;
   const row = {key, kind: h.kind, facts: h.facts, haiku: h.ok ? h.text : null, template: fallbackNote(h.facts)};
-  for (const n of names) { const s = samples.get(n).get(key); row[n] = studentNote(s.outputs, s.roles, h.facts); }
+  for (const n of samples.keys()) { const s = samples.get(n).get(key); row[n] = studentNote(s.outputs, s.roles, h.facts); }
+  for (const n of picks.keys()) row[n] = picks.get(n).get(key);
   rows.push(row);
 }
 const kinds = [...new Set(rows.map((r) => r.kind))];
@@ -81,7 +95,8 @@ const per = Math.ceil(n / Math.max(1, kinds.length));
 const whos = [...names, 'haiku', 'template'];
 const pick = kinds.flatMap((k) => rows.filter((r) => r.kind === k && whos.every((w) => r[w])).slice(0, per)).slice(0, n);
 const jobs = pick.flatMap((r) => whos.map((who) => ({who, kind: r.kind, key: r.key, facts: r.facts, text: r[who]})));
-const inChars = jobs.reduce((a, j) => a + SYSTEM.length + prompt(j.facts, j.text).length, 0);
+const sys = rubric === 'quality' ? QUALITY_SYSTEM : SYSTEM, ask = rubric === 'quality' ? qualityPrompt : prompt;
+const inChars = jobs.reduce((a, j) => a + sys.length + ask(j.facts, j.text).length, 0);
 console.log(`judging ${pick.length} entities x ${whos.length} notes = ${jobs.length} grades; about $${((inChars / 3.1 * 0.10 + jobs.length * 30 * 0.50) / 1e6).toFixed(3)} at ${MODEL} prices`);
 if (!args.includes('--yes')) process.exit(0);
 
@@ -97,7 +112,7 @@ async function worker() {
   while (next < jobs.length) {
     const j = jobs[next++];
     try {
-      const g = await grade(client, j.facts, j.text);
+      const g = rubric === 'quality' ? await gradeQuality(client, j.facts, j.text) : await grade(client, j.facts, j.text);
       usage.input_tokens += g.tokens.input;
       usage.output_tokens += g.tokens.output;
       delete g.tokens;
@@ -115,6 +130,11 @@ for (const k of ['all', ...kinds]) {
     const rs = results.filter((r) => r.who === who && !r.error && (k === 'all' || r.kind === k));
     if (!rs.length) continue;
     const pct = (f) => `${(100 * rs.filter(f).length / rs.length).toFixed(1)}%`;
+    if (rubric === 'quality') {
+      const mean = rs.reduce((a, r) => a + r.score, 0) / rs.length;
+      console.log(`  ${who.padEnd(12)} n=${String(rs.length).padStart(3)}  mean ${mean.toFixed(2)}; good (4-5) ${pct((r) => r.score >= 4)}; bland (3) ${pct((r) => r.score === 3)}; poor (1-2) ${pct((r) => r.score <= 2)}`);
+      continue;
+    }
     console.log(`  ${who.padEnd(8)} n=${String(rs.length).padStart(3)}  grammar clean ${pct((r) => r.grammar === 'clean')}, broken ${pct((r) => r.grammar === 'broken')}; contradiction ${pct((r) => r.contradiction)}; specific ${pct((r) => r.specific)}`);
   }
 }
