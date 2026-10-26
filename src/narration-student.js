@@ -149,6 +149,8 @@ export function loadNarrationStudent(bundle, blob = null) {
     const n = triples.length, x = new Float32Array(n * e);
     let unk = 0;
     const factsText = [], agos = [];
+    // vocab.stance_who: a stance's lean token also carries its group's words, as the trainer.
+    const who = voc.stance_who ? new Map(triples.filter(([s, a, , , t]) => a === 'who' && t === 'text' && s.startsWith('stances:')).map(([s, , v]) => [s, v])) : null;
     triples.forEach(([scope, attr, value, num, type], r) => {
       const o = r * e, add = (vec, s = 1) => { for (let i = 0; i < e; i++) x[o + i] += vec[i] * s; };
       const parts = scope.split(/[:/]/).slice(0, 4).map((p) => sc.get(p) ?? UNK);
@@ -171,6 +173,12 @@ export function loadNarrationStudent(bundle, blob = null) {
         const id = va.get(`${type}:${value}`) ?? UNK;
         add(row('value', id));
         if (id === UNK) unk++;
+        const g = attr === 'lean' ? who?.get(scope) : undefined;
+        if (g) {
+          let ids = tok(g).map((t) => w.get(t) ?? UNK).slice(0, cfg.max_bag);
+          if (!ids.length) ids = [UNK];
+          for (const i of ids) add(row('word', i), 1 / ids.length);
+        }
       }
       if (num !== null && num !== undefined) add(row('num_dir', a), Number(num));
     });

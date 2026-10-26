@@ -218,6 +218,27 @@ Run on the 1,200 Haiku-judged quotes of §1h, scoring only the records each quot
 
 The model reads years 2–3× more but times past rulings no better, and seed 1 lost 8 points. **The input was not the bottleneck,** so the flag is off by default. Likely next: Haiku's own quotes and the template text rarely time a ruling, so there is little to learn from. Count how often passing quotes state a time, and whether it is right, before changing the model again. Runs: rrh-llm-1 `~/narration/year-*`.
 
+## 1k. Stances bound in one token: better on both seeds. Not shipped yet (25 October 2026)
+
+`--stance-who` (vocab `stance_who`) adds a stance's group words to its lean token: `stances:0 lean for` also carries the mean embedding of "farmers". The group is then in the same memory token as its lean, and the decoder no longer has to link two tokens. No new parameters. Mirrored in `src/narration-student.js` `encode`; bundles without the flag are unchanged. v2's setup (int8, no QAT, no year-ago), 600 held-out test cards, against v2's two seeds:
+
+| run | held-out loss | stance fact-fails | all fact-fails | top / any of 4 pass | lean read / bind (probe) |
+|---|---|---|---|---|---|
+| v2 seed 0 | 1.687 | 61 | 175 | 66.7 / 70.5% | 0.39 / 0.22 |
+| v2 seed 1 (shipped) | 1.672 | 62 | 172 | 65.7 / 70.5% | 1.42 / 0.16 |
+| **stance-who seed 0** | **1.679** | **48** | **159** | **69.7 / 75.0%** | **1.98 / 1.76** |
+| **stance-who seed 1** | **1.659** | **44** | **169** | **67.0 / 70.2%** | 0.95 / 0.48 |
+
+- **Stances bind:** exchanging two groups' leans now costs 3–11× more log-prob than in v2. Stance fact-fails fall by about a quarter on both seeds, and held-out loss improves on both.
+- **Other faults are unchanged,** as expected: rulings, timing and counts. On seed 1, rulings dropped and counts rose.
+- **Bundles** (`export-narration-student.py`, int8, same size as v2):
+  - Parity: 23/24 (seed 0) and 24/24 (seed 1); 18 of the 24 fixture cards have two or more stances.
+  - Shown on 100 held-out cards: 78 and 73 (v2: 76).
+  - Median latency: 34 ms and 131 ms (v2: 127). Seed 0's quality head trusts its first candidate more often, so it skips the beam.
+- **Not yet judged by Haiku** for contradictions (v2: 19.7% on 300 quotes). Judging seed 0's runtime quotes the same way would cost about $0.04 and is the check before shipping.
+- Runs: rrh-llm-1 `~/narration/who-s*`. Bundles are in that session's scratchpad (`bundles/who-s*.json`).
+- The same idea could carry a past ruling's `what` words into its act token. Rulings are now the largest fault (54–66 of 159–169).
+
 ## 1j. Side results: speed, and an int4 decision student (25 October 2026)
 
 **Would WebAssembly help?** Measured with hand-assembled WASM kernels on narration v2's layer shapes (515K multiply-adds per beam step, Node 24, M-series Mac):

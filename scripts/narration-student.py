@@ -14,6 +14,8 @@ state_layers=0):
            free text comes in as the mean of its words' embeddings (the output word table).
            Scopes are paths ("options:do/effects:0"), so their parts are summed. A list
            item's year also adds a closed "years ago" part (ago:0 … ago:11+, vocab year_ago).
+           With vocab stance_who, a stance's lean token also carries its group's words
+           ("stances:0 lean for" + "farmers"), so who-holds-what sits in one token.
   decoder  a causal transformer over the text, started by a task token, cross-attending to
            the memory. The output layer is tied to the word table. Role tokens are ordinary
            words, so names and numbers are never spelled, only placed.
@@ -165,7 +167,7 @@ def split_rows(rows, held_out, n_val):
     return part, sorted(val)
 
 
-def build_vocab(train, bpe=None, records=False, year_ago=False):
+def build_vocab(train, bpe=None, records=False, year_ago=False, stance_who=False):
     words, scopes, attrs, values = Counter(), Counter(), Counter(), Counter()
     for r in train:
         if not bpe:
@@ -185,7 +187,7 @@ def build_vocab(train, bpe=None, records=False, year_ago=False):
         vocab_words = SPECIALS + [w for w in dict.fromkeys(roles + bpe['symbols']) if w not in SPECIALS]
     else:
         vocab_words = SPECIALS + [w for w in keep(words, 3) if w not in SPECIALS]
-    return {'words': vocab_words, **({'record_scopes': True} if records else {}), **({'year_ago': True} if year_ago else {}), **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
+    return {'words': vocab_words, **({'record_scopes': True} if records else {}), **({'year_ago': True} if year_ago else {}), **({'stance_who': True} if stance_who else {}), **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
             'scopes': ['<pad>', '<unk>'] + keep(scopes, 1), 'attrs': ['<pad>', '<unk>'] + keep(attrs, 1),
             'values': ['<pad>', '<unk>'] + keep(values, 3), 'tasks': ['card.quote', 'card.option']}
 
@@ -201,6 +203,7 @@ class Codec:
         self.bpe = BPE(vocab['bpe']) if 'bpe' in vocab else None
         self.records = bool(vocab.get('record_scopes'))
         self.year_ago = bool(vocab.get('year_ago'))
+        self.stance_who = bool(vocab.get('stance_who'))
         self.tok = self.bpe.tokens if self.bpe else tokens
         self.detok = BPE.detok if self.bpe else detok
         self.max_bag = 40 if self.bpe else MAX_BAG
@@ -232,6 +235,9 @@ class Codec:
         """compact: numpy arrays only, no bans and no row (training rows; memory matters)."""
         sc, at, va, bag, num, hasn, unk = [], [], [], [], [], [], 0
         facts_text, agos = [], []
+        # A stance's group, to fold into its lean token (stance_who): the model read leans but
+        # did not tie them to their groups across tokens (handoff 1i).
+        who = {sc: v for sc, at, v, _, ty in r['triples'] if at == 'who' and ty == 'text' and sc.startswith('stances:')} if self.stance_who else {}
         for scope, attr, value, n, typ in r['triples']:
             parts = [self.sc.get(p, 1) for p in re.split(r'[:/]', scope)][:4]
             if self.records and ':' in scope:
@@ -251,7 +257,8 @@ class Codec:
             else:
                 vid = self.va.get(f'{typ}:{value}', 1)
                 va.append(vid)
-                bag.append([])
+                g = who.get(scope) if attr == 'lean' else None
+                bag.append(([self.w.get(t, UNK) for t in self.tok(g)][:self.max_bag] or [UNK]) if g else [])
                 unk += vid == 1
             num.append(float(n) if n is not None else 0.0)
             hasn.append(1.0 if n is not None else 0.0)
@@ -566,6 +573,7 @@ def main():
     ap.add_argument('--qat', type=int, choices=[0, 4, 8], default=4, help='quantization-aware fine-tuning for this export width (0: off)')
     ap.add_argument('--qat-group', type=int, default=32)
     ap.add_argument('--record-scopes', action='store_true', help='add a token per list item ("past:0"); hurt fact accuracy in v3')
+    ap.add_argument('--stance-who', action='store_true', help="fold each stance's group words into its lean token")
     ap.add_argument('--year-ago', action='store_true', help='add a closed "years ago" part to list items\' years; read 2-3x more, no gain (handoff 1i)')
     ap.add_argument('--bpe', help='subword vocabulary from scripts/narration-bpe.py (default: whole words)')
     ap.add_argument('--load', help='a trained run dir: skip training and only quote cards with its model')
@@ -583,7 +591,7 @@ def main():
     val = set([s for s in sorted(seeds, key=h) if s not in held][: a.val_seeds])
     val_seeds = sorted(val)
     is_train = lambda r: r['source'] != 'prompt' and part_of(r, held, val) == 'train'
-    vocab = json.load(open(f'{a.load}/vocab.json')) if a.load else build_vocab((r for r in stream(a.rows) if is_train(r)), json.load(open(a.bpe)) if a.bpe else None, a.record_scopes, a.year_ago)
+    vocab = json.load(open(f'{a.load}/vocab.json')) if a.load else build_vocab((r for r in stream(a.rows) if is_train(r)), json.load(open(a.bpe)) if a.bpe else None, a.record_scopes, a.year_ago, a.stance_who)
     C = Codec(vocab)
     pre, fine, held_ex, prompts, counts = [], [], {'val': [], 'test': []}, {'val': [], 'test': []}, Counter()
     for r in stream(a.rows):
