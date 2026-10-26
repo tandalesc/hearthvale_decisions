@@ -183,6 +183,70 @@ v3 shows a few more cards but makes more fact errors. Two follow-ups, judged the
 
 At 300 judged quotes each number is about ±2.5 points. int4 costs a few points against int8, record tokens perhaps one more, and the fact-clean filter shows no gain. Record tokens are now off by default (`--record-scopes`). To separate these properly, judge about 1,000 quotes per model (about 10 cents each) across both seeds. The three changes and int4 are confounded. Next: train v3 at int8 (`--qat 0`), and record tokens alone, to see which change hurts. Test pass rates, before pruning: v3 62.8% and 60.5% top, against 65.7% for v2.
 
+## 1i. A binding probe, and readable years. Not shipped (25 October 2026)
+
+**The probe** (`scripts/narration-probe.py`) measures, without generating or judging anything, how a model's belief in a quote depends on which record holds which fact.
+- It teacher-forces a quote through a checkpoint, then moves the card's 64-d triple embeddings (before `up` and the layer norm) along a direction, `x + α·(x_swapped − x)`, at α = 0.25 … 1, and takes the slope at 0.
+- **Exchange:** two records of one kind swap a value (two stances' leans, two past rulings' acts or years, two of the approved/refused/deferred counts). The card's set of values is unchanged; only who holds what changes.
+- **Read control:** one record's value changes, with no exchange.
+- It runs on CPU in about two minutes per model for 1,200 quotes, and rounds weights as the export does (`--bits 8|4`).
+
+Run on the 1,200 Haiku-judged quotes of §1h, scoring only the records each quote mentions (log-prob drop in nats at α = 1; higher means more sensitive):
+
+| | read | exchange (bind) |
+|---|---|---|
+| stance lean | 1.1–1.5 | 0.12–0.30 |
+| past ruling's act | 0.8–1.0 | 0.65–0.76 |
+| past ruling's year | **0.04–0.09** | **≈ 0.00** |
+
+- **Stance leans are read but barely bound:** the model knows which leans the card has, not which group holds which. This is the "makers are for it… makers are not moved" fault.
+- **Past rulings' years were ignored outright.** The year triple's value is a role token (`<past:2.year>`), so the only time signal was a log-scaled offset on one shared `num_dir[year]` direction.
+- **Rounding:** v2 rounded to int4 after training loses lean reading (1.42 → 1.18) and act binding (0.76 → 0.66). QAT keeps both.
+- **Halfway blends score worse than a straight line** between the ends, so gradients at α = 0 mislead. Use the discrete swaps.
+- **Against the judge:**
+  - Per quote, the probe adds almost nothing to log-prob as a contradiction detector (cross-validated AUC 0.665 → 0.674).
+  - Per model, lean read sensitivity orders the four judged models as the judge did: v2 1.42, QAT 1.34, v4 1.08, v3 0.13 against 19.7 / 22.7 / 24.7 / 26.0% contradicted. Four points only.
+  - It predicts that scale-s0 (0.39) contradicts more than v2 and v3 seed 1 (0.87) less than seed 0. Judging those two would test it (about $0.07); not done.
+
+**Readable years** (`--year-ago`, vocab `year_ago`): a list item's year field also adds a closed scope part, `ago:0` … `ago:5`, `ago:6-10`, `ago:11+`, derived in the codec from the existing offset (Python `years_ago`/`ago_part`, JS `yearsAgo`/`agoPart`; they agree on all 37,272 year triples of the test cards). With it, number words for those offsets are allowed ("three years ago"). Bundles without the flag (v2) are unchanged, and the parity test passes. Trained with v2's setup, 652,848 parameters:
+
+| run | held-out loss | test top / any pass | timed past rulings with the time wrong | year read / bind |
+|---|---|---|---|---|
+| v2 seed 0 / seed 1 | 1.687 / 1.672 | 66.7 / 70.5; 65.7 / 70.5 | 9.7% / 14.4% | 0.04–0.08 / 0.00 |
+| year-ago seed 0 / seed 1 | 1.683 / 1.682 | 66.0 / 71.2; 57.7 / 63.8 | 13.1% / 13.1% | 0.21, 0.14 / 0.04–0.05 |
+| QAT int4 seed 1: v2 / year-ago | 1.693 / 1.707 | 62.7 / 67.2; 60.3 / 65.0 | 12.0% / 11.4% | 0.08 / 0.13 |
+
+The model reads years 2–3× more but times past rulings no better, and seed 1 lost 8 points. **The input was not the bottleneck,** so the flag is off by default. Likely next: Haiku's own quotes and the template text rarely time a ruling, so there is little to learn from. Count how often passing quotes state a time, and whether it is right, before changing the model again. Runs: rrh-llm-1 `~/narration/year-*`.
+
+## 1j. Side results: speed, and an int4 decision student (25 October 2026)
+
+**Would WebAssembly help?** Measured with hand-assembled WASM kernels on narration v2's layer shapes (515K multiply-adds per beam step, Node 24, M-series Mac):
+
+| matmul kernel | µs per beam step | vs today |
+|---|---|---|
+| JS float (`linFlat`) | 362 | 1× |
+| WASM f32x4 SIMD | 36 | 10.1× |
+| WASM int8 dot (`i32x4.dot_i16x8_s`), activations quantized per call | 33 | 11.1× |
+
+- **Narration:** 93% of a quote's time is the network's math (profile of 100 held-out cards): weight matmuls ~60–65%, attention ~24%. Moving all of it would give an estimated 4–6× per quote (140 ms → 25–35 ms), not measured.
+- **Decision student:** about 23% of a 40-year town's wall time (0.7 of 3.0 s, ~31 µs per answer). At most a 1.3× faster sim, and float SIMD reorders sums, which breaks the bit-identical town hashes.
+- int4 storage does not speed anything up today: both runtimes expand weights to float32 at load.
+
+**An int4 decision student (v8 candidate).** v7's training data is on this Mac: the Cloudflare bootstrap staging folder, `data/strike-training/bootstrap-v7-isolated-r2/assets/`, stores it gzipped by sha256 (`config.json` maps paths to hashes). It holds `train-a.jsonl`, `onpolicy-1.jsonl`, the novel rows for v2–v7, `realplay-test.jsonl` and the gate questions. The shipped v7 is the `v7-isolated` run; `data/strike-training/v7/` is the rejected full fine-tune.
+- int4 QAT (groups of 32 = one fp16 scale per row, as the narration export) from v7's float weights on the trainer's train towns, with each candidate saved with its rounded weights and scored by the loop's own `eval_decision_student.py`:
+
+| candidate | test KL (47,548 rows) | real-play KL: per question / by traffic |
+|---|---|---|
+| v7, int8 (shipped) | 0.02033 | 0.01990 / 0.01092 |
+| int4 after training | 0.02622 | 0.02551 / 0.01749 |
+| int4 QAT, 4 epochs (2 min, CPU) | 0.02075 | 0.02055 (+3.3%) / 0.01122 (+2.8%) |
+| int4 QAT, 10 epochs | 0.02044 | 0.02018 (+1.4%) / 0.01133 (+3.8%) |
+
+- **It sits on the loop's 3% gate:** each run fails one of the two real-play limits. No busy kind fails its own limit (worst: petition, +11%).
+- **Size:** weights 144 → ~67 KB; bundle ~220 KB on disk as header + `.bin` (365 KB now), ~90 KB gzipped (172 KB).
+- **Next:** weight the QAT loss by traffic share, as the gate does, then rerun the canary towns. Shipping needs an int4 branch in `src/decision-student.js` `decodeWeight` and in `export_decision_student.py`.
+- Scripts and runs are in that session's scratchpad (`dec_int4b.py`, `dec-runs*/`), not in the repo.
+
 ## 2. What we learned
 
 - **The game only asks the narrator for two things today:** Council card quotes (`card.why`, on request from the open view) and inspector notes for people, households, buildings and bodies. The prose keeper never asks for year or end-page prose (`createProseKeeper` in `src/narrator-client.js` has no clock-driven work).

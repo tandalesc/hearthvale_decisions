@@ -98,6 +98,19 @@ function decodeBinary(meta, blob) {
   return out;
 }
 
+// A list item's year field -> years before the sheet's year, else null. As the trainer: the
+// triple's num is the offset scaled by narration-features.js (sign·ln(1+|x|) past 1), which the
+// model did not read; bundles with vocab.year_ago add a closed "ago:N" scope part instead.
+const YEAR_ATTRS = new Set(['year', 'since', 'from', 'to']);
+function yearsAgo(scope, attr, num, type) {
+  if (type !== 'num' || !YEAR_ATTRS.has(attr) || num === null || num === undefined || !scope.includes(':')) return null;
+  const x = Math.abs(Number(num)), k = pyRound(x <= 1 ? x : Math.expm1(x));
+  return Number(num) > 0 ? -k : k;
+}
+// Python's round(): halves to even.
+const pyRound = (v) => { const f = Math.floor(v), d = v - f; return d > 0.5 || (d === 0.5 && f % 2 === 1) ? f + 1 : f; };
+const agoPart = (k) => (k < 0 ? 'ago:ahead' : k <= 5 ? `ago:${k}` : k <= 10 ? 'ago:6-10' : 'ago:11+');
+
 // bundle: the JSON header; blob: the weights file's bytes (ArrayBuffer) when the header names one.
 export function loadNarrationStudent(bundle, blob = null) {
   if (bundle?.format !== NARRATION_STUDENT_FORMAT) throw new Error('Not a narration student bundle');
@@ -135,11 +148,17 @@ export function loadNarrationStudent(bundle, blob = null) {
   function encode(triples, roles) {
     const n = triples.length, x = new Float32Array(n * e);
     let unk = 0;
-    const factsText = [];
+    const factsText = [], agos = [];
     triples.forEach(([scope, attr, value, num, type], r) => {
       const o = r * e, add = (vec, s = 1) => { for (let i = 0; i < e; i++) x[o + i] += vec[i] * s; };
-      for (const p of scope.split(/[:/]/).slice(0, 4)) add(row('scope', sc.get(p) ?? UNK));
-      if (voc.record_scopes && scope.includes(':')) add(row('scope', sc.get(scope) ?? UNK));
+      const parts = scope.split(/[:/]/).slice(0, 4).map((p) => sc.get(p) ?? UNK);
+      if (voc.record_scopes && scope.includes(':')) parts.push(sc.get(scope) ?? UNK);
+      const k = voc.year_ago ? yearsAgo(scope, attr, num, type) : null;
+      if (k !== null) {
+        parts.push(sc.get(agoPart(k)) ?? UNK);
+        agos.push(k);
+      }
+      for (const p of parts.slice(0, 5)) add(row('scope', p));
       const a = at.get(attr) ?? UNK;
       add(row('attr', a));
       if (type === 'text') {
@@ -158,7 +177,7 @@ export function loadNarrationStudent(bundle, blob = null) {
     const mem = lnFlat(linFlat(x, n, e, W['up.weight'].data, null, d), n, d, W, 'state_norm');
 
     // What this card may not say.
-    const nums = new Set([0, 1, 2]);
+    const nums = new Set([0, 1, 2, ...agos.filter((k) => k > 0 && k <= 12)]);   // "three years ago" when it was
     for (let t of [...factsText, ...Object.values(roles)].join(' ').split(/\s+/)) {
       t = t.replace(/^[.,;:!?]+|[.,;:!?]+$/g, '').replace(/,/g, '');
       if (/^\d+$/.test(t)) nums.add(Number(t));

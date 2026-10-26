@@ -12,7 +12,8 @@ state_layers=0):
   memory   one token per triple: scope + attribute + value + num * num_dir[attribute],
            layer-normed, no encoder. Values are closed tables (enums, role tokens, numbers);
            free text comes in as the mean of its words' embeddings (the output word table).
-           Scopes are paths ("options:do/effects:0"), so their parts are summed.
+           Scopes are paths ("options:do/effects:0"), so their parts are summed. A list
+           item's year also adds a closed "years ago" part (ago:0 … ago:11+, vocab year_ago).
   decoder  a causal transformer over the text, started by a task token, cross-attending to
            the memory. The output layer is tied to the word table. Role tokens are ordinary
            words, so names and numbers are never spelled, only placed.
@@ -51,6 +52,24 @@ NUMBER_WORDS = {'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight':
 DRAMA = {'starve', 'starving', 'starvation', 'die', 'dies', 'dying', 'dead', 'death', 'deaths', 'riot', 'riots',
          'famine', 'plague', 'war', 'burn', 'burning', 'murder', 'ruin', 'ruined', 'collapse', 'hungrier', 'survive'}
 MAX_TGT, MAX_BAG = 112, 24
+YEAR_ATTRS = {'year', 'since', 'from', 'to'}
+
+
+def years_ago(scope, attr, n, typ):
+    """A list item's year field -> how many years before the sheet's year, else None. The
+    triple's num is the offset, scaled as narration-features.js scales it (sign·ln(1+|x|)
+    past 1), which the model barely reads (handoff 1i); with the vocab's `year_ago` the codec
+    also adds a closed value to the triple's scope parts ("ago:2"). Off by default: the
+    model read years 2-3x more but timed past rulings no better."""
+    if typ != 'num' or attr not in YEAR_ATTRS or n is None or ':' not in scope:
+        return None
+    x = abs(float(n))
+    k = round(x if x <= 1 else math.expm1(x))
+    return -k if n > 0 else k
+
+
+def ago_part(k):
+    return 'ago:ahead' if k < 0 else f'ago:{k}' if k <= 5 else 'ago:6-10' if k <= 10 else 'ago:11+'
 
 
 def tokens(text):
@@ -146,7 +165,7 @@ def split_rows(rows, held_out, n_val):
     return part, sorted(val)
 
 
-def build_vocab(train, bpe=None, records=False):
+def build_vocab(train, bpe=None, records=False, year_ago=False):
     words, scopes, attrs, values = Counter(), Counter(), Counter(), Counter()
     for r in train:
         if not bpe:
@@ -155,6 +174,8 @@ def build_vocab(train, bpe=None, records=False):
             scopes.update(re.split(r'[:/]', scope))
             if records and ':' in scope:
                 scopes[scope] += 1   # the record itself ("past:0"); off by default: it hurt (handoff 1h)
+            if year_ago and (k := years_ago(scope, attr, num, typ)) is not None:
+                scopes[ago_part(k)] += 1
             attrs[attr] += 1
             if typ != 'text':
                 values[f'{typ}:{value}'] += 1
@@ -164,7 +185,7 @@ def build_vocab(train, bpe=None, records=False):
         vocab_words = SPECIALS + [w for w in dict.fromkeys(roles + bpe['symbols']) if w not in SPECIALS]
     else:
         vocab_words = SPECIALS + [w for w in keep(words, 3) if w not in SPECIALS]
-    return {'words': vocab_words, **({'record_scopes': True} if records else {}), **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
+    return {'words': vocab_words, **({'record_scopes': True} if records else {}), **({'year_ago': True} if year_ago else {}), **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
             'scopes': ['<pad>', '<unk>'] + keep(scopes, 1), 'attrs': ['<pad>', '<unk>'] + keep(attrs, 1),
             'values': ['<pad>', '<unk>'] + keep(values, 3), 'tasks': ['card.quote', 'card.option']}
 
@@ -179,6 +200,7 @@ class Codec:
         self.tk = {t: i for i, t in enumerate(vocab['tasks'])}
         self.bpe = BPE(vocab['bpe']) if 'bpe' in vocab else None
         self.records = bool(vocab.get('record_scopes'))
+        self.year_ago = bool(vocab.get('year_ago'))
         self.tok = self.bpe.tokens if self.bpe else tokens
         self.detok = BPE.detok if self.bpe else detok
         self.max_bag = 40 if self.bpe else MAX_BAG
@@ -209,11 +231,15 @@ class Codec:
     def example(self, r, compact=False):
         """compact: numpy arrays only, no bans and no row (training rows; memory matters)."""
         sc, at, va, bag, num, hasn, unk = [], [], [], [], [], [], 0
-        facts_text = []
+        facts_text, agos = [], []
         for scope, attr, value, n, typ in r['triples']:
             parts = [self.sc.get(p, 1) for p in re.split(r'[:/]', scope)][:4]
             if self.records and ':' in scope:
                 parts.append(self.sc.get(scope, 1))
+            if self.year_ago and (k := years_ago(scope, attr, n, typ)) is not None:
+                parts.append(self.sc.get(ago_part(k), 1))
+                agos.append(k)
+            parts = parts[:5]
             sc.append(parts + [0] * (5 - len(parts)))
             at.append(self.at.get(attr, 1))
             if typ == 'text':
@@ -231,7 +257,7 @@ class Codec:
             hasn.append(1.0 if n is not None else 0.0)
         tgt = [self.w.get(t, UNK) for t in self.tok(r['target'])][: MAX_TGT - 1] + [EOS] if r['target'] else [EOS]
         # What this card may not say: roles it lacks, numbers and dramatic words its facts lack.
-        nums = {0, 1, 2}
+        nums = {0, 1, 2} | {k for k in agos if 0 < k <= 12}   # "three years ago" when it was
         for t in ' '.join(facts_text + list(r.get('roles', {}).values())).split():
             t = t.strip('.,;:!?').replace(',', '')
             if t.isdigit():
@@ -540,6 +566,7 @@ def main():
     ap.add_argument('--qat', type=int, choices=[0, 4, 8], default=4, help='quantization-aware fine-tuning for this export width (0: off)')
     ap.add_argument('--qat-group', type=int, default=32)
     ap.add_argument('--record-scopes', action='store_true', help='add a token per list item ("past:0"); hurt fact accuracy in v3')
+    ap.add_argument('--year-ago', action='store_true', help='add a closed "years ago" part to list items\' years; read 2-3x more, no gain (handoff 1i)')
     ap.add_argument('--bpe', help='subword vocabulary from scripts/narration-bpe.py (default: whole words)')
     ap.add_argument('--load', help='a trained run dir: skip training and only quote cards with its model')
     a = ap.parse_args()
@@ -556,7 +583,7 @@ def main():
     val = set([s for s in sorted(seeds, key=h) if s not in held][: a.val_seeds])
     val_seeds = sorted(val)
     is_train = lambda r: r['source'] != 'prompt' and part_of(r, held, val) == 'train'
-    vocab = json.load(open(f'{a.load}/vocab.json')) if a.load else build_vocab((r for r in stream(a.rows) if is_train(r)), json.load(open(a.bpe)) if a.bpe else None, a.record_scopes)
+    vocab = json.load(open(f'{a.load}/vocab.json')) if a.load else build_vocab((r for r in stream(a.rows) if is_train(r)), json.load(open(a.bpe)) if a.bpe else None, a.record_scopes, a.year_ago)
     C = Codec(vocab)
     pre, fine, held_ex, prompts, counts = [], [], {'val': [], 'test': []}, {'val': [], 'test': []}, Counter()
     for r in stream(a.rows):
