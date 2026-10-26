@@ -382,6 +382,25 @@ The user cares more about a note being pertinent and good than about contradicti
 - Saved notes and the student's input (triples, not lines) are unchanged.
 - **Next:** regrade the v2 head's validation candidates with the corrected rubric and retrain the head (about $0.35).
 
+## 1p. Notes v3: the corrected rubric's head, and a real no-repeat (26 October 2026)
+
+Follow-up to §1o's correction: with the needs lines reading the right way round, the v2 head's grades were suspect, so the validation candidates were regraded and the head retrained.
+
+- **A real no-repeat.** v2's `--no-repeat` only banned a repeated word spelled by *one* BPE piece; the same word re-spelled by several pieces got through ("I'd love some company … more company" survives as pieces). The beam (trainer `repeats_word`, runtime `repeatsWord`) now drops a beam once it *finishes* a content word it has already used, however many pieces spell it. With repeating beams dropped the survivors run longer, and batches of 64 cards ran out of GPU memory at beam 8 on this Mac; the trainer's new `--eval-batch` (16 here) fixes that.
+- **Regrade.** 4,187 validation-town candidates pass the rule checks; grading them with the corrected rubric cost $0.33. 42.7% score 4–5 (was 31.5% under the backwards-needs rubric). The head was retrained on these grades; 562 of 600 test entities have a candidate that passes the rules.
+- **Judged** on 331 test entities, every source graded with the corrected rubric ($0.12; each student's note is its head's pick among rule-passing candidates):
+
+| | mean | good (4–5) | poor (1–2) |
+|---|---|---|---|
+| Haiku (Plus) | 3.48 | 57% | 11% |
+| **notes v3** | **3.38** | **53%** | **17%** |
+| notes v2 (live) | 3.37 | 52% | 17% |
+| template | 2.68 | 18% | 48% |
+
+- Plus on Fast (Haiku for the least confident 20%): 3.44 mean, 55% good, 13% poor.
+- By kind, v3 / v2 / Haiku / template: people 3.03 / 3.00 / 2.97 / 2.39; households 3.73 / 3.77 / 3.78 / 3.37; buildings 3.61 / 3.57 / 3.64 / 2.83; bodies 2.91 / 2.88 / 3.20 / 1.94. Bodies remain the gap to Haiku.
+- **Shipped as notes v3** (`public/students/notes/notes.v3.json`, 97 KB header sharing `notes.v1.bin`; 652,740 parameters; beam 8, `no_repeat`, threshold 0.0015 = most confident 80%; manifest latest 3): same weights as v1/v2, the fixed decoding and the new head. Parity 24/24; `note()` has a pick for 23 of the 24 fixture cards; median 165 ms, p90 213 ms in Node.
+
 ## 1j. Side results: speed, and an int4 decision student (25 October 2026)
 
 **Would WebAssembly help?** Measured with hand-assembled WASM kernels on narration v2's layer shapes (515K multiply-adds per beam step, Node 24, M-series Mac):

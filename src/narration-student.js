@@ -113,6 +113,15 @@ const pyRound = (v) => { const f = Math.floor(v), d = v - f; return d > 0.5 || (
 const agoPart = (k) => (k < 0 ? 'ago:ahead' : k <= 5 ? `ago:${k}` : k <= 10 ? 'ago:6-10' : 'ago:11+');
 
 // Function words a note may repeat (config no_repeat; the trainer's REPEATABLE).
+const repeatsWord = (words) => {
+  const seen = new Set();
+  for (const w of words) {
+    if (w.length < 5 || !/^[a-z]+$/.test(w) || REPEATABLE.has(w)) continue;
+    if (seen.has(w)) return true;
+    seen.add(w);
+  }
+  return false;
+};
 const REPEATABLE = new Set(['their', 'there', 'these', 'those', 'which', 'would', 'could', 'should', 'about', 'other', 'still', 'while', 'where', 'being', 'after', 'again', 'every', 'since', 'under', 'because', 'though', 'through', 'before', 'never', 'always', 'right']);
 
 // bundle: the JSON header; blob: the weights file's bytes (ArrayBuffer) when the header names one.
@@ -304,6 +313,12 @@ export function loadNarrationStudent(bundle, blob = null) {
         const child = {toks: [...p.toks, o.tok], score: o.s, sumLp: p.sumLp + tokLp, minLp: Math.min(p.minLp, tokLp),
           sumEnt: p.sumEnt + p.out.ent, sumH: p.sumH.map((v, i) => v + p.out.h[i])};
         if (check && o.tok !== EOS && /[.!?]$/.test(voc.words[o.tok]) && check(untok(child.toks.map((i) => voc.words[i])))) continue;
+        // no_repeat: drop a beam once it finishes a word it has used, however many pieces
+        // spell it (the ban above only catches a one-token word), as the trainer decodes.
+        if (noRepeat) {
+          const ws = wordsOf(child.toks.filter((x) => x !== EOS));
+          if (repeatsWord(o.tok === EOS || t === maxT - 1 ? ws : ws.slice(0, -1))) continue;
+        }
         if (o.tok === EOS || t === maxT - 1) finished.push({...child, norm: o.s / child.toks.length ** alpha});
         else {
           // The first child takes its parent's cache; others copy only the rows filled so far.
