@@ -163,3 +163,21 @@ test('settings reports the narrator: hosted for Plus, else the student once it h
   assert.equal(narrationLabel(null), 'Off');
   assert.equal(narrationLabel(undefined), '–');
 });
+
+test('role tokens, version 2: a token per number fact, the sheet\'s own fields first, a build year, number words', () => {
+  const triples = [
+    ['building', 'year', '74', 0, 'num'], ['building', 'age', '6', 1.95, 'num'],
+    ['building', 'origin', 'built in year 65, for a new business', null, 'text'],
+    ['rules:0', 'since', '65', -2.3, 'num'], ['rulings:0', 'year', '6', -4, 'num'],
+  ];
+  const v1 = roleTriples(triples);
+  assert.equal(v1.triples[2][2], 'built in year <rules:0.since>, for a new business', 'version 1 as shipped: the first holder of 65');
+  const {triples: t, roles} = roleTriples(triples, {version: 2});
+  assert.equal(t.find((x) => x[1] === 'origin')[2], 'built in year <building.origin#0>, for a new business', 'a text\'s numbers are its own');
+  assert.ok(t.some((x) => x[1] === 'built_year' && x[2] === '<building.built_year>') && roles['<building.built_year>'] === '68');
+  assert.equal(roles['<rulings:0.year>'], '6', 'a list item keeps its own token for a shared value');
+  const note = 'Built in year 68, it has stood six years.';
+  const d = delex(note, roles);
+  assert.equal(d, 'Built in year <building.built_year>, it has stood <building.age:w> years.', 'the sheet\'s own fields win; number words too');
+  assert.equal(relex(d, roles), note);
+});

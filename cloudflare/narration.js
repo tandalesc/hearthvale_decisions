@@ -1,5 +1,6 @@
 // Web API only: the public route accepts bounded simulation facts, never prompts.
 import {validateFacts, factLines} from '../src/narrative-schema.js';
+import {cleanNote, noteOk} from '../src/narration-notes.js';
 import {validateProseFacts, CHECKS, FALLBACKS} from '../src/narrative-prose.js';
 export const DEFAULT_NARRATION_MODEL = 'claude-haiku-5-5';
 export const MAX_NARRATION_BYTES = 12000;
@@ -87,23 +88,9 @@ export function narrationSystem(facts) {
 export const noteMessage = (facts) => factLines(facts).join('\n');
 export const NOTE_MAX_TOKENS = 180;
 
-// A note Haiku wrapped whole in quotation marks ("We are glad of the spring.") loses the
-// marks; one that only starts and ends with a quote ("We're short," they say. "We stay.")
-// is left as it is. Without this the worker refused most person and household notes for not
-// ending a sentence. partial: a streamed preview, whose closing mark has not arrived yet.
-export function cleanNote(text, {partial = false} = {}) {
-  const t = String(text ?? '').trim();
-  const whole = /^["“]([^"“”]*)["”]$/.exec(t);
-  if (whole) return whole[1].trim();
-  if (partial) { const open = /^["“]([^"“”]*)$/.exec(t); if (open) return open[1].trim(); }
-  return t;
-}
-
-// Whether a finished inspector note is shown (else the client keeps its template note).
-export function noteOk(text) {
-  text = String(text ?? '').trim();
-  return !!text && text.length <= 420 && text.split(/\s+/).length <= 60 && (text.match(/[.!?]+/g) ?? []).length <= 2 && /[.!?]$/.test(text);
-}
+// cleanNote (a note quoted whole is unwrapped) and noteOk (whether a finished note is shown)
+// live in src/narration-notes.js, shared with the narration student's runtime.
+export {cleanNote, noteOk};
 
 export async function narrateAnthropic(facts, env, {signal, fetcher = globalThis.fetch, onToken, onDiagnostic, onPreview} = {}) {
   // Validate again at the provider boundary, including direct callers.

@@ -278,6 +278,41 @@ The model reads years 2–3× more but times past rulings no better, and seed 1 
 - **Next:** a `noteProblem` check, then about 2× the labels (~$0.90 per 25K).
 - Runs: rrh-llm-1 `~/narration/note-*`. Data and judge files: that session's scratchpad (`notes-batch/`, `notes-*.jsonl`, `judge-note-*.jsonl`).
 
+## 1m. Notes v3: twice the labels, per-fact number tokens, template pretraining (26 October 2026)
+
+**More labels.** A second batch of 25,000 entity sheets ($0.85; `build --notes --skip FIRST/manifest.jsonl` keeps it apart from the first) doubles the fine-tuning notes to 32,384. The 600 held-out entities are the same.
+- Note loss: v1 1.407; v1 trained twice as long 1.343; v2 (2× data, same compute as the long run) 1.241.
+- Grammar improved (clean 75% → 81%) but contradictions did not (37% → 38%).
+- The judge, now asked to name the wrong words, put 49 of 78 building and body errors on years and ages.
+
+**Role tokens, version 2** (`roleTriples(triples, {version: 2})`, `--roles 2` in the exporter; card bundles keep version 1, checked identical on 1,000 entity and 1,500 card sheets):
+- Version 1 gave a number to the first triple holding it: a windmill's "built in year 65" read `<rules:0.since>` because a town rule dated from 65, and other years stayed digits.
+- Version 2 gives every number its own token: a field's (`<building.age>`) or a text's (`<building.origin#0>`). A number in a target is read as the build year first, then the sheet's own fields, then its texts, then list items.
+- A building's build year (year less age) is a new triple and token.
+- Number words from two to twenty match a token's word form (`<building.age:w>` → "six"); 786 of 5,000 notes use one.
+- Round trip: 4,992 of 5,000 notes.
+- The trainer's vocabulary now adds role tokens the BPE file's list lacks (306 roles, was 140); without that the new tokens were unknown.
+
+**Template pretraining** (`--note-templates 50000 --held-out ...`): 50,000 template notes (`fallbackNote`) of training-town sheets as pretraining rows, true to their facts by construction. Fine-tuning is on Haiku's notes only.
+
+**Judge** (255 held-out entities, each student's note being the first candidate that passes the game's rules and `noteProblem`, $0.11):
+
+| | grammar clean / broken | contradicts the facts | specific | buildings / bodies / households / people contradicted |
+|---|---|---|---|---|
+| Haiku (Plus) | 96% / 0% | 20.5% | 85% | 28 / 30 / 9 / 7% |
+| template (free) | 75% / 9% | 13.0% | 53% | 25 / 12 / 7 / 3% |
+| v2 (2× data) | 81% / 1.2% | 38.3% | 79% | 62 / 44 / 22 / 7% |
+| v2 + role tokens v2 | 92% / 0.8% | 29.6% | 85% | 41 / 47 / 7 / 13% |
+| **v2 + role tokens v2 + template pretraining** | 90% / 0.4% | **26.7%** | 85% | 35 / 45 / 8 / 7% |
+
+- Households and people are now on par with Haiku; buildings are close.
+- Bodies are the gap: 17 of their 33 errors are which budget or ask was approved when ("backed the Green Ward budget every year since year 111"), and 7 are a misplaced "dissolved".
+- Next: the card fact check's ruling rules (`factProblem`: act and timing of a past ruling) adapted to a body's `rulings`, added to `noteProblem`.
+
+**`noteProblem`** (`src/narration-notes.js`, with `cleanNote` and `noteOk`, which the worker now imports): material, building type, street, condition, age, home, work, wealth, mood, rent, hunger, energy, body status and patience, plus a repeated-name garble. It rejects 5% of the Haiku notes the worker shows. On the first judged set it caught only 6–16% of contradictions, because most of those were other slips (years, rulings) or judge noise; its value is as a beam filter on top of the fixes above.
+
+Runs: rrh-llm-1 `~/narration/note2x-*`. Labels: that session's scratchpad (`notes-batch/`, `notes-batch2/`).
+
 ## 1j. Side results: speed, and an int4 decision student (25 October 2026)
 
 **Would WebAssembly help?** Measured with hand-assembled WASM kernels on narration v2's layer shapes (515K multiply-adds per beam step, Node 24, M-series Mac):

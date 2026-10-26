@@ -16,6 +16,7 @@
 //         each): the worker's own note request (cloudflare/narration.js narrationSystem and
 //         noteMessage, max 180 tokens, thinking off, low effort), as Plus players get it.
 //         fetch keeps a note's text and whether the worker would show it (noteOk).
+// --skip MANIFEST.jsonl (repeatable) leaves out sheets an earlier batch already labelled.
 // send    submits the batch (needs --yes) and writes DIR/batch.json.
 // fetch   when the batch has ended, writes DIR/labels.jsonl ({facts, field: 'why', text,
 //         model, seeds, split}) for scripts/narration-export.js --labels, and prints how many
@@ -111,10 +112,13 @@ async function build(args) {
   if (!sheetsFile || !dir || !heldOut.size) throw new Error('usage: build SHEETS.jsonl --out DIR --held-out 1,2,3 [--train 4000] [--test 300]');
   const nTrain = Number(arg(args, '--train', 4000)), nTest = Number(arg(args, '--test', 300));
   const notes = args.includes('--notes');
+  const skip = new Set();
+  for (const f of args.flatMap((a, i) => (args[i - 1] === '--skip' ? [a] : []))) for await (const m of readLines(f)) skip.add(m.custom_id);
 
   const train = [], test = [];
   for await (const s of readLines(sheetsFile)) {
     if (notes ? !NOTE_KINDS.includes(s.type) : s.type !== 'card') continue;
+    if (skip.has(s.key)) continue;
     if (s.seeds.every((x) => heldOut.has(x))) test.push(s);
     else if (!s.seeds.some((x) => heldOut.has(x))) train.push(s);
   }

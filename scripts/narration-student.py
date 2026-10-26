@@ -170,10 +170,12 @@ def split_rows(rows, held_out, n_val):
 
 
 def build_vocab(train, bpe=None, records=False, year_ago=False, stance_who=False):
-    words, scopes, attrs, values = Counter(), Counter(), Counter(), Counter()
+    words, scopes, attrs, values, seen_roles = Counter(), Counter(), Counter(), Counter(), Counter()
     for r in train:
         if not bpe:
             words.update(tokens(r['target']))
+        else:   # role tokens the BPE file's list lacks (roles version 2: <building.age:w>, ...)
+            seen_roles.update(re.findall(r'<[^<>\s]+>', r['target'] or ''))
         for scope, attr, value, num, typ in r['triples']:
             scopes.update(re.split(r'[:/]', scope))
             if records and ':' in scope:
@@ -185,7 +187,8 @@ def build_vocab(train, bpe=None, records=False, year_ago=False, stance_who=False
                 values[f'{typ}:{value}'] += 1
     keep = lambda c, n: [k for k, v in sorted(c.items(), key=lambda kv: -kv[1]) if v >= n]
     if bpe:
-        roles = [f for r in bpe['roles'] for f in (r, SPACE + r)]
+        listed = set(bpe['roles'])
+        roles = [f for r in bpe['roles'] + [t for t in keep(seen_roles, 1) if t not in listed] for f in (r, SPACE + r)]
         vocab_words = SPECIALS + [w for w in dict.fromkeys(roles + bpe['symbols']) if w not in SPECIALS]
     else:
         vocab_words = SPECIALS + [w for w in keep(words, 3) if w not in SPECIALS]

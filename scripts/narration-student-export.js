@@ -2,7 +2,8 @@
 // triples and texts with names, places and numbers as role tokens (src/narration-roles.js).
 //
 //   node scripts/narration-student-export.js SHEETS.jsonl --labels LABELS.jsonl [--labels ...] --out FILE
-//       [--notes NOTES.jsonl ...] [--note-fraction 1] [--only-notes]
+//       [--notes NOTES.jsonl ...] [--note-fraction 1] [--only-notes] [--roles 2]
+//       [--note-templates N --held-out 1,2,3]
 //
 // LABELS are hosted-narrator replies for cards, as scripts/narration-label-batch.js
 // fetch writes them ({facts, field: 'why', text, reply, model, seeds}).
@@ -20,6 +21,9 @@
 // the worker then refuses it for not ending a sentence), and kept as model text if noteOk.
 // --note-fraction keeps that share of training-town notes (by a hash of the key), for data-size
 // runs; held-out towns keep all theirs. --only-notes writes note rows alone (to join with card rows).
+// --roles 2: note rows use role tokens version 2 (src/narration-roles.js); card rows keep 1.
+// --note-templates N: up to N template notes (fallbackNote) of training-town entity sheets as
+// pretraining rows, an even share per kind: always true to the facts, so they teach copying.
 import {createReadStream, createWriteStream} from 'node:fs';
 import {createInterface} from 'node:readline';
 import {narrationTriples} from '../src/narration-features.js';
@@ -32,6 +36,7 @@ import {factProblem} from '../src/narration-consistency.js';
 import {validateFacts} from '../src/narrative-schema.js';
 import {createHash} from 'node:crypto';
 import {noteOk, cleanNote} from '../cloudflare/narration.js';
+import {fallbackNote} from '../src/narrator-client.js';
 
 async function* readLines(file) {
   for await (const line of createInterface({input: createReadStream(file), crlfDelay: Infinity})) if (line) yield JSON.parse(line);
@@ -43,6 +48,11 @@ const labelFiles = args.flatMap((a, i) => (args[i - 1] === '--labels' ? [a] : []
 const noteFiles = args.flatMap((a, i) => (args[i - 1] === '--notes' ? [a] : []));
 const noteFraction = args.includes('--note-fraction') ? Number(args[args.indexOf('--note-fraction') + 1]) : 1;
 const onlyNotes = args.includes('--only-notes');
+const rolesVersion = args.includes('--roles') ? Number(args[args.indexOf('--roles') + 1]) : 1;
+const noteTemplates = args.includes('--note-templates') ? Number(args[args.indexOf('--note-templates') + 1]) : 0;
+const heldOut = new Set(String(args.includes('--held-out') ? args[args.indexOf('--held-out') + 1] : '').split(',').filter(Boolean).map(Number));
+if (noteTemplates && !heldOut.size) throw new Error('--note-templates needs --held-out');
+const noteRows = (facts) => roleTriples(narrationTriples(facts), {version: rolesVersion});
 const outFile = args[args.indexOf('--out') + 1];
 if (!sheetsFile || !outFile) throw new Error('usage: narration-student-export.js SHEETS.jsonl --labels FILE --out FILE');
 
@@ -90,7 +100,7 @@ for (const file of noteFiles) {
     let facts;
     try { facts = validateFacts(l.facts); } catch { continue; }
     const key = sheetKey(facts);
-    const {triples, roles} = cardRows(facts);
+    const {triples, roles} = noteRows(facts);
     const base = {key, seeds: l.seeds ?? [], triples, roles, task: 'entity.note'};
     write({...base, source: 'prompt', target: ''});
     if (l.split === 'train' && share(key) >= noteFraction) continue;
@@ -98,6 +108,20 @@ for (const file of noteFiles) {
     const text = cleanNote(l.text);
     write({...base, source: 'pretrain', target: delex(text, roles)});
     if (noteOk(text)) write({...base, source: 'model', target: delex(text, roles)});
+  }
+}
+// Template notes of training-town entity sheets, round-robin by kind.
+if (noteTemplates) {
+  const kinds = ['person', 'household', 'building', 'body'], per = Math.ceil(noteTemplates / kinds.length), taken = Object.fromEntries(kinds.map((k) => [k, 0]));
+  for await (const s of readLines(sheetsFile)) {
+    if (!kinds.includes(s.type) || taken[s.type] >= per) continue;
+    if (!s.seeds?.length || s.seeds.some((x) => heldOut.has(x))) continue;
+    let facts;
+    try { facts = validateFacts(s.facts); } catch { continue; }
+    const {triples, roles} = noteRows(facts);
+    write({key: sheetKey(facts), task: 'entity.note', source: 'pretrain', seeds: s.seeds, triples, roles, target: delex(fallbackNote(facts), roles)});
+    taken[s.type]++;
+    if (kinds.every((k) => taken[k] >= per)) break;
   }
 }
 await new Promise((resolve) => out.end(resolve));
