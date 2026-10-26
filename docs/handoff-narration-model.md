@@ -241,11 +241,16 @@ The model reads years 2–3× more but times past rulings no better, and seed 1 
 | int4 after training | 0.02622 | 0.02551 / 0.01749 |
 | int4 QAT, 4 epochs (2 min, CPU) | 0.02075 | 0.02055 (+3.3%) / 0.01122 (+2.8%) |
 | int4 QAT, 10 epochs | 0.02044 | 0.02018 (+1.4%) / 0.01133 (+3.8%) |
+| int4 QAT, 10 epochs, loss weighted by traffic share | 0.02092 | 0.02062 (+3.6%) / 0.01095 (+0.3%) |
+| **int4 QAT, 10 epochs, half traffic-weighted, half uniform** | 0.02071 | **0.02033 (+2.1%) / 0.01071 (−1.9%)** |
 
-- **It sits on the loop's 3% gate:** each run fails one of the two real-play limits. No busy kind fails its own limit (worst: petition, +11%).
+- Uniform weighting fails the traffic limit, and traffic-only weighting fails the per-question limit.
+  - Traffic weighting gives each kind's rows a total weight in proportion to its share of real-play traffic (resident_routine goes from 9% of the weight to 73%), with a floor of 0.05%. The shares come from the gate's question counts, not its labels.
+- **The half-and-half mix passes both,** and is a little better than v7 by traffic.
+  - It also passes the loop's other offline gates: no busy kind worse (worst: festival_participation +13.6%, against 1.2× + 0.002); largest busy option bias 0.017 (limit 0.05; v7 0.019); no rare option outside 0.67–1.5.
+- **Not yet checked:** young-town bias, held-out novel rows, JS parity, latency and canary towns. These need an int4 branch in `src/decision-student.js` `decodeWeight` and in `export_decision_student.py`.
 - **Size:** weights 144 → ~67 KB; bundle ~220 KB on disk as header + `.bin` (365 KB now), ~90 KB gzipped (172 KB).
-- **Next:** weight the QAT loss by traffic share, as the gate does, then rerun the canary towns. Shipping needs an int4 branch in `src/decision-student.js` `decodeWeight` and in `export_decision_student.py`.
-- Scripts and runs are in that session's scratchpad (`dec_int4b.py`, `dec-runs*/`), not in the repo.
+- Scripts and runs are in that session's scratchpad (`dec_int4.py`, `dec_int4b.py` with `--traffic EVAL.json --mix 0.5`, `dec-traffic-*/`), not in the repo.
 
 ## 2. What we learned
 
