@@ -268,6 +268,7 @@ const DOING_WORDS = {
   gather: 'in a crowd', build: 'building', flee: 'fleeing', travel: 'on the road',
 };
 const WORK_WORDS = {working: 'in work', short: 'short of work', idle: 'out of work', none: 'not working'};
+const FEEL_WORDS = {energy: {low: 'tired', high: 'full of energy'}, food: {low: 'hungry', high: 'well fed'}, company: {low: 'lonely', high: 'in good company'}};
 const CONDITION_WORDS = {good: 'well kept', worn: 'worn', shabby: 'shabby', failing: 'falling down'};
 const ROAD_WORDS = {grass: 'open grass', trail: 'a faint trail', track: 'a worn track', road: 'a gravel road', paved: 'a paved street', avenue: 'an avenue'};
 const FLAG_WORDS = {heritage: 'It is a treasured old building', derelict: 'It stands empty', scaffold: 'Builders are at work on it', raised: 'It stands raised against floods'};
@@ -379,8 +380,11 @@ export function taggedLines(facts, {durable = false} = {}) {
   if (n.work) add(`Work: ${WORK_WORDS[n.work]}`, n.work === 'idle' || n.work === 'short' ? 'hard' : 'now');
   if (n.wealth) add(`Wealth: ${n.wealth}${n.wealthTrend ? `, ${n.wealthTrend}` : ''}`, n.wealth === 'poor' || n.wealthTrend === 'falling' ? 'hard' : 'now');
   if (n.mood) add(`Mood of ${n.moodOf ?? 'their people'}: ${n.mood}${n.moodTrend ? `, ${n.moodTrend}` : ''}`, n.mood === 'angry' || n.mood === 'uneasy' ? 'hard' : 'now');
-  const needs = ['energy', 'food', 'company'].filter((k) => n[k] && n[k] !== 'ok').map((k) => `${k} ${n[k]}`);
-  if (needs.length && !durable) add(`Needs: ${needs.join(', ')}`);
+  // energy, food and company are levels (src/sim/people.js decayNeeds runs them down): low is
+  // tired, hungry or lonely. "Needs: energy high" read as the opposite, to Haiku and to us.
+  const feel = ['energy', 'food', 'company'].filter((k) => n[k] === 'low' || n[k] === 'high').map((k) => FEEL_WORDS[k][n[k]]);
+  if (feel.length && !durable) add(`They feel ${feel.length > 1 ? `${feel.slice(0, -1).join(', ')} and ${feel.at(-1)}` : feel[0]}`,
+    ['energy', 'food', 'company'].some((k) => n[k] === 'low') ? 'hard' : 'now');
   if (n.hungry) add('They are going hungry', 'hard');
   if (n.rent && n.rent !== 'none') add(`Rent weighs ${n.rent === 'heavy' ? 'heavily' : 'lightly'} on them`, n.rent === 'heavy' ? 'hard' : 'now');
 

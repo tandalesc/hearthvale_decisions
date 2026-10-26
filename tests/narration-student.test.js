@@ -232,3 +232,16 @@ test('inspector notes: free players get any student note, else the template; Plu
   r = await run({paid: true, prefer: 'quality', mine: sure, hosted: () => new Response('{}', {status: 503})});
   assert.equal(r.source, 'student', 'and the student when the hosted narrator cannot be had');
 });
+
+test('needs read the right way round: they are levels, so low is tired, hungry or lonely', async () => {
+  const {factLines} = await import('../src/narrative-schema.js');
+  const {noteProblem} = await import('../src/narration-notes.js');
+  const person = (now) => ({v: 1, kind: 'person', name: 'Edda', year: 3, season: 'spring', era: 'hamlet', now});
+  assert.ok(factLines(person({energy: 'low', company: 'low'})).includes('They feel tired and lonely.'));
+  assert.ok(factLines(person({energy: 'high'})).includes('They feel full of energy.'));
+  assert.ok(!factLines(person({energy: 'high'})).some((l) => /^Needs/.test(l)), 'no "Needs: energy high" to read backwards');
+  assert.equal(noteProblem('I feel full of energy this spring.', person({energy: 'high'})), null);
+  assert.equal(noteProblem('I feel full of energy this spring.', person({energy: 'low'})), 'energy: tired');
+  assert.equal(noteProblem('I am worn out this spring.', person({energy: 'high'})), 'energy: rested');
+  assert.equal(noteProblem('I feel so lonely this spring.', person({company: 'high'})), 'company: plenty');
+});

@@ -369,7 +369,18 @@ The user cares more about a note being pertinent and good than about contradicti
 - the client shows free players any student note that passes the rules, and Plus on Fast the confident ones, else Haiku;
 - parity 24/24; 163 ms median per note in Node.
 
-**Upstream fix not made yet:** the fact line "Needs: energy high" is misread as "full of energy" by Haiku's labels (so by the student) and by Plus notes. Rewording it in `factLines` would fix the prompt and future labels; it changes production prompts and the narration cache key.
+**Correction (26 October 2026): the needs lines were read backwards here, not by Haiku.**
+- `energy`, `fullness` and `social` are levels that `decayNeeds` (`src/sim/people.js`) runs down; `routine-policy.js` sends a person to market below 20 fullness. So "Needs: energy high" meant full of energy, as Haiku wrote.
+- Inverted by this mistake:
+  - `noteProblem`'s energy rule (it rejected correct "full of energy" notes);
+  - the gloss in both judge rubrics, so person-note grades that mention energy, food or company are suspect, including the notes v2 head's labels.
+- Fixed in the "needs wording" PR:
+  - the line now reads "They feel tired, hungry and lonely" (or "full of energy", "well fed", "in good company"), via `FEEL_WORDS` in `src/narrative-schema.js`;
+  - `NARRATION_REVISION` is 4, so cached Plus notes are rewritten;
+  - the rules read levels (energy, company, food), and the rubrics' gloss is corrected.
+- Effect on the held-out notes: Haiku notes rejected by `noteProblem` 6.4% → 5.1% (people 516 → 301); test entities with a student note passing the rules 512 → 558 of 600.
+- Saved notes and the student's input (triples, not lines) are unchanged.
+- **Next:** regrade the v2 head's validation candidates with the corrected rubric and retrain the head (about $0.35).
 
 ## 1j. Side results: speed, and an int4 decision student (25 October 2026)
 

@@ -7,7 +7,7 @@ export const SYSTEM = `You grade one short note from a town-building game. Tappi
 Grade only this note, not whether you would have written it differently.
 Return only JSON: {"grammar": "clean" | "minor" | "broken", "contradiction": true | false, "claim": "...", "specific": true | false}
 - grammar: "clean" reads naturally; "minor" has a small slip a reader glides over; "broken" has a sentence a reader stumbles on.
-- contradiction: true only if the note states something a fact line says is otherwise, or contradicts itself. Leaving a fact out is not a contradiction. "Needs: energy high" means they badly need rest (they are tired); "Needs: food high" means they are hungry; "Needs: company high" means they are lonely.
+- contradiction: true only if the note states something a fact line says is otherwise, or contradicts itself. Leaving a fact out is not a contradiction. In older fact sheets "Needs: energy high" means they are full of energy, "food high" well fed, "company high" in good company; "low" is tired, hungry, lonely.
 - claim: when contradiction is true, the note's words that are wrong, copied exactly; else "".
 - specific: true if it tells the reader something particular about this one (their situation, mood, work, what happened to them); false if it could be said of almost any of its kind.`;
 export const prompt = (facts, text) => `Facts:\n${noteMessage(facts)}\n\nNote: "${text}"\n\nReturn the JSON.`;
@@ -28,7 +28,7 @@ Return only JSON: {"score": 1 | 2 | 3 | 4 | 5, "why": "at most 12 words"}
 - 3: correct but bland: mostly filler or small talk ("spring has come", "I'm glad to be here"), or says what any of its kind would.
 - 2: repeats itself, rambles, reads awkwardly, or gets a fact plainly wrong.
 - 1: broken, nonsensical, or mostly wrong.
-"Needs: energy high" means they badly need rest; "Needs: food high" that they are hungry; "Needs: company high" that they are lonely.`;
+In older fact sheets "Needs: energy high" means they are full of energy, "food high" well fed, "company high" in good company; "low" is tired, hungry, lonely.`;
 export const qualityPrompt = (facts, text) => `Facts:\n${noteMessage(facts)}\n\nNote: "${text}"\n\nReturn the JSON.`;
 export async function gradeQuality(client, facts, text) {
   const msg = await client.messages.create({model: MODEL, max_tokens: 200, thinking: {type: 'disabled'},

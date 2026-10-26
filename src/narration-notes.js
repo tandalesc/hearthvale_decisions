@@ -60,9 +60,12 @@ function building(c, b, name) {
 }
 
 function people(c, who = {}, now = {}) {
-  // "Needs: energy high" means they need rest; reading it as "full of energy" is the slip.
-  if (now.energy === 'high' && /\b(full of energy|plenty of energy|energy to spare|so much energy|full of beans|well rested|rested|lively|bright and|raring to go)\b/.test(c)) return 'energy: tired';
-  if (now.energy === 'low' && /\b(tired|weary|worn out|exhausted)\b/.test(c)) return 'energy: rested';
+  // energy, food and company are levels: low is tired, hungry or lonely ("They feel tired").
+  if (now.energy === 'low' && /\b(full of energy|plenty of energy|energy to spare|so much energy|full of beans|well rested|rested|lively|raring to go)\b/.test(c)) return 'energy: tired';
+  if (now.energy === 'high' && /\b(tired|weary|worn out|exhausted|need(s)? (some )?rest)\b/.test(c)) return 'energy: rested';
+  if (now.company === 'low' && /\b(good company|plenty of company|surrounded by friends)\b/.test(c)) return 'company: lonely';
+  if (now.company === 'high' && /\b(lonely|longing for company|no one to talk|love some company)\b/.test(c)) return 'company: plenty';
+  if (now.food === 'low' && /\b(well fed|full bellies|plenty to eat)\b/.test(c)) return 'food: hungry';
   const home = String(who.home ?? '').toLowerCase();
   if (home && !/no home/.test(home)) for (const w of DWELLINGS) if (new RegExp(`\\b(our|their|my|his|her) (little |humble |old |small |new )?${w}\\b`).test(c) && !home.includes(w)) return `home: ${w}`;
   const work = now.work;
