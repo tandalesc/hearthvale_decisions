@@ -383,14 +383,21 @@ export async function fetchNarrationStudent({base = '/api/students/', fallbackBa
 
 // A lazy local narrator for the prose keeper: the bundle is fetched the first time a card
 // needs a quote, and never again if it is missing. yieldEvery (main thread only) lets the
-// page breathe every few decoding steps.
+// page breathe every few decoding steps. narrate.info() -> {state: 'idle' | 'loading' |
+// 'ready' | 'missing', version} for the settings panel.
 export function createLocalNarration({base, fallbackBase, fetcher, yieldEvery = 0} = {}) {
-  let loading = null;
+  let loading = null, info = {state: 'idle', version: null};
   let steps = 0;
   const pause = yieldEvery ? () => (++steps % yieldEvery ? null : new Promise((resolve) => setTimeout(resolve, 0))) : undefined;
-  return async (facts) => {
-    loading ??= fetchNarrationStudent({base, fallbackBase, fetcher}).catch(() => null);
+  const narrate = async (facts) => {
+    if (!loading) {
+      info = {state: 'loading', version: null};
+      loading = fetchNarrationStudent({base, fallbackBase, fetcher}).catch(() => null)
+        .then((student) => { info = student ? {state: 'ready', version: student.version} : {state: 'missing', version: null}; return student; });
+    }
     const student = await loading;
     return student ? student.quote(facts, {pause}) : null;
   };
+  narrate.info = () => info;
+  return narrate;
 }

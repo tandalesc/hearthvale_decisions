@@ -490,6 +490,10 @@ async function boot() {
     decisions: {
       stats: () => host.decisions.stats(),
     },
+    narration: {
+      stats: () => host.narration?.stats(),
+      refresh: () => host.narration?.refresh?.(),
+    },
   });
   if (notice) app.notices.toast(notice, 6000);
   else if (!persist) app.notices.toast(`Test town (${fixture}): progress is not saved.`, 8000);

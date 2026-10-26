@@ -440,7 +440,9 @@ export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) =
     entry.promise = pending;
     return pending;
   }
-  return {tick: async () => {}, requestCard, peekCard: (id) => previews.get(id), stats: () => ({...counts, busy: inflight.size > 0, paused: now() < pausedUntil})};
+  // hosted: this player gets the hosted narrator (Plus); student: the local one's load state.
+  return {tick: async () => {}, requestCard, peekCard: (id) => previews.get(id),
+    stats: () => ({...counts, busy: inflight.size > 0, paused: now() < pausedUntil, hosted: Boolean(remote()), student: local?.info?.() ?? null})};
 }
 
 export function startProseKeeper(getState, options = {}) {

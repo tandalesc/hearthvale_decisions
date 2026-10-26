@@ -124,3 +124,29 @@ test('BPE tokens split and join as the trainer\'s', async () => {
   assert.deepEqual(tok('The town, <asker.body>'), ['\u2581', 'T', 'h', 'e', '\u2581t', 'own', ',', '\u2581<asker.body>']);
   assert.equal(tok.detok(tok("the town's <x>")), "the town's <x>");
 });
+
+test('settings reports the narrator: hosted for Plus, else the student once it has loaded', async () => {
+  const {createLocalNarration} = await import('../src/narration-student.js');
+  const {narrationLabel} = await import('../src/ui/components/settings.js');
+  const dir = new URL('../public/students/narration/', import.meta.url);
+  const fetcher = async (url) => {
+    const file = new URL(url).pathname.split('/').pop();
+    const body = readFileSync(new URL(file, dir));
+    return {ok: true, json: async () => JSON.parse(body), arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength)};
+  };
+  const narrate = createLocalNarration({base: 'http://test/students/', fallbackBase: 'http://test/students/', fetcher});
+  assert.deepEqual(narrate.info(), {state: 'idle', version: null});
+  const latest = JSON.parse(readFileSync(new URL('manifest.json', dir))).latest;
+  const card = JSON.parse(readFileSync(fixtureFile, 'utf8')).cards[0].facts;
+  await narrate(card);
+  assert.deepEqual(narrate.info(), {state: 'ready', version: latest});
+
+  const free = createProseKeeper({local: narrate, remote: () => false}).stats();
+  assert.equal(free.hosted, false);
+  assert.equal(narrationLabel(free), `v${latest} · student`);
+  assert.equal(narrationLabel(createProseKeeper({local: narrate, remote: () => true}).stats()), `hosted · v${latest} · student as backup`);
+  assert.equal(narrationLabel({hosted: false, student: {state: 'idle', version: null}}), 'student · loads with the first quote');
+  assert.equal(narrationLabel({hosted: false, student: {state: 'missing', version: null}}), 'student unavailable · template text');
+  assert.equal(narrationLabel(null), 'Off · template text');
+  assert.equal(narrationLabel(undefined), '–');
+});

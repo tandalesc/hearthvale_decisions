@@ -153,6 +153,7 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
         });
       }
       if (client) snap.decisionStats = client.stats();
+      snap.narrationStats = proseKeeper?.stats?.() ?? null;
       return snap;
     },
 
@@ -163,6 +164,8 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
     save() {
       return {text: sim.serialize(state), meta: meta()};
     },
+
+    narration: {stats: () => proseKeeper?.stats?.() ?? null},
 
     decisions: {
       stats: () => client?.stats() ?? null,

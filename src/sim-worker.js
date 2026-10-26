@@ -99,6 +99,7 @@ const ops = {
   check: (raw) => session.check(raw),
   setIndividualCap: (v) => session.setIndividualCap(v),
   'decisions.configure': (s) => session.decisions.configure(s),
+  'narration.stats': () => session.narration.stats(),
   'decisions.setEnabled': (on) => session.decisions.setEnabled(on),
   'decisions.stats': () => session.decisions.stats(),
   prefetchCardProse: (ids) => session.prefetchCardProse(ids),
