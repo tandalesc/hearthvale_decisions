@@ -473,6 +473,17 @@ class NarrationStudent(nn.Module):
 REPEATABLE = {'their', 'there', 'these', 'those', 'which', 'would', 'could', 'should', 'about', 'other', 'still', 'while', 'where', 'being', 'after', 'again', 'every', 'since', 'under', 'because', 'though', 'through', 'before', 'never', 'always', 'right'}
 
 
+def repeats_word(words):
+    """A content word (five letters or more, not REPEATABLE) used twice."""
+    seen = set()
+    for w in words:
+        if len(w) >= 5 and w.isalpha() and w not in REPEATABLE:
+            if w in seen:
+                return True
+            seen.add(w)
+    return False
+
+
 @torch.no_grad()
 def beam_search(model, b, bans, codec, k=4, alpha=0.7, block=3, no_repeat=False):
     mem = model.memory(b)
@@ -516,7 +527,15 @@ def beam_search(model, b, bans, codec, k=4, alpha=0.7, block=3, no_repeat=False)
         for n, (pi, t) in enumerate(zip(pf.tolist(), tf.tolist())):
             hs = hist[pi] + [t]
             s = top.view(-1)[n].item()
-            if (t == EOS or step == MAX_TGT - 1) and s > -1e8:
+            # no_repeat: drop a beam once it finishes a word it has used, however many BPE
+            # pieces spell it (the ban above only catches a word that is one token).
+            ending = t == EOS or step == MAX_TGT - 1
+            if no_repeat and s > -1e8:
+                ws = codec.words_of([x for x in hs if x != EOS])
+                if repeats_word(ws if ending else ws[:-1]):
+                    scores.view(-1)[n] = -1e9
+                    s = -1e9
+            if ending and s > -1e8:
                 finished[n // k].append((hs, s / len(hs) ** alpha))
                 scores.view(-1)[n] = -1e9
             new_hist.append(hs)
@@ -579,6 +598,7 @@ def main():
     ap.add_argument('--smoothing', type=float, default=0.05)
     ap.add_argument('--beam', type=int, default=4)
     ap.add_argument('--no-repeat', action='store_true', help='decode without reusing a content word (notes)')
+    ap.add_argument('--eval-batch', type=int, default=64, help='cards decoded together when quoting (lower it for beam 8 on a small GPU)')
     ap.add_argument('--eval-max', type=int, default=600)
     ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
@@ -675,7 +695,7 @@ def main():
                 taken[r['task']] += 1
                 chosen.append(r)
         exs = [C.example(r) for r in chosen]
-        for bt in batches(exs, 64, False):
+        for bt in batches(exs, a.eval_batch, False):
             b = collate(bt, a.device)
             cands = beam_search(model, b, [e['ban'] for e in bt], C, k=a.beam, no_repeat=a.no_repeat)
             for j, (ex, cs) in enumerate(zip(bt, cands)):
