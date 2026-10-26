@@ -5,6 +5,7 @@ import {spawn} from 'node:child_process';
 import {hostedDecisions} from '../decision.js';
 import {validProbabilities} from '../learning.js';
 import {saveTrainingAsset} from './assets.js';
+import {labelRows} from './label.js';
 import {decisionOptions, FEATURES_VERSION} from '../../src/decision-features.js';
 const root = '/work';
 const origin = process.env.LEARNING_PUBLIC_ORIGIN;
@@ -32,21 +33,17 @@ export async function main() {
       const path = safePath(asset.path); mkdirSync(dirname(path), {recursive: true});
       await saveTrainingAsset(await api('asset', {}, `?key=${encodeURIComponent(asset.key)}`), asset, path);
     }
-    const labels = [], rows = [];
-    // Calls are sequential, no retries: each reserved question has at most one paid attempt.
-    for (const row of input.rows) {
-      let label = row.label;
-      if (label?.model !== input.teacher || label?.features !== FEATURES_VERSION || !validProbabilities(label?.probabilities, decisionOptions(row.kind, row.allowed))) {
-        if (!process.env.LIQUID_API_KEY) throw new Error('Missing hosted Liquid API key');
-        const question = {id: 'n', kind: row.kind, context: row.context, ...(row.allowed ? {allowed: row.allowed} : {})};
-        try {
-          const answer = await hostedDecisions(process.env, [{state: row.state, questions: [question]}], async (r, max) => { const t = await r.text(); if (t.length > max) throw new Error('Oversized teacher response'); return t; });
-          label = {key: row.key, kind: row.kind, probabilities: answer.answers.n?.probabilities, model: answer.model, features: FEATURES_VERSION};
-        } catch { continue; }
-      }
-      if (!validProbabilities(label.probabilities, decisionOptions(row.kind, row.allowed))) continue;
-      rows.push(row); labels.push(label);
-    }
+    // Batched by state, a few requests at a time; no retries: each reserved question has at
+    // most one paid attempt (label.js).
+    const valid = (row, label) => validProbabilities(label?.probabilities, decisionOptions(row.kind, row.allowed));
+    const ask = (state, questions) => {
+      if (!process.env.LIQUID_API_KEY) throw new Error('Missing hosted Liquid API key');
+      return hostedDecisions(process.env, [{state, questions}], async (r, max) => { const t = await r.text(); if (t.length > max) throw new Error('Oversized teacher response'); return t; });
+    };
+    if (!process.env.LIQUID_API_KEY && input.rows.some((row) => !(row.label?.model === input.teacher && row.label?.features === FEATURES_VERSION && valid(row, row.label)))) throw new Error('Missing hosted Liquid API key');
+    const t0 = Date.now();
+    const {rows, labels, requests} = await labelRows(input.rows, {teacher: input.teacher, ask, valid});
+    console.log(`labelled ${labels.length}/${input.rows.length} rows in ${requests} teacher requests, ${Math.round((Date.now() - t0) / 1000)} s`);
     await put('labels.json', JSON.stringify(labels));
     if (rows.length < input.minRows) { await api('complete', {method: 'POST', body: JSON.stringify({state: 'skipped', error: 'Insufficient valid labels'})}); completed = true; return; }
     writeFileSync(safePath('novel.jsonl'), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
