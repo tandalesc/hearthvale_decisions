@@ -244,6 +244,94 @@ The model reads years 2–3× more but times past rulings no better, and seed 1 
 - Runs: rrh-llm-1 `~/narration/who-s*`. Bundles are in that session's scratchpad (`bundles/who-s*.json`).
 - The same idea could carry a past ruling's `what` words into its act token. Rulings are now the largest fault (54–66 of 159–169).
 
+## 1l. Inspector notes: labels, a notes student, and a worker fix (26 October 2026)
+
+**Labels.** 25,600 production note requests went through the Batch API for $0.87: 6,250 training sheets of each kind (person, household, building, body) and 150 held-out of each. They use the worker's own prompt (`narrationSystem` and `noteMessage` in `cloudflare/narration.js`; `narration-label-batch.js build --notes`).
+- **The worker refused 59% of Haiku's notes:** 78% of person notes and 69% of households. Most were wrapped whole in quotation marks, so they didn't end a sentence; others ran to three sentences. Plus players were getting template notes.
+- `cleanNote` now unwraps a note quoted whole (not one that quotes its speaker mid-note): 64% pass, up from 41%. Shipped in PR #24.
+
+**Shared or separate?** All runs use v3's setup on the same 600 held-out cards and notes:
+
+| run | card top pass | stance fact-fails | note loss (371 held-out) |
+|---|---|---|---|
+| v3, cards only | 69.7% | 48 | — |
+| shared, cards + 25% / 50% / 100% notes | 70.0 / 63.8 / 53.7% | 49 / 45 / 124 | 2.36 / 2.03 / 1.80 |
+| notes only, 3 + 12 epochs | — | — | 1.98 |
+| notes only, started from v3 (`--init`), 6 + 30 epochs | — | — | 1.42 |
+| notes only, from scratch, 20 + 40 epochs | — | — | **1.41** |
+
+- **Sharing costs card quotes,** and more notes cost more (stance binding comes undone), so notes get their own model.
+- **Starting from v3 speeds training** (loss 2.66 against 5.19 at step 200), but a longer from-scratch run ends level with it.
+- **Note loss falls about 0.3 per doubling of the data** and hasn't flattened: more labels would help.
+
+**Judge** (`scripts/narration-note-judge.js`, Haiku, 280 held-out entities × 3 notes, $0.06):
+
+| | grammar clean / broken | contradicts the facts | specific |
+|---|---|---|---|
+| Haiku (Plus) | 93% / 0% | 28% | 80% |
+| template (free) | 60% / 12% | **21%** | 48% |
+| student, notes only (scratch, long) | 69% / 2% | **47%** | 61% |
+
+- **The student reads better than the template but gets facts wrong twice as often,** so it is not shipped.
+- **Worst kinds:** buildings 69% and bodies 59% contradicted; people 15% (template 7%).
+- **The errors are attribute slips:** material or type ("old stone terrace" for a concrete tower), street, mood ("content" when uneasy), wealth. A note fact check over those attributes could prune them in the beam, as `factProblem` does for cards.
+- **Next:** a `noteProblem` check, then about 2× the labels (~$0.90 per 25K).
+- Runs: rrh-llm-1 `~/narration/note-*`. Data and judge files: that session's scratchpad (`notes-batch/`, `notes-*.jsonl`, `judge-note-*.jsonl`).
+
+## 1m. Notes v3: twice the labels, per-fact number tokens, template pretraining (26 October 2026)
+
+**More labels.** A second batch of 25,000 entity sheets ($0.85; `build --notes --skip FIRST/manifest.jsonl` keeps it apart from the first) doubles the fine-tuning notes to 32,384. The 600 held-out entities are the same.
+- Note loss: v1 1.407; v1 trained twice as long 1.343; v2 (2× data, same compute as the long run) 1.241.
+- Grammar improved (clean 75% → 81%) but contradictions did not (37% → 38%).
+- The judge, now asked to name the wrong words, put 49 of 78 building and body errors on years and ages.
+
+**Role tokens, version 2** (`roleTriples(triples, {version: 2})`, `--roles 2` in the exporter; card bundles keep version 1, checked identical on 1,000 entity and 1,500 card sheets):
+- Version 1 gave a number to the first triple holding it: a windmill's "built in year 65" read `<rules:0.since>` because a town rule dated from 65, and other years stayed digits.
+- Version 2 gives every number its own token: a field's (`<building.age>`) or a text's (`<building.origin#0>`). A number in a target is read as the build year first, then the sheet's own fields, then its texts, then list items.
+- A building's build year (year less age) is a new triple and token.
+- Number words from two to twenty match a token's word form (`<building.age:w>` → "six"); 786 of 5,000 notes use one.
+- Round trip: 4,992 of 5,000 notes.
+- The trainer's vocabulary now adds role tokens the BPE file's list lacks (306 roles, was 140); without that the new tokens were unknown.
+
+**Template pretraining** (`--note-templates 50000 --held-out ...`): 50,000 template notes (`fallbackNote`) of training-town sheets as pretraining rows, true to their facts by construction. Fine-tuning is on Haiku's notes only.
+
+**Judge** (255 held-out entities, each student's note being the first candidate that passes the game's rules and `noteProblem`, $0.11):
+
+| | grammar clean / broken | contradicts the facts | specific | buildings / bodies / households / people contradicted |
+|---|---|---|---|---|
+| Haiku (Plus) | 96% / 0% | 20.5% | 85% | 28 / 30 / 9 / 7% |
+| template (free) | 75% / 9% | 13.0% | 53% | 25 / 12 / 7 / 3% |
+| v2 (2× data) | 81% / 1.2% | 38.3% | 79% | 62 / 44 / 22 / 7% |
+| v2 + role tokens v2 | 92% / 0.8% | 29.6% | 85% | 41 / 47 / 7 / 13% |
+| **v2 + role tokens v2 + template pretraining** | 90% / 0.4% | **26.7%** | 85% | 35 / 45 / 8 / 7% |
+
+- Households and people are now on par with Haiku; buildings are close.
+- Bodies are the gap: 17 of their 33 errors are which budget or ask was approved when ("backed the Green Ward budget every year since year 111"), and 7 are a misplaced "dissolved".
+- **Ruling rules in `noteProblem`** (any sheet with `rulings`, in any phrasing: the act, "this year / last year / N years ago / in or since year N", a budget named by its year). On the judged notes they catch 6 of the best model's 33 body contradictions and flag 1 of 41 clean body notes, and none of Haiku's or the template's contradictions. 6.4% of the Haiku notes the worker shows fail `noteProblem` overall.
+- **Re-judged with full pruning** (260 entities, $0.07): the best model has 24.7% contradicted (Haiku 19.1%, template 12.0%) and 90% clean grammar (Haiku 96%, template 74%).
+  - By kind: people 8.6%, households 10.7%, buildings 32.4% (Haiku 26.7%), bodies 38.7% (Haiku 30.7%).
+  - Template body notes are 28% broken and 0% specific.
+  - With the check, the student shows a note on 85% of held-out entities; people are lowest at 59%.
+
+**`noteProblem`** (`src/narration-notes.js`, with `cleanNote` and `noteOk`, which the worker now imports): material, building type, street, condition, age, home, work, wealth, mood, rent, hunger, energy, body status and patience, plus a repeated-name garble. It rejects 5% of the Haiku notes the worker shows. On the first judged set it caught only 6–16% of contradictions, because most of those were other slips (years, rulings) or judge noise; its value is as a beam filter on top of the fixes above.
+
+Runs: rrh-llm-1 `~/narration/note2x-*`. Labels: that session's scratchpad (`notes-batch/`, `notes-batch2/`).
+
+## 1n. Notes v1 shipped, gated on confidence (26 October 2026)
+
+- **Confidence head.** Every candidate note (4 per entity) for the validation towns was labelled good or not ($0.18; `scripts/narration-note-verdicts.js`): good means it passes the game's rules and `noteProblem`, and Haiku finds no contradiction and no broken sentence (`scripts/narration-note-grade.js`, shared with the judge). 63% are good.
+  - The head (`narration-quality.py`) learns on validation towns and is scored on test towns, whose candidates were graded the same way ($0.17, `--eval`): candidate AUC 0.82.
+  - Good notes among the head's picks, most confident first: 83% of the top 50%, 77% of the top 70%, 59% of all. The game also drops rule-failing candidates before the head picks, so these numbers are pessimistic.
+- **Bundle.** `public/students/notes/notes.v1.json` + `.bin` (97 KB + 660 KB int8; role tokens version 2; threshold 0.43 = most confident 70%), from the role-tokens-2 + template-pretrained run; `export-narration-student.py --task entity.note --roles 2`. Parity fixture `tests/fixtures/notes.v1.fixture.json`: 24/24.
+- **Runtime.**
+  - The `notes` student family (`/students/notes/`).
+  - `loadNarrationStudent(...).note(facts)`: task `entity.note`, beam pruned by `noteProblem`, picks must pass `noteOk`. Median 66 ms in Node.
+  - `createLocalNotes` loads it on the first note, on the main thread, yielding every 4 steps.
+  - `createNarratorClient` routes by tier and preference (`configureNotes` from `main.js`). Free players get the student's note when it is confident, else the template, with no hosted request. Plus on Fast gets the student, then Haiku; Plus on Quality gets Haiku, then the student.
+  - Student notes are kept in saves as Haiku's are.
+- **Settings.** A "Notes model v1 · 4f0e8962" line; the Plus Fast/Quality setting covers notes.
+- **Checked in the dev server.** A villager's note came from the student within 1.5 s. Of three buildings, two notes came from the student and one from the template (below the threshold).
+
 ## 1j. Side results: speed, and an int4 decision student (25 October 2026)
 
 **Would WebAssembly help?** Measured with hand-assembled WASM kernels on narration v2's layer shapes (515K multiply-adds per beam step, Node 24, M-series Mac):

@@ -20,6 +20,7 @@ import {roleTriples, relex, strayRoles} from './narration-roles.js';
 import {CHECKS} from './narrative-prose.js';
 import {fluency} from './narration-fluency.js';
 import {factProblem} from './narration-consistency.js';
+import {cleanNote, noteOk, noteProblem} from './narration-notes.js';
 
 export const NARRATION_STUDENT_FORMAT = 'hearthvale-narration-student';
 const PIECE = /<[^<>\s]+>|[A-Za-z]+|'[A-Za-z]+|\d+(?:\.\d+)?|[^\sA-Za-z\d]/g;
@@ -331,8 +332,11 @@ export function loadNarrationStudent(bundle, blob = null) {
   // The card's quote, or null when no candidate passes. `pause` (optional, async) runs
   // between decoding steps so a caller on the main thread can yield.
   // Greedy first (a third of the time); the full beam only when that quote is not confident.
+  // Role tokens as the bundle's rows were made (notes: version 2; card bundles: 1).
+  const rolesOf = (facts) => roleTriples(narrationTriples(facts), {version: voc.roles ?? 1});
+
   async function quote(facts, {pause, beam: width = cfg.beam, adaptive = true} = {}) {
-    const {triples, roles} = roleTriples(narrationTriples(facts));
+    const {triples, roles} = rolesOf(facts);
     const encoded = encode(triples, roles);
     const check = (text) => !!factProblem(relex(text, roles), facts);
     if (adaptive && width > 1) {
@@ -340,6 +344,33 @@ export function loadNarrationStudent(bundle, blob = null) {
       if (first?.confident) return first;
     }
     return pick(facts, roles, encoded, await beam(encoded, tk.get('card.quote'), {pause, k: width, check}));
+  }
+
+  // An inspector note (a notes bundle: task entity.note): a beam whose finished sentence fails
+  // noteProblem is dropped; the pick must pass the worker's own rules for a note.
+  async function note(facts, {pause, beam: width = cfg.beam, adaptive = true} = {}) {
+    const {triples, roles} = rolesOf(facts);
+    const encoded = encode(triples, roles);
+    const task = tk.get('entity.note');
+    const check = (text) => !!noteProblem(relex(text, roles), facts);
+    if (adaptive && width > 1) {
+      const first = pickNote(facts, roles, encoded, await beam(encoded, task, {pause, k: 1, check}));
+      if (first?.confident) return first;
+    }
+    return pickNote(facts, roles, encoded, await beam(encoded, task, {pause, k: width, check}));
+  }
+
+  function pickNote(facts, roles, encoded, cands) {
+    let best = null;
+    for (const c of cands) {
+      const text = untok(c.toks.map((i) => voc.words[i]));
+      if (strayRoles(text, roles).length) continue;
+      const words = cleanNote(relex(text, roles));
+      if (fluency(words) || !noteOk(words) || noteProblem(words, facts)) continue;
+      const q = quality([...c.feats, encoded.unk]);
+      if (!best || q > best.quality) best = {text: words, quality: q};
+    }
+    return best && {...best, confident: best.quality >= bundle.quality.threshold};
   }
 
   function pick(facts, roles, encoded, cands) {
@@ -369,14 +400,16 @@ export function loadNarrationStudent(bundle, blob = null) {
   }
   const id = fp.toString(16).padStart(8, '0');
 
-  return {version: bundle.version, id, params: bundle.params, quote, encode, beam, tokens: tok, detok: untok, words: voc.words, threshold: bundle.quality.threshold};
+  return {version: bundle.version, id, params: bundle.params, task: bundle.task ?? 'card.quote', quote, note, rolesOf, encode, beam, taskIndex: (t) => tk.get(t),
+    tokens: tok, detok: untok, words: voc.words, threshold: bundle.quality.threshold};
 }
 
-// Fetch the newest narration student through /api/students/narration/ (static assets as a fallback).
-export async function fetchNarrationStudent({base = '/api/students/', fallbackBase = '/students/', fetcher = (...a) => globalThis.fetch(...a)} = {}) {
+// Fetch the newest narration student through /api/students/narration/ (static assets as a fallback);
+// family 'notes' for the notes student (/students/notes/).
+export async function fetchNarrationStudent({base = '/api/students/', fallbackBase = '/students/', fetcher = (...a) => globalThis.fetch(...a), family = 'narration'} = {}) {
   for (const root of [base, fallbackBase]) {
     try {
-      const dir = new URL('narration/', new URL(root, globalThis.location?.href ?? 'http://localhost/'));
+      const dir = new URL(`${family}/`, new URL(root, globalThis.location?.href ?? 'http://localhost/'));
       const manifest = await (await fetcher(new URL('manifest.json', dir).href)).json();
       const file = manifest.versions?.[manifest.latest];
       if (!file) continue;
@@ -396,23 +429,28 @@ export async function fetchNarrationStudent({base = '/api/students/', fallbackBa
 // needs a quote, and never again if it is missing. yieldEvery (main thread only) lets the
 // page breathe every few decoding steps. For the settings panel: narrate.info() ->
 // {state: 'idle' | 'loading' | 'ready' | 'missing', version, id}, and narrate.preload().
-export function createLocalNarration({base, fallbackBase, fetcher, yieldEvery = 0} = {}) {
+export function createLocalNarration({base, fallbackBase, fetcher, yieldEvery = 0, family = 'narration', task = 'quote'} = {}) {
   let loading = null, info = {state: 'idle', version: null, id: null};
   let steps = 0;
   const pause = yieldEvery ? () => (++steps % yieldEvery ? null : new Promise((resolve) => setTimeout(resolve, 0))) : undefined;
   const load = () => {
     if (!loading) {
       info = {state: 'loading', version: null, id: null};
-      loading = fetchNarrationStudent({base, fallbackBase, fetcher}).catch(() => null)
+      loading = fetchNarrationStudent({base, fallbackBase, fetcher, family}).catch(() => null)
         .then((student) => { info = student ? {state: 'ready', version: student.version, id: student.id} : {state: 'missing', version: null, id: null}; return student; });
     }
     return loading;
   };
   const narrate = async (facts) => {
     const student = await load();
-    return student ? student.quote(facts, {pause}) : null;
+    return student ? student[task](facts, {pause}) : null;
   };
   narrate.info = () => info;
   narrate.preload = () => { load(); };
   return narrate;
+}
+
+// The notes student for inspector notes: async (facts) -> {text, confident} | null, lazily loaded.
+export function createLocalNotes(options = {}) {
+  return createLocalNarration({...options, family: 'notes', task: 'note'});
 }

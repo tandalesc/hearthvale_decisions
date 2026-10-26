@@ -9,6 +9,7 @@ export const STUDENT_FAMILIES = {
   // Paths kept from before families existed: /students/manifest.json, /students/decisions.vN.json.
   decisions: {dir: '', manifest: 'manifest.json', bundle: /^decisions\.v(\d+)\.json$/, coordinated: true},
   narration: {dir: 'narration/', manifest: 'manifest.json', bundle: /^narration\.v(\d+)\.json$/, coordinated: false},
+  notes: {dir: 'notes/', manifest: 'manifest.json', bundle: /^notes\.v(\d+)\.json$/, coordinated: false},
 };
 
 // '/students/narration/manifest' -> {family: 'narration', manifest: true, file: 'narration/manifest.json'}

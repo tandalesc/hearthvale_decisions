@@ -48,7 +48,8 @@ export function createSettings(ctx) {
           ${field('New requests', 'Pause the town and open the Council when a request arrives, so none slips by. The town picks up its pace when you close the Council.', seg('requests', p.requests, [['notify', 'Notify'], ['pause', 'Pause and open']]))}
           ${field('Decision model', 'The student that answers most of the town\'s questions in this browser.', '<b class="model-ver" style="font:500 13px var(--font-mono)">–</b>')}
           ${field('Narration model', 'The student that writes the Council\'s card quotes in this browser.', '<b class="narration-ver" style="font:500 13px var(--font-mono)">–</b>')}
-          ${ctx.entitlement?.()?.tier === 'paid' ? field('Narration', 'Fast writes quotes in this browser and asks Haiku only when it is unsure. Quality asks Haiku first.', seg('narration', p.narration, [['fast', 'Fast'], ['quality', 'Quality']])) : ''}
+          ${field('Notes model', 'The student that writes the note when you tap a person, household, building or body.', '<b class="notes-ver" style="font:500 13px var(--font-mono)">–</b>')}
+          ${ctx.entitlement?.()?.tier === 'paid' ? field('Narration', 'Fast writes card quotes and notes in this browser and asks Haiku only when it is unsure. Quality asks Haiku first.', seg('narration', p.narration, [['fast', 'Fast'], ['quality', 'Quality']])) : ''}
         </fieldset>
         <fieldset><legend>Your town</legend>
           <p style="margin:0 0 8px;font-size:var(--fs-13);color:var(--ink-2)">The town saves itself every 30 seconds on this device.</p>
@@ -182,6 +183,8 @@ export function createSettings(ctx) {
     setText(el.querySelector('.model-ver'), students.length ? students.map((st) => `v${st.version} · ${st.id}`).join(', ') : 'None loaded');
     ctx.refreshNarration?.();
     setText(el.querySelector('.narration-ver'), narrationLabel(ctx.narrationStats?.()));
+    ctx.refreshNotes?.();
+    setText(el.querySelector('.notes-ver'), narrationLabel(ctx.notesStats?.()));
     const w = ctx.renderStats() ?? {};
     const perf = [
       ['Frames a second', fmt(w.fps, 0)], ['Frame time', Number.isFinite(w.frameMs) ? `${w.frameMs.toFixed(1)} ms` : '–'],

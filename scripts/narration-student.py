@@ -134,10 +134,12 @@ def h(x):
 # ---------------------------------------------------------------- data
 
 def stream(path):
-    with open(path) as fh:
-        for line in fh:
-            if line.strip():
-                yield json.loads(line)
+    """Rows from one file, or several joined with commas (card rows, note rows)."""
+    for one in str(path).split(','):
+        with open(one) as fh:
+            for line in fh:
+                if line.strip():
+                    yield json.loads(line)
 
 
 def part_of(r, held_out, val):
@@ -168,10 +170,12 @@ def split_rows(rows, held_out, n_val):
 
 
 def build_vocab(train, bpe=None, records=False, year_ago=False, stance_who=False):
-    words, scopes, attrs, values = Counter(), Counter(), Counter(), Counter()
+    words, scopes, attrs, values, seen_roles = Counter(), Counter(), Counter(), Counter(), Counter()
     for r in train:
         if not bpe:
             words.update(tokens(r['target']))
+        else:   # role tokens the BPE file's list lacks (roles version 2: <building.age:w>, ...)
+            seen_roles.update(re.findall(r'<[^<>\s]+>', r['target'] or ''))
         for scope, attr, value, num, typ in r['triples']:
             scopes.update(re.split(r'[:/]', scope))
             if records and ':' in scope:
@@ -183,13 +187,14 @@ def build_vocab(train, bpe=None, records=False, year_ago=False, stance_who=False
                 values[f'{typ}:{value}'] += 1
     keep = lambda c, n: [k for k, v in sorted(c.items(), key=lambda kv: -kv[1]) if v >= n]
     if bpe:
-        roles = [f for r in bpe['roles'] for f in (r, SPACE + r)]
+        listed = set(bpe['roles'])
+        roles = [f for r in bpe['roles'] + [t for t in keep(seen_roles, 1) if t not in listed] for f in (r, SPACE + r)]
         vocab_words = SPECIALS + [w for w in dict.fromkeys(roles + bpe['symbols']) if w not in SPECIALS]
     else:
         vocab_words = SPECIALS + [w for w in keep(words, 3) if w not in SPECIALS]
     return {'words': vocab_words, **({'record_scopes': True} if records else {}), **({'year_ago': True} if year_ago else {}), **({'stance_who': True} if stance_who else {}), **({'bpe': {'merges': bpe['merges']}} if bpe else {}),
             'scopes': ['<pad>', '<unk>'] + keep(scopes, 1), 'attrs': ['<pad>', '<unk>'] + keep(attrs, 1),
-            'values': ['<pad>', '<unk>'] + keep(values, 3), 'tasks': ['card.quote', 'card.option']}
+            'values': ['<pad>', '<unk>'] + keep(values, 3), 'tasks': ['card.quote', 'card.option', 'entity.note']}
 
 
 class Codec:
@@ -577,6 +582,7 @@ def main():
     ap.add_argument('--year-ago', action='store_true', help='add a closed "years ago" part to list items\' years; read 2-3x more, no gain (handoff 1i)')
     ap.add_argument('--bpe', help='subword vocabulary from scripts/narration-bpe.py (default: whole words)')
     ap.add_argument('--load', help='a trained run dir: skip training and only quote cards with its model')
+    ap.add_argument('--init', help='a trained run dir to start from: its vocab, grown with the new rows\' scopes, attrs and values, and its weights')
     a = ap.parse_args()
     MAX_TGT = a.max_tgt
     os.makedirs(a.out, exist_ok=True)
@@ -592,6 +598,14 @@ def main():
     val_seeds = sorted(val)
     is_train = lambda r: r['source'] != 'prompt' and part_of(r, held, val) == 'train'
     vocab = json.load(open(f'{a.load}/vocab.json')) if a.load else build_vocab((r for r in stream(a.rows) if is_train(r)), json.load(open(a.bpe)) if a.bpe else None, a.record_scopes, a.year_ago, a.stance_who)
+    if a.init:
+        # Keep the starting run's indices and flags; append what the new rows add.
+        base = json.load(open(f'{a.init}/vocab.json'))
+        grown = dict(base)
+        for k in ('scopes', 'attrs', 'values'):
+            grown[k] = base[k] + [t for t in vocab[k] if t not in set(base[k])]
+        grown['tasks'] = base['tasks'] + [t for t in vocab['tasks'] if t not in base['tasks']]
+        vocab = grown
     C = Codec(vocab)
     pre, fine, held_ex, prompts, counts = [], [], {'val': [], 'test': []}, {'val': [], 'test': []}, Counter()
     for r in stream(a.rows):
@@ -612,6 +626,16 @@ def main():
           f'{len(vocab["scopes"])} scope parts, {len(vocab["attrs"])} attrs; val seeds {val_seeds}')
 
     model = NarrationStudent(vocab, d=a.d, e=a.e, layers=a.layers, ff=a.ff, ffn=a.ffn).to(a.device)
+    if a.init:
+        old = torch.load(f'{a.init}/model.pt', map_location=a.device)['state']
+        own = model.state_dict()
+        with torch.no_grad():
+            for k, v in old.items():
+                if k in own and own[k].shape == v.shape:
+                    own[k].copy_(v)
+                elif k in own and own[k].dim() == v.dim() and own[k].shape[1:] == v.shape[1:] and own[k].shape[0] >= v.shape[0]:
+                    own[k][: v.shape[0]].copy_(v)   # a grown table: the old rows, new ones as initialised
+        print(f'started from {a.init}')
     model.smoothing = a.smoothing
     nparam = sum(p.numel() for p in model.parameters())
     print(f'params {nparam:,} (~{nparam / 1024:.0f} KB at int8)')
@@ -636,7 +660,13 @@ def main():
     samples = []
     for name in ('val', 'test'):
         rng.shuffle(prompts[name])
-        exs = [C.example(r) for r in prompts[name][: a.eval_max]]
+        # Up to eval_max prompts of each task (card quotes, inspector notes).
+        taken, chosen = Counter(), []
+        for r in prompts[name]:
+            if taken[r['task']] < a.eval_max:
+                taken[r['task']] += 1
+                chosen.append(r)
+        exs = [C.example(r) for r in chosen]
         for bt in batches(exs, 64, False):
             b = collate(bt, a.device)
             cands = beam_search(model, b, [e['ban'] for e in bt], C, k=a.beam)
@@ -649,7 +679,7 @@ def main():
                 one = {k: v[j:j + 1].expand(len(cs), *v.shape[1:]) for k, v in b.items()}
                 feats = model.score(one, seqs)
                 feats = torch.cat([feats, torch.tensor([[s, ex['unk']] for _, s in cs], device=a.device)], 1)
-                samples.append({'key': ex['row']['key'], 'split': name, 'roles': ex['row']['roles'],
+                samples.append({'key': ex['row']['key'], 'split': name, 'task': ex['row']['task'], 'roles': ex['row']['roles'],
                                 'outputs': [C.detok([vocab['words'][i] for i in ids if i != EOS]) for ids, _ in cs],
                                 'feats': [[round(x, 4) for x in f] for f in feats.tolist()]})
         print(f'{name}: {sum(s["split"] == name for s in samples)} cards quoted', flush=True)
