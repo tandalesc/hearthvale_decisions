@@ -358,7 +358,18 @@ export function loadNarrationStudent(bundle, blob = null) {
     return best && {...best, confident: best.quality >= bundle.quality.threshold};
   }
 
-  return {version: bundle.version, params: bundle.params, quote, encode, beam, tokens: tok, detok: untok, words: voc.words, threshold: bundle.quality.threshold};
+  // A short fingerprint of the weights, as the decision student shows in Settings.
+  let fp = 2166136261;
+  if (blob) {
+    const b = new Uint8Array(blob);
+    for (let i = 0; i < b.length; i += 7) fp = Math.imul(fp ^ b[i], 16777619) >>> 0;
+  } else {
+    const t = JSON.stringify(bundle.weights);
+    for (let i = 0; i < t.length; i += 7) fp = Math.imul(fp ^ t.charCodeAt(i), 16777619) >>> 0;
+  }
+  const id = fp.toString(16).padStart(8, '0');
+
+  return {version: bundle.version, id, params: bundle.params, quote, encode, beam, tokens: tok, detok: untok, words: voc.words, threshold: bundle.quality.threshold};
 }
 
 // Fetch the newest narration student through /api/students/narration/ (static assets as a fallback).
@@ -383,21 +394,25 @@ export async function fetchNarrationStudent({base = '/api/students/', fallbackBa
 
 // A lazy local narrator for the prose keeper: the bundle is fetched the first time a card
 // needs a quote, and never again if it is missing. yieldEvery (main thread only) lets the
-// page breathe every few decoding steps. narrate.info() -> {state: 'idle' | 'loading' |
-// 'ready' | 'missing', version} for the settings panel.
+// page breathe every few decoding steps. For the settings panel: narrate.info() ->
+// {state: 'idle' | 'loading' | 'ready' | 'missing', version, id}, and narrate.preload().
 export function createLocalNarration({base, fallbackBase, fetcher, yieldEvery = 0} = {}) {
-  let loading = null, info = {state: 'idle', version: null};
+  let loading = null, info = {state: 'idle', version: null, id: null};
   let steps = 0;
   const pause = yieldEvery ? () => (++steps % yieldEvery ? null : new Promise((resolve) => setTimeout(resolve, 0))) : undefined;
-  const narrate = async (facts) => {
+  const load = () => {
     if (!loading) {
-      info = {state: 'loading', version: null};
+      info = {state: 'loading', version: null, id: null};
       loading = fetchNarrationStudent({base, fallbackBase, fetcher}).catch(() => null)
-        .then((student) => { info = student ? {state: 'ready', version: student.version} : {state: 'missing', version: null}; return student; });
+        .then((student) => { info = student ? {state: 'ready', version: student.version, id: student.id} : {state: 'missing', version: null, id: null}; return student; });
     }
-    const student = await loading;
+    return loading;
+  };
+  const narrate = async (facts) => {
+    const student = await load();
     return student ? student.quote(facts, {pause}) : null;
   };
   narrate.info = () => info;
+  narrate.preload = () => { load(); };
   return narrate;
 }

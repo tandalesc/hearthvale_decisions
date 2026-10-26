@@ -209,7 +209,8 @@ export function createWorkerHost(opts = {}) {
     narration: {
       stats: () => narrationStats,
       // The settings panel asks for fresh numbers while it is open; UI snapshots also carry them.
-      refresh: () => call('narration.stats').then((s) => { narrationStats = s; }, () => {}),
+      refresh: () => call('narration.refresh').then((s) => { narrationStats = s; }, () => {}),
+      configure: (s) => { call('narration.configure', [s]).catch(() => {}); },
     },
     decisions: {
       stats: () => stats,

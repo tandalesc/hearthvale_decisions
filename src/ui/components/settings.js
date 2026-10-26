@@ -47,7 +47,8 @@ export function createSettings(ctx) {
           ${field('Title cards', 'Full-screen cards for a new age, a new body or a disaster. They pause the town.', seg('moments', p.moments, [['fast', 'While sped up'], ['always', 'Always'], ['never', 'Never']]))}
           ${field('New requests', 'Pause the town and open the Council when a request arrives, so none slips by. The town picks up its pace when you close the Council.', seg('requests', p.requests, [['notify', 'Notify'], ['pause', 'Pause and open']]))}
           ${field('Decision model', 'The student that answers most of the town\'s questions in this browser.', '<b class="model-ver" style="font:500 13px var(--font-mono)">–</b>')}
-          ${field('Narration model', 'Writes the Council\'s card quotes. Free play uses the student in this browser; Plus uses the hosted narrator, with the student as a backup.', '<b class="narration-ver" style="font:500 13px var(--font-mono)">–</b>')}
+          ${field('Narration model', 'The student that writes the Council\'s card quotes in this browser.', '<b class="narration-ver" style="font:500 13px var(--font-mono)">–</b>')}
+          ${ctx.entitlement?.()?.tier === 'paid' ? field('Narration', 'Fast writes quotes in this browser and asks Haiku only when it is unsure. Quality asks Haiku first.', seg('narration', p.narration, [['fast', 'Fast'], ['quality', 'Quality']])) : ''}
         </fieldset>
         <fieldset><legend>Your town</legend>
           <p style="margin:0 0 8px;font-size:var(--fs-13);color:var(--ink-2)">The town saves itself every 30 seconds on this device.</p>
@@ -220,17 +221,13 @@ function saverHint(power) {
 
 // The card narrator for this player, from the prose keeper's stats: the hosted narrator
 // (Plus) and/or the narration student, which loads with the first card quote.
+// The narration student in this browser, as the decision line shows its student.
 export function narrationLabel(stats) {
-  if (stats === undefined) return '–';   // not reported yet
-  if (!stats) return 'Off · template text';
-  const s = stats.student;
-  const student = !s ? null
-    : s.state === 'ready' ? `v${s.version} · student`
-      : s.state === 'loading' ? 'student · loading'
-        : s.state === 'missing' ? 'student unavailable'
-          : 'student · loads with the first quote';
-  if (stats.hosted) return student ? `hosted · ${student} as backup` : 'hosted';
-  return student ? (s.state === 'missing' ? `${student} · template text` : student) : 'template text';
+  if (stats === null) return 'Off';
+  const s = stats?.student;
+  if (s?.state === 'ready') return `v${s.version} · ${s.id}`;
+  if (s?.state === 'missing' || (stats && !s)) return 'None loaded';
+  return '–';   // not reported yet, or loading
 }
 
 function fmt(v, digits) {

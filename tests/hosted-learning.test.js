@@ -63,3 +63,31 @@ test('population guard rejects incomplete, missing, nonpositive, duplicate and m
  const invalid=[null,{...valid,ok:false},{...valid,towns:valid.towns.slice(0,1)},{...valid,towns:[valid.towns[0],{seed:2,town:[{pop:0}]}]},{...valid,towns:[valid.towns[0],{seed:2,town:[{pop:NaN}]}]},{...valid,towns:[valid.towns[0],{seed:2,town:[]}]},{...valid,towns:[valid.towns[0],valid.towns[0]]},{...valid,towns:[valid.towns[0],{seed:3,town:[{pop:100}]}]}];
  for(const bad of invalid){assert.equal(evaluateCanaryPopulation(valid,bad,seeds).pass,false);assert.equal(evaluateCanaryPopulation(bad,valid,seeds).pass,false);}
 });
+
+test('job labelling batches questions by state, 64 a request, a few in flight, each asked once', async () => {
+  const {labelRows} = await import('../cloudflare/training/label.js');
+  const row = (i, s, label) => ({key: `k${i}`, kind: 'petition', context: {i}, state: {town: s}, ...(label ? {label} : {})});
+  const done = {model: 'd1', features: FEATURES_VERSION, probabilities: {a: 1}};
+  const rows = [...Array.from({length: 100}, (_, i) => row(i, 'A')), ...Array.from({length: 40}, (_, i) => row(100 + i, 'B')),
+    ...Array.from({length: 10}, (_, i) => row(140 + i, 'C')), ...Array.from({length: 5}, (_, i) => row(150 + i, 'A', done))];
+  const asked = [], seen = new Set();
+  let inFlight = 0, peak = 0;
+  const ask = async (state, questions) => {
+    inFlight++; peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight--;
+    asked.push({state: state.town, n: questions.length});
+    for (const q of questions) { assert.ok(!seen.has(q.context.i), 'asked twice'); seen.add(q.context.i); }
+    if (state.town === 'C') throw new Error('provider down');
+    return {model: 'd1', answers: Object.fromEntries(questions.map((q) => [q.id, {probabilities: {a: 1}}]))};
+  };
+  const valid = (r, l) => l?.probabilities?.a === 1;
+  const out = await labelRows(rows, {teacher: 'd1', ask, valid, concurrency: 3});
+  assert.equal(out.requests, 4);                                   // A: 64 + 36, B: 40, C: 10
+  assert.ok(asked.every((a) => a.n <= 64));
+  assert.ok(peak <= 3 && peak > 1, `peak ${peak}`);
+  assert.equal(seen.size, 150);                                    // the 5 labelled rows are not asked
+  assert.equal(out.rows.length, 145);                              // C's request failed: its 10 rows drop
+  assert.deepEqual(out.rows.map((r) => r.key), rows.filter((r) => r.state.town !== 'C').map((r) => r.key));
+  assert.ok(out.labels.every((l, i) => l.model === 'd1' && (l === done || l.key === out.rows[i].key)));   // earlier labels kept as they were
+});
