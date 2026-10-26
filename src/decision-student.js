@@ -581,8 +581,9 @@ function gelu(x) {
 }
 
 // ---------------------------------------------------------------------------
-// Weights: base64 INT8 rows with a scale per row, fp16 or float32
-// (the trainer's scripts/export_decision_student.py).
+// Weights: base64 INT8 rows with a scale per row, INT4 with an fp16 scale per
+// `group` values of a row (two values a byte, low nibble first), fp16 or float32
+// (the trainer's scripts/export_decision_student.py, --bits 8|4).
 // ---------------------------------------------------------------------------
 
 function bytes(b64) {
@@ -601,6 +602,18 @@ export function halfToFloat(h) {
 
 export function decodeWeight(entry) {
   if (entry.f32) return new Float32Array(bytes(entry.f32).buffer);
+  if (entry.i4) {
+    const [rows, cols] = entry.shape, g = entry.group, groups = Math.ceil(cols / g);
+    const q4 = bytes(entry.i4), scale = Float32Array.from(new Uint16Array(bytes(entry.scale16).buffer), halfToFloat);
+    const out = new Float32Array(rows * cols);
+    for (let i = 0; i < out.length; i++) {
+      let q = i & 1 ? q4[i >> 1] >> 4 : q4[i >> 1] & 15;
+      if (q > 7) q -= 16;
+      const r = Math.floor(i / cols);
+      out[i] = q * scale[r * groups + Math.floor((i - r * cols) / g)];
+    }
+    return out;
+  }
   if (entry.f16) return Float32Array.from(new Uint16Array(bytes(entry.f16).buffer), halfToFloat);
   const q = new Int8Array(bytes(entry.i8).buffer), scale = new Float32Array(bytes(entry.scale).buffer);
   const cols = entry.shape[1], out = new Float32Array(q.length);

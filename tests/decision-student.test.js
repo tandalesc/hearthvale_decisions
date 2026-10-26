@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {decisionTriples, decisionOptions, FEATURES_VERSION} from '../src/decision-features.js';
-import {loadStudent} from '../src/decision-student.js';
+import {loadStudent, decodeWeight} from '../src/decision-student.js';
 import {KINDS, SNAPSHOTS} from '../src/sim/decisions/kinds.js';
 
 const town = {era: 'town', season: 'spring', archetype: 'mill', food: 'ok', coin: 'ok', wellbeing: 'fair', jobs: 'balanced', homes: 'scarce',
@@ -309,4 +309,20 @@ test('live budget at the proxy is shared by every player', async () => {
   for (let i = 0; i < 8; i++) assert.equal(roomy.take('a', 1), null);
   assert.equal(roomy.take('a', 1).status, 429, 'one player cannot take the whole budget');
   assert.equal(roomy.take('b', 1), null);
+});
+
+test('int4 weights decode as the exporter packs them: low nibble first, an fp16 scale per group of a row', () => {
+  // 3 x 3 with groups of 2: two scales a row, the second group one value wide, an odd count (padded nibble).
+  const q = [[-7, 3, 7], [0, -1, 5], [2, -4, -7]];
+  const scales = [[0.5, 0.25], [2, 1.5], [0.125, 3]];   // exact in fp16
+  const flat = q.flat(), nib = flat.map((v) => v & 15);
+  if (nib.length % 2) nib.push(0);
+  const packed = Uint8Array.from({length: nib.length / 2}, (_, i) => nib[2 * i] | (nib[2 * i + 1] << 4));
+  const half = (x) => { const f = new Float32Array([x]), u = new Uint32Array(f.buffer)[0];
+    return ((u >> 16) & 0x8000) | ((((u >> 23) & 0xff) - 112) << 10) | ((u >> 13) & 0x3ff); };
+  const scale16 = new Uint16Array(scales.flat().map(half));
+  const b64 = (a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString('base64');
+  const out = decodeWeight({shape: [3, 3], i4: b64(packed), scale16: b64(scale16), group: 2});
+  const want = q.flatMap((row, r) => row.map((v, c) => v * scales[r][Math.floor(c / 2)]));
+  assert.deepEqual([...out], want);
 });

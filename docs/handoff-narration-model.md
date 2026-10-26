@@ -248,9 +248,23 @@ The model reads years 2–3× more but times past rulings no better, and seed 1 
   - Traffic weighting gives each kind's rows a total weight in proportion to its share of real-play traffic (resident_routine goes from 9% of the weight to 73%), with a floor of 0.05%. The shares come from the gate's question counts, not its labels.
 - **The half-and-half mix passes both,** and is a little better than v7 by traffic.
   - It also passes the loop's other offline gates: no busy kind worse (worst: festival_participation +13.6%, against 1.2× + 0.002); largest busy option bias 0.017 (limit 0.05; v7 0.019); no rare option outside 0.67–1.5.
-- **Not yet checked:** young-town bias, held-out novel rows, JS parity, latency and canary towns. These need an int4 branch in `src/decision-student.js` `decodeWeight` and in `export_decision_student.py`.
-- **Size:** weights 144 → ~67 KB; bundle ~220 KB on disk as header + `.bin` (365 KB now), ~90 KB gzipped (172 KB).
-- Scripts and runs are in that session's scratchpad (`dec_int4.py`, `dec_int4b.py` with `--traffic EVAL.json --mix 0.5`, `dec-traffic-*/`), not in the repo.
+**v8 int4, exported and gated (not published).** `export_decision_student.py --bits 4 --group 32` (trainer repo, and its vendored copy in `cloudflare/training/vendor/scripts/`) stores 2-D matrices as `{shape, i4, scale16, group}`: two values a byte, low nibble first, fp16 scales rounded before quantizing, as the narration export. `decodeWeight` in `src/decision-student.js` reads them (test in `tests/decision-student.test.js`). The confidence head was retrained (`train_error_head.py`: rank correlation 0.543 on real-play rows). Re-exporting the QAT weights is lossless (KL 1.4e-8 against float). The loop's post-export gates, run by hand:
+
+| gate | v7 (shipped) | v8 int4 | limit |
+|---|---|---|---|
+| JS parity, largest difference | 1.6e-7 | 2.8e-7 | < 1e-4 |
+| size: weights + vocab (weights alone) | 335 KB (189) | **249 KB (103)** | ≤ 450 |
+| cached latency | 68 µs | 63 µs | ≤ 400 |
+| young-town bias (household_stay_move: stay) | −0.024 | −0.029 | ≤ 0.05 |
+| canary work share, 4 towns | 13.9% | 14.7% | within 3 points |
+
+- **Population** (reported, not gated) differed on the 4 canary towns: v8 763, v7 462 (geometric means).
+  - Over 16 towns it was 479 against 383, with a paired log-ratio of 0.22 ± 0.16 (v8 larger in 11 of 16). That is noise: towns diverge once ~2.5% of answers differ.
+  - Work share over 16 towns: 15.1% against 14.5%.
+- **Not run:** the held-out novel-rows gate. It scores a cycle's new rows, and this candidate has none.
+- **Published size, with the fixture trimmed to 8 rows as the loop does:** 270 KB, 100 KB gzipped (v7: 356 KB, 167 KB gzipped). It is `decisions.v8.published.json` in the candidate folder, and it passes parity too (9.6e-8).
+- **To publish,** copy that bundle to `public/students/decisions.v8.json` and add it to `manifest.json`.
+- The candidate (run, bundle, scripts, README) is in `data/strike-training/v8-int4-candidate/`, which git ignores.
 
 ## 2. What we learned
 
