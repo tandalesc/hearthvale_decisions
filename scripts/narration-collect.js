@@ -7,7 +7,8 @@
 //
 // Each seed grows a town as scripts/distill-collect.js does (water archetype and
 // council style rotate with the seed; decisions get the game's own fallback
-// answers; people are not stepped) and records, as the game would ask for them:
+// answers; people are stepped, as in the game; each town gets a name) and records,
+// as the game would ask for them:
 //   card     every docket card when it first surfaces, before the council rules
 //   year     each year's chronicle sheet, once the year's line is written
 //   person, household, building, body
@@ -36,6 +37,7 @@ async function runChild() {
   const {fallbackFor} = await import('../src/sim/decisions/effects.js');
   const {ARCHETYPES} = await import('../src/waters.js');
   const {hash32} = await import('../src/sim/rng.js');
+  const {townNameFor} = await import('../src/ui/menu/names.js');
   const {cardFacts, cardsNeedingProse, narrativeFacts, chronicleFacts} = await import('../src/sim/narrative-facts.js');
   const {validateFacts} = await import('../src/narrative-schema.js');
   const {validateProseFacts} = await import('../src/narrative-prose.js');
@@ -45,6 +47,8 @@ async function runChild() {
     const styleNames = Object.keys(STYLES);
     const style = styleNames[index % styleNames.length];
     const state = createState(seed, {archetype});
+    // A name per town, so its sheets carry one (narrative-facts: town), as a player's town does.
+    state.townName = townNameFor(seed, archetype);
     const council = standInCouncil({seed, ...STYLES[style]});
     const sheets = new Map();
     const counts = {}, refused = {};
@@ -86,7 +90,9 @@ async function runChild() {
     const seenCards = new Set();
     let lastYear = state.time.year, yearDue = null, seasonDue = [], lastQuarter = '';
     while (state.time.year < years) {
-      stepTick(state, 1, {decisions: bus}, {skipPeople: true});
+      // People are stepped, as in the game: without them a town stays a village of a few dozen
+      // with thin person sheets (28 people at year 30 against 454), and notes learned from those.
+      stepTick(state, 1, {decisions: bus});
       // Cards as the narrator sees them: before the council rules on them.
       // Only the cards the game would narrate (cardsNeedingProse: surfaced, no budget
       // cards), each taken the tick it surfaces, so its sheet's season is the one the

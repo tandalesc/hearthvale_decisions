@@ -689,3 +689,40 @@ The 1,277 Haiku targets with a season word (4.0%) are almost all "summer fair", 
 - **Bodies** remain the gap to Haiku: 3.18 against 3.52.
 - **The card-quote student:** cards are spring-heavy and the sheets predate the docket calendar change, so recollect before a card retrain (`--stratify season,era` is ready for cards). Measure how often quotes open with the season.
 - **Hosting:** if hosted students are served from somewhere other than `public/`, the v4 files still have to go there.
+
+## 1t. Notes v5: one note prompt, the town's own name, sampled wording. Shipped (27 October 2026)
+
+**Why.** Players saw almost the same note on every villager, and notes named Hearthvale in towns with another name. Causes:
+- v1–v4 were labelled with a one-line prompt that fed Haiku every fact, passing ones included.
+- Training towns had almost no people (28 at year 30, against 454 in play).
+- Beam search always picked the likeliest wording.
+- "Hearthvale" was hard-coded in fact lines.
+- Evaluation never looked at many notes from one town together.
+
+**What changed.**
+- `src/note-prompt.js` is the one note prompt. The hosted worker, the local narrator and the training labels all use it. Notes are built from durable fact lines only.
+- Fact sheets carry `town`, which is a role token for the student. `ownTownText` puts the town's own name in every fact, prose and card line.
+- The student decodes by seeded sampling (temperature 0.7, top-p 0.9) instead of beam search. It also remembers the last 8 openings per kind (names masked) and avoids reusing them.
+- Training towns now step their people, and each town gets its own name (`townNameFor`).
+- Labels: 80,600 Haiku notes cost $3.70; after trimming to two sentences, 78,501 remain.
+
+**Within-town gate** (12 held-out game towns, 430 sheets; `scratchpad/notes5/gate-eval.mjs`):
+
+| | v4 | v5 (run A, 646K) | run B (1.7M) | Haiku |
+|---|---|---|---|---|
+| 6-word phrases shared within a town | 31% | 9.3% | 7.7% | 6.5% |
+| Worst town | 41% | 12.3% | 11.2% | 9.8% |
+| Top opener | 43% | 6% | 5% | 5% |
+| "Hearthvale" in a renamed town | yes | 0 | 0 | 0 |
+
+- Run A shipped because it is the size of v4 and decodes about 0.7 s per note in Node, against 1.3 s for B.
+- Rules-only quality head: the most confident 90% pass 85%.
+- It has not been graded by the Haiku judge.
+
+**Left to do.**
+- **Judge v5's facts:** v5 has had no Haiku judge pass. The pilot garbled some facts (wrong trade, mixed-up years).
+- **Stock phrases:** "a child was born into the family" appears 67 times across the gate towns, against Haiku's 16. A phrase-level memory, or run B, would cut it.
+- **Run B or C:** these runs are ready if latency allows. They are at `rrh-llm-1:~/narration/notes5-{B,C}` and `out5-{B,C}`.
+- **Hearthvale still appears in sim and UI text:** `eras.js` arrivals, `chronicle.js`, `events.js`, `centres.js` (seat name), the decision criteria in `kinds.js`, `pressures.js` and `voice.js`.
+- **The card student:** review the card prompt (`cardLines` still states the season) before any card retrain. Two card label batches from the cancelled run were never fetched.
+- **The failing test is not caused by v5:** `tests/gatherings.test.js` "household members at a gathering end up near each other" also fails on main.

@@ -56,6 +56,7 @@ export const FACT_SCHEMA = obj({
   v: int(1, 1),
   kind: oneOf(['person', 'household', 'building', 'body']),
   name: str(40),
+  town: str(40),
   year: YEAR,
   season: oneOf(SEASONS),
   era: oneOf(ERAS),
@@ -283,12 +284,32 @@ const DIM_WORDS = {
   faction: (v) => `the ${v}`, newcomer: (v) => (v === 'yes' ? 'newcomers' : 'old families'), centre: (v) => `folk of ${v}`, faithBand: (v) => `${v === 'high' ? 'devout' : v === 'low' ? 'less devout' : 'churchgoing'} folk`,
 };
 const STORY_WORDS = {
-  arrived: 'came to Hearthvale', formed: 'set up their own household', moved: 'moved house', trade: 'changed trade',
+  arrived: 'came to the town', formed: 'set up their own household', moved: 'moved house', trade: 'changed trade',
   job: 'found work', 'lost-job': 'lost work', home: 'worked on their home', birth: 'welcomed a child', death: 'lost one of their own',
   hungry: 'went hungry', loan: 'took a loan', founded: 'started a business', closed: 'closed a business',
   protest: 'joined a protest', strike: 'joined a strike', petition: 'petitioned the council', displaced: 'was pushed out',
   built: 'was built', upgraded: 'was upgraded', extended: 'was extended', restyled: 'was refitted in a new style',
   repaired: 'was repaired', raised: 'was raised against floods', derelict: 'fell empty', converted: 'changed use', damaged: 'was damaged', owner: 'changed hands',
+};
+// The same life event in a few plain wordings, one per entity and year (a fixed choice): a
+// sheet that always said "lost one of their own" had every writer echo it, note after note.
+const STORY_VARIANTS = {
+  death: ['lost one of their own', 'had a death in the family', 'buried one of their own', 'suffered a loss in the family'],
+  birth: ['welcomed a child', 'had a baby', 'saw a child born into the family'],
+  arrived: ['came to the town', 'settled in the town', 'moved to the town from elsewhere'],
+  formed: ['set up their own household', 'started a household of their own', 'struck out on their own'],
+  moved: ['moved house', 'changed homes', 'found a new place to live'],
+  displaced: ['was pushed out', 'was forced out', 'lost their place'],
+  hungry: ['went hungry', 'went short of food', 'had too little to eat'],
+  'lost-job': ['lost work', 'lost their job', 'was put out of work'],
+  job: ['found work', 'took up a job', 'got work'],
+};
+const variantOf = (kind, key) => {
+  const list = STORY_VARIANTS[kind];
+  if (!list) return STORY_WORDS[kind];
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
+  return list[(h >>> 0) % list.length];
 };
 export const KIND_ABOUT = {
   resident_routine: 'their day', household_stay_move: 'staying or going', choose_trade: 'what the young ones will do',
@@ -347,6 +368,10 @@ export function whyOrder(facts, {limit = Infinity} = {}) {
 }
 
 // Fact lines, each tagged with the kind of fact it states (see WHY_ORDER).
+// The sim's own words still say "Hearthvale" in places (an option such as "Leave Hearthvale",
+// event and chronicle texts): a sheet's lines use the town's own name.
+export const ownTownText = (text, town) => (town && town !== 'Hearthvale' ? String(text).replace(/\bHearthvale\b/g, town) : String(text));
+
 export function taggedLines(facts, {durable = false} = {}) {
   const f = facts;
   const lines = [];
@@ -359,7 +384,7 @@ export function taggedLines(facts, {durable = false} = {}) {
   // Never the season: a note is kept until something material changes, and a writer told
   // "It is spring" opens with the weather ("Spring has come to Hearthvale") whatever the month
   // the reader meets it in.
-  add(`It is year ${f.year}${f.era ? `. Hearthvale is a ${f.era}` : ''}`);
+  add(`It is year ${f.year}${f.era ? `. ${f.town || 'The town'} is a ${f.era}` : ''}`);
 
   tag = 'who';
   const w = f.who ?? {};
@@ -379,7 +404,9 @@ export function taggedLines(facts, {durable = false} = {}) {
   tag = 'now';
   const n = f.now ?? {};
   if (n.doing && !durable) add(`Right now: ${DOING_WORDS[n.doing]}${n.place && !(n.doing === 'rest' && n.place === 'home') ? ` at ${n.place}` : ''}`);
-  if (n.work) add(`Work: ${WORK_WORDS[n.work]}`, n.work === 'idle' || n.work === 'short' ? 'hard' : 'now');
+  // A kept note (durable) hears of work and rent only when they are hard on them: "in work" and
+  // a light rent are true of most of the town, and writers restated them in every note.
+  if (n.work && (!durable || n.work !== 'working')) add(`Work: ${WORK_WORDS[n.work]}`, n.work === 'idle' || n.work === 'short' ? 'hard' : 'now');
   if (n.wealth) add(`Wealth: ${n.wealth}${n.wealthTrend ? `, ${n.wealthTrend}` : ''}`, n.wealth === 'poor' || n.wealthTrend === 'falling' ? 'hard' : 'now');
   if (n.mood) add(`Mood of ${n.moodOf ?? 'their people'}: ${n.mood}${n.moodTrend ? `, ${n.moodTrend}` : ''}`, n.mood === 'angry' || n.mood === 'uneasy' ? 'hard' : 'now');
   // energy, food and company are levels (src/sim/people.js decayNeeds runs them down): low is
@@ -388,7 +415,7 @@ export function taggedLines(facts, {durable = false} = {}) {
   if (feel.length && !durable) add(`They feel ${feel.length > 1 ? `${feel.slice(0, -1).join(', ')} and ${feel.at(-1)}` : feel[0]}`,
     ['energy', 'food', 'company'].some((k) => n[k] === 'low') ? 'hard' : 'now');
   if (n.hungry) add('They are going hungry', 'hard');
-  if (n.rent && n.rent !== 'none') add(`Rent weighs ${n.rent === 'heavy' ? 'heavily' : 'lightly'} on them`, n.rent === 'heavy' ? 'hard' : 'now');
+  if (n.rent && n.rent !== 'none' && (!durable || n.rent === 'heavy')) add(`Rent weighs ${n.rent === 'heavy' ? 'heavily' : 'lightly'} on them`, n.rent === 'heavy' ? 'hard' : 'now');
 
   tag = 'building';
   const b = f.building;
@@ -440,8 +467,13 @@ export function taggedLines(facts, {durable = false} = {}) {
   tag = 'story';
   for (const s of f.story ?? []) {
     const joiner = /^(about|against|from|to|within|settling|for)\b/.test(s.text ?? '') ? ' ' : ', ';
-    const what = s.kind === 'home' && s.text ? s.text.replace(/\bit\b/, 'their home') : `${STORY_WORDS[s.kind]}${s.text ? `${joiner}${s.text}` : ''}`;
-    add(`${when(s.year)}, ${s.group ? `the ${s.group}` : f.kind === 'building' ? 'it' : 'they'} ${what}`);
+    const it = !s.group && f.kind === 'building';
+    const words = s.group || f.kind === 'building' ? STORY_WORDS[s.kind] : variantOf(s.kind, `${f.name}|${s.kind}|${s.year}`);
+    let what = s.kind === 'home' && s.text ? s.text.replace(/\bit\b/, 'their home') : `${words}${s.text ? `${joiner}${s.text}` : ''}`;
+    // "they was pushed out": people and groups are plural.
+    if (!it) what = what.replace(/^was\b/, 'were');
+    // A group's entry is about others of their kind, not them: "other farmers were pushed out".
+    add(`${when(s.year)}, ${s.group ? `other ${s.group}` : it ? 'it' : 'they'} ${what}`);
   }
   for (const x of f.rulings ?? []) {
     let line = `${when(x.year)}, ${ACT_WORDS[x.act]} ${x.what}${x.by ? `, asked by the ${x.by}` : ''}.`;
@@ -455,7 +487,7 @@ export function taggedLines(facts, {durable = false} = {}) {
     add(`Rule in force: ${x.what}${x.by ? `, set by ${x.by}${since}` : since}. It ${x.fx} them`);
   }
   for (const e of f.events ?? []) add(`${when(e.year)} in town: ${e.what}`, 'event');
-  return lines;
+  return lines.map((l) => ({...l, text: ownTownText(l.text, f.town)}));
 }
 
 // ---------------------------------------------------------------------------

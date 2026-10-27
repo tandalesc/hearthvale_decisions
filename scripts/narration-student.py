@@ -546,6 +546,77 @@ def beam_search(model, b, bans, codec, k=4, alpha=0.7, block=3, no_repeat=False)
     return [sorted(f, key=lambda c: -c[1])[:k] for f in finished]
 
 
+def sample_search(model, b, bans, codec, k=8, alpha=0.7, block=3, no_repeat=False, temperature=0.8, top_p=0.9, generator=None):
+    """k independent samples per example, as the runtime's decode 'sample' (src/narration-student.js):
+    the same bans as beam_search, then one token from the top-p share of softmax(lp / temperature).
+    A beam always takes the likeliest wording, so neighbours with like facts got the same note.
+    Returns, like beam_search, each example's finished candidates as (ids, score / len ** alpha)."""
+    mem = model.memory(b)
+    B = mem.size(0)
+    mem, mmask, task = mem.repeat_interleave(k, 0), b['mmask'].repeat_interleave(k, 0), b['task'].repeat_interleave(k, 0)
+    fixed = torch.zeros(B, model.V, dtype=torch.bool)
+    for i, ids in enumerate(bans):
+        fixed[i, ids] = True
+    fixed[:, [PAD, UNK, BOS]] = True
+    fixed = fixed.repeat_interleave(k, 0).to(mem.device)
+    scores = torch.zeros(B * k, device=mem.device)
+    alive = [True] * (B * k)
+    hist = [[] for _ in range(B * k)]
+    finished = [[] for _ in range(B)]
+    prev = torch.zeros(B * k, 0, dtype=torch.long, device=mem.device)
+    for step in range(MAX_TGT):
+        _, logits = model.run(prev, task, mem, mmask)
+        lp = logits[:, -1].log_softmax(-1).masked_fill(fixed, -1e9)
+        for i, hst in enumerate(hist):
+            if not alive[i]:
+                continue
+            words = codec.words_of(hst)
+            banned = set()
+            if words:
+                banned.add(words[-1])
+            if no_repeat:
+                banned.update(w for w in words if len(w) >= 5 and w.isalpha() and w not in REPEATABLE)
+            if len(words) >= block - 1:
+                tail = words[-(block - 1):]
+                for j in range(len(words) - block + 1):
+                    if words[j: j + block - 1] == tail:
+                        banned.add(words[j + block - 1])
+            for w in banned:
+                if w in codec.ids_of:
+                    lp[i, codec.ids_of[w]] = -1e9
+        probs = ((lp - lp.max(-1, keepdim=True).values) / temperature).exp().masked_fill(lp <= -1e8, 0)
+        sp, si = probs.sort(-1, descending=True)
+        cum = sp.cumsum(-1)
+        total = cum[:, -1:].clamp(min=1e-12)
+        sp = sp.masked_fill(cum - sp >= top_p * total, 0)   # the top-p share, at least one token
+        pick = torch.multinomial(sp.clamp(min=0) + 1e-20 * (sp.sum(-1, keepdim=True) == 0), 1, generator=generator)
+        tok = si.gather(1, pick).squeeze(1)
+        tl = tok.tolist()
+        for i, t in enumerate(tl):
+            if not alive[i]:
+                continue
+            tok_lp = lp[i, t].item()
+            if tok_lp <= -1e8:
+                alive[i] = False
+                continue
+            scores[i] += tok_lp
+            hs = hist[i] + [t]
+            hist[i] = hs
+            ending = t == EOS or step == MAX_TGT - 1
+            if no_repeat:
+                ws = codec.words_of([x for x in hs if x != EOS])
+                if repeats_word(ws if ending else ws[:-1]):
+                    alive[i] = False
+                    continue
+            if ending:
+                finished[i // k].append((hs, scores[i].item() / len(hs) ** alpha))
+                alive[i] = False
+        if not any(alive):
+            break
+        prev = torch.cat([prev, tok.clamp(max=model.V - 1).masked_fill(tok == EOS, PAD)[:, None]], 1)
+    return [sorted(f, key=lambda c: -c[1])[:k] for f in finished]
+
+
 def batches(exs, size, shuffle, rng=None):
     idx = list(range(len(exs)))
     if shuffle:
@@ -598,6 +669,9 @@ def main():
     ap.add_argument('--smoothing', type=float, default=0.05)
     ap.add_argument('--beam', type=int, default=4)
     ap.add_argument('--no-repeat', action='store_true', help='decode without reusing a content word (notes)')
+    ap.add_argument('--decode', choices=['beam', 'sample'], default='beam', help='how test and validation candidates are made (sample: as the runtime decode "sample")')
+    ap.add_argument('--temperature', type=float, default=0.8)
+    ap.add_argument('--top-p', type=float, default=0.9)
     ap.add_argument('--eval-batch', type=int, default=64, help='cards decoded together when quoting (lower it for beam 8 on a small GPU)')
     ap.add_argument('--eval-max', type=int, default=600)
     ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
@@ -686,6 +760,7 @@ def main():
         held_loss[name] = round(sum(ls) / max(1, len(ls)), 4)
     print('held-out loss on passing quotes', held_loss)
     samples = []
+    gen = torch.Generator(device=a.device).manual_seed(a.seed)   # decode 'sample': the same draws for the same run
     for name in ('val', 'test'):
         rng.shuffle(prompts[name])
         # Up to eval_max prompts of each task (card quotes, inspector notes).
@@ -697,7 +772,11 @@ def main():
         exs = [C.example(r) for r in chosen]
         for bt in batches(exs, a.eval_batch, False):
             b = collate(bt, a.device)
-            cands = beam_search(model, b, [e['ban'] for e in bt], C, k=a.beam, no_repeat=a.no_repeat)
+            if a.decode == 'sample':
+                cands = sample_search(model, b, [e['ban'] for e in bt], C, k=a.beam, no_repeat=a.no_repeat,
+                                      temperature=a.temperature, top_p=a.top_p, generator=gen)
+            else:
+                cands = beam_search(model, b, [e['ban'] for e in bt], C, k=a.beam, no_repeat=a.no_repeat)
             for j, (ex, cs) in enumerate(zip(bt, cands)):
                 if not cs:
                     continue

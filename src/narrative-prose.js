@@ -12,7 +12,7 @@
 // templates. checkCardProse / checkYearProse / checkEndProse turn model output
 // into clean prose or a reason to fall back to the template text.
 
-import {SPEC, checkSpec, FactsError, ERAS, SEASONS, cleanProse, whenText} from './narrative-schema.js';
+import {SPEC, checkSpec, FactsError, ERAS, SEASONS, cleanProse, whenText, ownTownText} from './narrative-schema.js';
 import {TRADES} from './sim/decisions/kinds.js';
 
 const {int, num, str, oneOf, bool, list, obj, key} = SPEC;
@@ -33,6 +33,7 @@ export const CARD_FACTS_SCHEMA = obj({
   template: str(60),
   category: str(24),
   title: prose(80),
+  town: str(40),
   year: YEAR,
   season: oneOf(SEASONS),
   era: oneOf(ERAS),
@@ -63,6 +64,7 @@ export const YEAR_FACTS_SCHEMA = obj({
   v: int(1, 1),
   type: oneOf(['year']),
   year: YEAR,
+  town: str(40),
   era: oneOf(ERAS),
   archetype: str(24),
   people: obj({start: int(0, 1e7), end: int(0, 1e7)}),
@@ -82,6 +84,7 @@ export const END_FACTS_SCHEMA = obj({
   year: YEAR,
   archetype: str(24),
   eraName: str(16),
+  town: str(40),
   people: int(0, 1e7),
   rules: int(0, 999),
   eras: list(obj({
@@ -151,7 +154,7 @@ export function cardLines(f) {
   const a = f.asker ?? {};
   lines.push(`Card: ${f.title} (${f.kind}${f.urgency === 2 ? ', urgent' : ''}).`);
   lines.push(`Asked by ${a.name}${a.role ? `, ${a.role}` : ''}${a.body ? ` of the ${a.body}` : ''}${a.traits?.length ? `. Manner: ${a.traits.join(', ')}` : ''}.`);
-  lines.push(`It is ${f.season ?? 'the'} of year ${f.year}. Hearthvale is a ${f.era ?? 'town'}.`);
+  lines.push(`It is ${f.season ?? 'the'} of year ${f.year}. ${f.town || 'The town'} is a ${f.era ?? 'town'}.`);
   if (f.why) lines.push(`Template reason: ${f.why}`);
   for (const t of f.trigger ?? []) lines.push(`Why now: ${t}`);
   if (f.place) lines.push(`Place: ${f.place.district ?? 'the town'}${f.place.road ? `, on ${f.place.road}` : ''}${f.place.traffic ? `, ${f.place.traffic}` : ''}.`);
@@ -170,11 +173,11 @@ export function cardLines(f) {
     const money = o.cost ? `costs ${o.cost} coin` : o.upkeep ? `upkeep ${o.upkeep} coin a year` : 'no cost';
     lines.push(`Option ${o.key} "${o.label}": ${effects}; ${money}. Template: ${o.tradeoff ?? ''}`);
   }
-  return lines;
+  return lines.map((l) => ownTownText(l, f.town));
 }
 
 export function yearLines(f) {
-  const lines = [`The year: ${f.year}. Hearthvale is a ${f.era ?? 'town'}${f.archetype ? `, a ${f.archetype}` : ''}.`];
+  const lines = [`The year: ${f.year}. ${f.town || 'The town'} is a ${f.era ?? 'town'}${f.archetype ? `, a ${f.archetype}` : ''}.`];
   if (f.people) lines.push(`People: ${f.people.start} at the start, ${f.people.end} at the end.`);
   if (f.mood) lines.push(`Spirits in town: ${f.mood}.`);
   for (const l of f.lines ?? []) lines.push(`Chronicle: ${l}`);
@@ -183,11 +186,11 @@ export function yearLines(f) {
   for (const r of f.rules ?? []) lines.push(`New rule: ${r}.`);
   for (const b of f.bodies ?? []) lines.push(`The ${b.name} was ${b.change}.`);
   for (const m of f.moods ?? []) lines.push(`The ${m.who} are ${m.mood}, ${m.trend}.`);
-  return lines;
+  return lines.map((l) => ownTownText(l, f.town));
 }
 
 export function endLines(f) {
-  const lines = [`Year ${f.year}: the chronicle closes. Hearthvale is a ${f.eraName}, a ${f.archetype}, with ${f.people} people and ${f.rules} rules.`];
+  const lines = [`Year ${f.year}: the chronicle closes. ${f.town || 'The town'} is a ${f.eraName}, a ${f.archetype}, with ${f.people} people and ${f.rules} rules.`];
   for (const e of f.eras) {
     lines.push(`Era ${e.era} (${e.name}), years ${e.from} to ${e.to}${e.archetype ? `, a ${e.archetype}` : ''}${e.people ? `, ${e.people} people at its end` : ''}.`);
     for (const m of e.moments ?? []) lines.push(`  Era ${e.era} moment: ${m}`);
@@ -199,7 +202,7 @@ export function endLines(f) {
   for (const c of f.centres ?? []) {
     lines.push(`Town ${c.id}, ${c.name}${c.kind ? `, a ${c.kind}` : ''}${c.people ? ` of ${c.people} people` : ''}${c.character ? `, a ${c.character}` : ''}${c.status ? ` (${c.status})` : ''}: ${c.line}`);
   }
-  return lines;
+  return lines.map((l) => ownTownText(l, f.town));
 }
 
 // ---------------------------------------------------------------------------
@@ -548,7 +551,7 @@ export const yearFallback = (facts) => ({text: facts.template ?? `Year ${facts.y
 
 export function endFallback(facts) {
   const eras = facts.eras.map((e) => {
-    const parts = [`From year ${e.from} to year ${e.to}, Hearthvale was a ${e.name.toLowerCase()}${e.archetype ? `, a ${e.archetype}` : ''}.`];
+    const parts = [`From year ${e.from} to year ${e.to}, ${facts.town || 'the town'} was a ${e.name.toLowerCase()}${e.archetype ? `, a ${e.archetype}` : ''}.`];
     if (e.moments?.[0]) parts.push(e.moments[0]);
     if (e.founded?.length) parts.push(`The ${e.founded[0]} first sat in these years.`);
     return {era: e.era, text: parts.join(' ')};

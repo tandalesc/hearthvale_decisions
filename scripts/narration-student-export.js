@@ -3,7 +3,7 @@
 //
 //   node scripts/narration-student-export.js SHEETS.jsonl --labels LABELS.jsonl [--labels ...] --out FILE
 //       [--notes NOTES.jsonl ...] [--note-fraction 1] [--only-notes] [--roles 2]
-//       [--note-templates N --held-out 1,2,3]
+//       [--note-templates N --held-out 1,2,3] [--trim-notes] [--drop season]
 //
 // LABELS are hosted-narrator replies for cards, as scripts/narration-label-batch.js
 // fetch writes them ({facts, field: 'why', text, reply, model, seeds}).
@@ -50,6 +50,7 @@ const noteFraction = args.includes('--note-fraction') ? Number(args[args.indexOf
 const onlyNotes = args.includes('--only-notes');
 const rolesVersion = args.includes('--roles') ? Number(args[args.indexOf('--roles') + 1]) : 1;
 const noteTemplates = args.includes('--note-templates') ? Number(args[args.indexOf('--note-templates') + 1]) : 0;
+const trimNotes = args.includes('--trim-notes');   // keep a long note's first two sentences (see below)
 const heldOut = new Set(String(args.includes('--held-out') ? args[args.indexOf('--held-out') + 1] : '').split(',').filter(Boolean).map(Number));
 if (noteTemplates && !heldOut.size) throw new Error('--note-templates needs --held-out');
 // --drop season: leave a fact out of the note triples (the bundle records it as config.drop, and
@@ -97,6 +98,10 @@ for (const file of onlyNotes ? [] : labelFiles) {
 // Inspector notes: one task for people, households, buildings and bodies.
 // Salted: narration-label-batch.js picks sheets by the unsalted hash, so the picked ones all hash low.
 const share = (key) => parseInt(createHash('sha256').update(`note-fraction:${key}`).digest('hex').slice(0, 8), 16) / 2 ** 32;
+const firstTwo = (text) => {
+  const two = (text.match(/[^.!?]+[.!?]+/g) ?? []).slice(0, 2).join('').trim();
+  return two && two.split(/\s+/).length >= 18 && noteOk(two) ? two : null;
+};
 for (const file of noteFiles) {
   for await (const l of readLines(file)) {
     if (!l.facts || l.field !== 'text') continue;
@@ -110,7 +115,10 @@ for (const file of noteFiles) {
     if (typeof l.text !== 'string' || !l.text.trim()) continue;
     const text = cleanNote(l.text);
     write({...base, source: 'pretrain', target: delex(text, roles)});
-    if (noteOk(text)) write({...base, source: 'model', target: delex(text, roles)});
+    // A note one sentence too long (Haiku often writes three): its first two sentences, when
+    // they pass on their own and say enough. Only for --trim-notes runs.
+    const kept = noteOk(text) ? text : trimNotes ? firstTwo(text) : null;
+    if (kept) write({...base, source: 'model', target: delex(kept, roles)});
   }
 }
 // Template notes of training-town entity sheets, round-robin by kind.

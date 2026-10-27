@@ -13,3 +13,11 @@ export function suggestName(landscape, avoid = '') {
   }
   return 'Hearthvale';
 }
+
+// A fixed name for a number (a seed): the training collector names its towns, so a narrator
+// learns to use the town's own name rather than one it was always told.
+export function townNameFor(n, landscape = '') {
+  const tails = landscape === 'coast' || landscape === 'shore' || landscape === 'delta' ? COAST_TAILS : TAILS;
+  const h = Math.imul((Number(n) | 0) ^ 0x9e3779b9, 2654435761) >>> 0;
+  return HEADS[h % HEADS.length] + tails[(h >>> 8) % tails.length];
+}
