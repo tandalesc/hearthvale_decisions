@@ -726,3 +726,78 @@ The 1,277 Haiku targets with a season word (4.0%) are almost all "summer fair", 
 - **Hearthvale still appears in sim and UI text:** `eras.js` arrivals, `chronicle.js`, `events.js`, `centres.js` (seat name), the decision criteria in `kinds.js`, `pressures.js` and `voice.js`.
 - **The card student:** review the card prompt (`cardLines` still states the season) before any card retrain. Two card label batches from the cancelled run were never fetched.
 - **The failing test is not caused by v5:** `tests/gatherings.test.js` "household members at a gathering end up near each other" also fails on main.
+
+## 1u. Notes v6 and cards v4: years as words to copy, a card prompt that passes (27 October 2026)
+
+**Why v5 got facts wrong.**
+- The teacher's fact lines say "Nine years ago, they came…" and the note prompt asks for "years ago". The student, though, reads a year only as a rough log-scaled number.
+- It also could not write a number word that the sheet lacked: `encode` bans number words not in the facts. So for Corin Cobb (arrived nine years ago, household of five) it wrote "five years ago".
+- On the 248-note judge, 39% of v5 notes got a time wrong (Haiku 13%).
+- The judge is also strict: four of four Haiku notes it flagged were correct on inspection. Its absolute rates overstate errors for every source, but the gaps between sources are real.
+
+**Roles version 3** (`src/narration-roles.js`):
+- A dated field (`year`, `since`, `from`, `to`, `founded`) 2–20 years before the sheet's year gets a word role, such as `<story:2.year:ago>` = "nine".
+- In targets, a number word followed by "years" maps to that role first (a building's age before it).
+- A count of years that no dated item matches stays a plain word, never a household size.
+- Coverage: 97% of "N years" phrases in note targets and 88% in card quotes.
+- Bundles with `vocab.roles` 3 get it. v5 (roles 2) and narration v3 (roles 1) read as before.
+- Card rows take it with `--card-roles 3`.
+
+**Notes v6.**
+- Same labels as v5, re-exported with roles 3. Run A (648K params) on `rows6b`.
+- The quality head is trained on Haiku facts verdicts for every candidate of 600 val and 600 test entities ($0.63). The rules-only head could not see broken grammar: its confident and unsure notes broke alike, 20% and 18%.
+- Judge on the same notes:
+
+| | v5 | v6 | Haiku |
+|---|---|---|---|
+| Time wrong | 39% | ~21% | 13% |
+| Broken grammar | 18% | 11% | 0% |
+| Any contradiction | 69% | 57% | 26% |
+| Within-town 6-gram repeat | 9.3% | 9.3% | 6.5% |
+
+- The head's confident 77% of notes: 6% broken, 50% contradiction. The unsure 23%: 28% broken, 79% contradiction.
+- Free players still see unsure notes (`src/narrator-client.js`). Showing the template note instead is a product call.
+- Lower temperature did not help: T 0.5 gives 11.8% repeat, T 0.4 gives 13.5%.
+- The larger run (By, 1.7M) had fewer contradictions (56%) but more broken grammar (24% under the rules head). It is not shipped.
+
+**Card prompt** (`server/narrator.js` CARD_PROMPT and `cardLines`). Old prompt: 26% of Haiku replies passed. Failures:
+- 46% too many sentences;
+- 20% the asker naming themselves ("Rhea here");
+- "paraphrasing the template reason is welcome", so "you can back one and the other will be sore" sat in a quarter of quotes.
+
+Changes, in four pilots of 600 held-out cards ($0.05–0.07 each):
+- Two or three sentences, four at most, 60 words.
+- Own words, not the template's sentences.
+- Vary the opening; the season only when the card turns on it.
+- The town's own name.
+- The asker's name is no longer in the card facts (role and body only): any self-naming instruction primed it. One reply read "Linus here... no, I won't name myself."
+- The stock two-plan sentence is dropped from the template reason.
+- A fifth worked example, a two-plan card whose stake is specific to that card. A generic stake ("the side you pass over will grumble") was copied into 132 of 600 replies.
+
+Final pilot: 72% pass, 3.3% within-town repeat, top phrase in 4% of quotes, 0 "Hearthvale".
+
+**Cards v4.**
+- Labels: four Batch replies for each of the 20,984 training cards in `notes5/collect` (40 named towns, current calendar), $1.81 each, $7.24 in total. 74% pass, giving 58,302 fine-tune quotes (v3: 25K).
+- `--card-roles 3`, BPE-2048, `--stance-who`, 4+16 epochs, sampled decoding (T 0.7). `quote()` now samples when `config.decode` is 'sample'.
+- Shipped run: By (1.70M params, d 128, e 96, 6 layers, ff 256, `--year-ago`). Rules pass of the top candidate: 92.5%.
+- Judge, 290 paired held-out cards, runtime quotes (pilot 4 cards):
+
+| | v3 | v4 (By) | v4 (A, 656K) | Haiku |
+|---|---|---|---|---|
+| Mean score 1–5 | 3.50 | 3.58 | 3.20 | 4.10 |
+| Good (4–5) | 59% | 67% | 46% | 95% |
+| Broken grammar | 4% | 3% | 16% | 0% |
+| Contradiction | 28% | 29% | 40% | 12% |
+| Confident quote, of 600 | 460 | 538 | 552 | — |
+
+- Within-town (60 cards × 8 held-out towns): v3 repeats 33% of 6-grams, v4 15% (Haiku 3%). The top v4 phrases echo stance lines ("the farmers are not much moved") and a closing "in two years, so I am asking".
+- Latency: about 0.43 s per card in Node (sampled, adaptive), against v3's 0.03–0.13 s.
+
+**Spend this round:** $8.46 of $10. That is $7.24 card labels, $0.22 card pilots, $0.63 note verdicts and $0.37 judges.
+
+**Left to do.**
+- **The unsure-note routing call** for free players (above).
+- **Card phrases from fact lines:** "not much moved" echoes the stance line. Rewording `LEAN_WORDS` per stance would spread it.
+- **Hearthvale still in sim and UI text,** as listed in §1t.
+- **The hosted (Plus) card prompt** (`cloudflare/narration.js` CARD_INSTRUCTIONS) is unchanged. It rewrites the template why from limited facts.
+- **Scratchpad:** `notes5/` (rows6b, bpe6, runs, out6-*, judge/) and `cards5/` (pilots, c1–c4, rows4, bpe-c4, outc4-*, judge.jsonl). Runs are on rrh-llm-1 under `~/narration/notes6-*` and `cards4-*`.

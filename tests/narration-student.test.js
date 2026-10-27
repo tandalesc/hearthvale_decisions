@@ -152,8 +152,9 @@ test('the shipped narration student reproduces its training run on the fixture',
   const fixture = existsSync(fixtureFile) ? JSON.parse(readFileSync(fixtureFile, 'utf8')).cards : bundle.fixture;
   let same = 0;
   for (const f of fixture.slice(0, 8)) {
-    const {triples, roles} = roleTriples(narrationTriples(f.facts));
-    const cands = await student.beam(student.encode(triples, roles), 0);
+    // As the bundle builds them: its roles version (v4: years ago), town and dropped facts.
+    const {triples, roles} = student.rolesOf(f.facts);
+    const cands = await student.beam(student.encode(triples, roles), student.taskIndex('card.quote'));
     if (student.detok(cands[0].toks.map((i) => student.words[i])) === f.outputs[0]) same++;
   }
   // Float rounding can flip a near-tie between candidates; most cards must match exactly.
@@ -213,6 +214,24 @@ test('role tokens, version 2: a token per number fact, the sheet\'s own fields f
   const note = 'Built in year 68, it has stood six years.';
   const d = delex(note, roles);
   assert.equal(d, 'Built in year <building.built_year>, it has stood <building.age:w> years.', 'the sheet\'s own fields win; number words too');
+  assert.equal(relex(d, roles), note);
+});
+
+test('role tokens, version 3: how long ago a dated item was, as a word to copy', () => {
+  const triples = [
+    ['person', 'year', '35', 0, 'num'], ['who', 'since', '26', -2.3, 'num'], ['who', 'family', '5', 1.8, 'num'],
+    ['story:0', 'year', '33', -1.1, 'num'], ['story:1', 'year', '34', -0.7, 'num'], ['body', 'founded', '5', -3.4, 'num'],
+  ];
+  assert.equal(roleTriples(triples, {version: 2}).roles['<who.since:ago>'], undefined, 'version 2 bundles read as they were trained');
+  const {roles} = roleTriples(triples, {version: 3});
+  assert.equal(roles['<who.since:ago>'], 'nine');
+  assert.equal(roles['<story:0.year:ago>'], 'two');
+  assert.equal(roles['<story:1.year:ago>'], undefined, 'last year is said in words, not counted');
+  assert.equal(roles['<body.founded:ago>'], undefined, 'thirty years is past twenty: the year itself is a token');
+  const note = 'They came nine years ago, a household of five, and moved two years ago. Five years ago was hard.';
+  const d = delex(note, roles);
+  assert.equal(d, 'They came <who.since:ago> years ago, a household of <who.family:w>, and moved <story:0.year:ago> years ago. Five years ago was hard.',
+    'a number before "years" is a dated item\'s; five is not one, so it stays a word there');
   assert.equal(relex(d, roles), note);
 });
 

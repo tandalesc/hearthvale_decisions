@@ -453,15 +453,19 @@ export function loadNarrationStudent(bundle, blob = null) {
   // Any bundle: a stray "Hearthvale" (the old default name, in a few teacher notes) becomes the town's own.
   const ownTown = (text, facts) => (!facts?.town || facts.town === 'Hearthvale' ? text : text.replace(/\bHearthvale\b/g, facts.town));
 
-  async function quote(facts, {pause, beam: width = cfg.beam, adaptive = true} = {}) {
+  // decode: as for notes; card bundles chosen with config.decode 'sample' (v4 on) draw varied
+  // wording, seeded by the card so the same card reads the same each time.
+  async function quote(facts, {pause, beam: width = cfg.beam, adaptive = true, decode = cfg.decode ?? 'beam'} = {}) {
     const {triples, roles} = rolesOf(facts);
     const encoded = encode(triples, roles);
     const check = (text) => !!factProblem(relex(text, roles), facts);
+    const opts = {pause, check,
+      ...(decode === 'sample' ? {sample: {temperature: cfg.temperature ?? 0.8, topP: cfg.top_p ?? 0.9, rng: seededRandom(`card|${facts.id ?? facts.title}|${facts.year}|${facts.town ?? ''}`)}} : {})};
     if (adaptive && width > 1) {
-      const first = await pick(facts, roles, encoded, await beam(encoded, tk.get('card.quote'), {pause, k: 1, check}));
+      const first = await pick(facts, roles, encoded, await beam(encoded, tk.get('card.quote'), {...opts, k: 1}));
       if (first?.confident) return first;
     }
-    return pick(facts, roles, encoded, await beam(encoded, tk.get('card.quote'), {pause, k: width, check}));
+    return pick(facts, roles, encoded, await beam(encoded, tk.get('card.quote'), {...opts, k: width}));
   }
 
   // An inspector note (a notes bundle: task entity.note): a beam whose finished sentence fails

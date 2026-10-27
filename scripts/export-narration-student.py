@@ -95,7 +95,7 @@ def main():
     ap.add_argument('--beam', type=int, default=4, help='beam width the runtime decodes with')
     ap.add_argument('--no-repeat', action='store_true', help='the runtime decodes without reusing a content word (notes)')
     ap.add_argument('--task', default=None, help='the fixture\'s prompts from this task only (entity.note for a notes bundle)')
-    ap.add_argument('--roles', type=int, default=1, help='role tokens version the run was exported with (src/narration-roles.js); 2 for notes')
+    ap.add_argument('--roles', type=int, default=1, help='role tokens version the run was exported with (src/narration-roles.js); 2 for notes, 3 with years-ago tokens')
     ap.add_argument('--drop', default='', help="fact paths the rows were exported without (narration-student-export.js --drop), e.g. season")
     ap.add_argument('--town', action='store_true', help='the rows carry the town\'s name (facts.town, a role token): the runtime keeps it')
     ap.add_argument('--decode', choices=['beam', 'sample'], default='beam', help='how the runtime decodes notes (src/narration-student.js note)')
