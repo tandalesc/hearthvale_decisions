@@ -22,6 +22,8 @@
 // --note-fraction keeps that share of training-town notes (by a hash of the key), for data-size
 // runs; held-out towns keep all theirs. --only-notes writes note rows alone (to join with card rows).
 // --roles 2: note rows use role tokens version 2 (src/narration-roles.js); card rows keep 1.
+// --roles 3 adds how long ago each dated item was, as a word to copy ("nine years ago").
+// --card-roles N: card rows use role tokens version N too (default 1, as narration v1-v3).
 // --note-templates N: up to N template notes (fallbackNote) of training-town entity sheets as
 // pretraining rows, an even share per kind: always true to the facts, so they teach copying.
 import {createReadStream, createWriteStream} from 'node:fs';
@@ -67,7 +69,8 @@ const write = (row) => {
   const k = `${row.task} ${row.source}`;
   counts[k] = (counts[k] ?? 0) + 1;
 };
-const cardRows = (facts) => roleTriples(narrationTriples(facts));
+const cardRolesVersion = args.includes('--card-roles') ? Number(args[args.indexOf('--card-roles') + 1]) : 1;
+const cardRows = (facts) => roleTriples(narrationTriples(facts), {version: cardRolesVersion});
 
 for await (const s of (onlyNotes ? [] : readLines(sheetsFile))) {
   if (s.type !== 'card') continue;

@@ -17,6 +17,11 @@
 //   - a building's build year, the sheet's year less its age, is a triple and a token.
 //   - number words ("six") match a number token's word form (<building.age:w>).
 //
+// Version 3 (notes v6, cards v4): version 2, plus how long ago each dated item was, as a word
+// to copy: <story:2.year:ago> = "nine". The student reads a year only as a rough number and
+// cannot subtract, so it guessed ("five years ago" for nine). In a target, a number word
+// followed by "years" ("nine years ago", "for nine years") is read as that token first.
+//
 // Spans are matched without regard to case: some game labels lower-case a name
 // ("old Ford and Crown Hill").
 
@@ -38,9 +43,13 @@ const WORD_RE = new RegExp(`(?<![A-Za-z'-])(${WORDS.slice(2).join('|')})(?![A-Za
 // A sheet's own fields before its list items (a scope with an index: "rulings:0").
 const ownScope = (token) => !/^<[^.>]*:/.test(token);
 const norm = (n) => String(n).replace(/,/g, '');
+// Dated fields (version 3 reads how long ago they were), and a number word that counts years.
+const YEAR_ATTRS = new Set(['year', 'since', 'from', 'to', 'founded']);
+const AGO_RE = new RegExp(`(?<![A-Za-z'-])(${WORDS.slice(2).join('|')})(?= years?\\b(?! old))`, 'gi');
 
 export function roleTriples(triples, {version = 1} = {}) {
-  if (version === 2) {
+  const v2 = version >= 2;
+  if (v2) {
     // The build year, from the sheet's year and the building's age.
     const year = triples.find(([sc, at, , , ty]) => sc === 'building' && at === 'year' && ty === 'num');
     const age = triples.find(([sc, at, , , ty]) => sc === 'building' && at === 'age' && ty === 'num');
@@ -70,7 +79,7 @@ export function roleTriples(triples, {version = 1} = {}) {
   }
   // 2. Numbers that stand alone in a triple, by role.
   const textNums = new Map();   // v2: a text triple's index -> its numbers' tokens, by value
-  if (version === 2) {
+  if (v2) {
     // Every number its own token: a field's (<building.age>), or a text's (<building.origin#0>).
     const list = [];
     triples.forEach(([scope, attr, value, , type], i) => {
@@ -108,17 +117,30 @@ export function roleTriples(triples, {version = 1} = {}) {
       const s = m[0].replace(LEADING, '').replace(/^[a-z]/, (c) => c.toUpperCase());
       if (s.includes(' ') && !known(s)) add(s, `<place#${places++}>`);
     }
-    if (version === 2) continue;
+    if (v2) continue;
     for (const m of String(value).matchAll(NUMBER)) {
       if (!numbers.has(norm(m[0]))) numbers.set(norm(m[0]), `<num#${nums++}>`);
     }
   }
-  if (version !== 2) for (const [n, token] of numbers) roles[token] = Number(n).toLocaleString('en-US');
-  if (version === 2) {
+  if (!v2) for (const [n, token] of numbers) roles[token] = Number(n).toLocaleString('en-US');
+  if (v2) {
     // Word forms, for numbers a note writes out ("six years"): two to twenty.
     for (const [token, v] of Object.entries(roles)) {
       const n = Number(String(v).replace(/,/g, ''));
       if (/^\d+$/.test(String(v)) && n >= 2 && n <= 20) roles[token.replace(/>$/, ':w>')] = WORDS[n];
+    }
+  }
+  if (version >= 3) {
+    // The sheet's own year (its offset from itself is 0), less each dated item's year.
+    const head = triples.find(([sc, at, , num, ty]) => at === 'year' && ty === 'num' && num === 0 && !sc.includes(':'));
+    const now = Number(head?.[2]);
+    if (Number.isFinite(now)) {
+      for (const t of triples) {
+        const [scope, attr, value, , type] = t;
+        if (t === head || type !== 'num' || !YEAR_ATTRS.has(attr) || !/^\d+$/.test(String(value))) continue;
+        const k = now - Number(value);
+        if (k >= 2 && k <= 20) roles[`<${scope}.${attr}:ago>`] = WORDS[k];
+      }
     }
   }
   spans.sort((a, b) => b[0].length - a[0].length);
@@ -153,16 +175,26 @@ function delexWith(text, {spans, numbers}) {
 // Text in the sheet's own words -> text with role tokens.
 export function delex(text, roles) {
   const words = Object.entries(roles).filter(([t]) => t.endsWith(':w>'));
-  const spans = Object.entries(roles).filter(([t]) => !t.endsWith(':w>') && (!/^<(num#|.*\.(cost|upkeep|year|p|n)>)/.test(t) || !/^\d/.test(roles[t])))
+  const agos = Object.entries(roles).filter(([t]) => t.endsWith(':ago>'));
+  const spans = Object.entries(roles).filter(([t]) => !t.endsWith(':w>') && !t.endsWith(':ago>') && (!/^<(num#|.*\.(cost|upkeep|year|p|n)>)/.test(t) || !/^\d/.test(roles[t])))
     .map(([token, s]) => [s, token]).filter(([s]) => !/^\d[\d,]*$/.test(s)).sort((a, b) => b[0].length - a[0].length);
   // A value held by several tokens is read as the first (version 2 orders them own fields first).
   const numbers = new Map();
   for (const [t, s] of Object.entries(roles)) if (/^\d[\d,]*(\.\d+)?$/.test(s) && !numbers.has(norm(s))) numbers.set(norm(s), t);
   let out = delexWith(text, {spans, numbers});
+  if (agos.length) {
+    // "nine years ago": the dated item's token before any other nine.
+    // A building's age counts years too ("stood six years"): its own token first.
+    const byWord = new Map(roles['<building.age:w>'] ? [[roles['<building.age:w>'], '<building.age:w>']] : []);
+    for (const [t, w] of agos) if (!byWord.has(w)) byWord.set(w, t);
+    out = outsideRoles(out, (part) => part.replace(AGO_RE, (m) => byWord.get(m.toLowerCase()) ?? m));
+  }
   if (words.length) {
     const byWord = new Map();
     for (const [t, w] of words) if (!byWord.has(w)) byWord.set(w, t);
-    out = outsideRoles(out, (part) => part.replace(WORD_RE, (m) => byWord.get(m.toLowerCase()) ?? m));
+    // Version 3: a count of years that no dated item matches stays a word, not a size or an age.
+    const yearsAfter = (m, at, str) => agos.length && /^ years?\b(?! old)/.test(str.slice(at + m.length));
+    out = outsideRoles(out, (part) => part.replace(WORD_RE, (m, w, at, str) => (yearsAfter(m, at, str) ? m : byWord.get(m.toLowerCase()) ?? m)));
   }
   return out;
 }

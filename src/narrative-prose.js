@@ -153,9 +153,13 @@ export function cardLines(f) {
   const lines = [];
   const a = f.asker ?? {};
   lines.push(`Card: ${f.title} (${f.kind}${f.urgency === 2 ? ', urgent' : ''}).`);
-  lines.push(`Asked by ${a.name}${a.role ? `, ${a.role}` : ''}${a.body ? ` of the ${a.body}` : ''}${a.traits?.length ? `. Manner: ${a.traits.join(', ')}` : ''}.`);
+  // No name: the asker speaks as I or we, and a quote that names its own speaker is refused.
+  lines.push(`Asked by ${a.role ? `the ${a.role}` : 'a member'}${a.body ? ` of the ${a.body}` : ''}${a.traits?.length ? `. Manner: ${a.traits.join(', ')}` : ''}.`);
   lines.push(`It is ${f.season ?? 'the'} of year ${f.year}. ${f.town || 'The town'} is a ${f.era ?? 'town'}.`);
-  if (f.why) lines.push(`Template reason: ${f.why}`);
+  // The game's two-plan line ends with a stock pair of sentences that the teacher copied into a
+  // quarter of all quotes; the prompt asks for the trade-off in the asker's own words instead.
+  const why = String(f.why ?? '').replace(/\s*You can back one\. The other will be sore\./, '').trim();
+  if (why) lines.push(`Template reason: ${why}`);
   for (const t of f.trigger ?? []) lines.push(`Why now: ${t}`);
   if (f.place) lines.push(`Place: ${f.place.district ?? 'the town'}${f.place.road ? `, on ${f.place.road}` : ''}${f.place.traffic ? `, ${f.place.traffic}` : ''}.`);
   if (f.helps?.length) lines.push(`It helps: ${f.helps.join(', ')}.`);
@@ -377,20 +381,24 @@ export const MAX_TEMPLATE_OVERLAP = 0.6;
 // Worked cards for the prompt (server/narrator.js): the voice to learn, never words to copy.
 export const CARD_EXAMPLES = [
   {
-    facts: "Pave the lane in Old Ford. Asked by Nell Lark, farmer of the Agricultural Council. Manner: plain-spoken, stubborn. Template reason: The lane turns to mud each spring. Paving would keep carts moving. Place: Old Ford, on a worn track, very busy. Last year in town: a bumper harvest. Earlier ask: last year, you put off a great barn. Options: do (spends town coin; template: It costs coin. Carts move faster.), not_now (template: They will ask again later.), refuse (template: They will not like it.)",
+    facts: "Pave the lane in Old Ford. Asked by a farmer of the Agricultural Council. Manner: plain-spoken, stubborn. Template reason: The lane turns to mud each spring. Paving would keep carts moving. Place: Old Ford, on a worn track, very busy. Last year in town: a bumper harvest. Earlier ask: last year, you put off a great barn. Options: do (spends town coin; template: It costs coin. Carts move faster.), not_now (template: They will ask again later.), refuse (template: They will not like it.)",
     card: {"why": "The Old Ford track is soup by spring. With last year's big harvest, our carts sank to the axle. You put off our barn. Don't put this off too.", "options": {"do": "It costs coin, but our carts roll again.", "not_now": "They will ask again later.", "refuse": "We'll remember who kept us in the mud."}},
   },
   {
-    facts: "A wage floor. Asked by Ivo Holt, steward of the Town Council. Manner: careful, fair-minded. Template reason: Some workers earn too little to eat. A floor would keep families fed. Why now: the gap between rich and poor is high. The labourers (most live in Mill End): most are for it. The merchants: many are against it. Options: do (brings in the wage floor; template: Owners hire fewer hands. Some may buy machines.), not_now (template: They will ask again later.), refuse (template: They will not like it.)",
+    facts: "A wage floor. Asked by the steward of the Town Council. Manner: careful, fair-minded. Template reason: Some workers earn too little to eat. A floor would keep families fed. Why now: the gap between rich and poor is high. The labourers (most live in Mill End): most are for it. The merchants: many are against it. Options: do (brings in the wage floor; template: Owners hire fewer hands. Some may buy machines.), not_now (template: They will ask again later.), refuse (template: They will not like it.)",
     card: {"why": "I walked Mill End this winter. Families there work full days and still go short. The labourers want a floor, and the merchants do not. I think it is fair, but it will cost us goodwill somewhere.", "options": {"do": "Families eat better. Owners may take on fewer hands.", "not_now": "The labourers wait another season, and they will grumble.", "refuse": "They will not like it."}},
   },
   {
-    facts: "Shorter hours (demand). Asked by Bryn Cobb, mill hand of the Union. Manner: blunt, loyal. Template reason: Long shifts wear people out. Accidents follow. Why now: unrest is high. Last year in town: the workers strike. In the last two years, of their asks you refused two. Options: do (brings in shorter hours; template: Fewer accidents. Owners pay more.), negotiate (template: Offer half. They may take it, or insist.)",
+    facts: "Shorter hours (demand). Asked by a mill hand of the Union. Manner: blunt, loyal. Template reason: Long shifts wear people out. Accidents follow. Why now: unrest is high. Last year in town: the workers strike. In the last two years, of their asks you refused two. Options: do (brings in shorter hours; template: Fewer accidents. Owners pay more.), negotiate (template: Offer half. They may take it, or insist.)",
     card: {"why": "You have turned us down twice. Since the strike, the mill floor has stopped asking nicely. Shorter shifts, now.", "options": {"do": "Fewer hands lost to the machines. The owners will pay for it.", "negotiate": "Offer half. We might take it. We might not."}},
   },
   {
-    facts: "A summer fair. Asked by Wren Dyer, fiddler of the Festival Society. Manner: merry, restless. Template reason: Summer is coming. A fair would bring traders and lift spirits. Place: the square in Kiln Fields. The merchants (most live in Kiln Fields): most are for it. The clergy: some are against it. Options: do (holds the summer fair; spends town coin; template: Visitors come and spend.), small (holds the summer fair; no cost; template: No cost to the town. A smaller crowd.), refuse (template: They will not like it.)",
+    facts: "A summer fair. Asked by a fiddler of the Festival Society. Manner: merry, restless. Template reason: Summer is coming. A fair would bring traders and lift spirits. Place: the square in Kiln Fields. The merchants (most live in Kiln Fields): most are for it. The clergy: some are against it. Options: do (holds the summer fair; spends town coin; template: Visitors come and spend.), small (holds the summer fair; no cost; template: No cost to the town. A smaller crowd.), refuse (template: They will not like it.)",
     card: {"why": "The square in Kiln Fields is begging for music! The merchants there are already polishing their stalls. The clergy will tut, but they always do.", "options": {"do": "Coin out of the chest, and visitors spending theirs.", "small": "No cost to the town. A smaller crowd.", "refuse": "No fiddles this summer. The Society will sulk."}},
+  },
+  {
+    facts: "Pave the lane in Orchard Green, or common grazing (debate). Asked by the surveyor of the Planning Office. Manner: orderly, impatient. Template reason: The Planning Office and the Agricultural Council want different things. Why now: traffic on the roads is heavy. The merchants: most are for it. The farmers: most are against it. Options: a \"Back the Planning Office: pave the lane in Orchard Green\" (starts the works; costs coin; template: It costs coin. Carts move quicker for years.), b \"Back the Agricultural Council: common grazing\" (raises common grazing; upkeep; template: Landowners cannot fence the best fields.), neither (template: Both bodies lose patience.)",
+    card: {"why": "Carts choke the Orchard Green lane, and our paving plan is ready to start. The Agricultural Council wants the coin for common grazing instead. Pave it, and the farmers will take it hard.", "options": {"a": "Coin spent now, and carts move freely for years.", "b": "The grazing stays open, and the farmers are pleased.", "neither": "Both of us walk away sore."}},
   },
 ];
 
