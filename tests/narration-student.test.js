@@ -281,3 +281,26 @@ test('needs read the right way round: they are levels, so low is tired, hungry o
   assert.equal(noteProblem('I am worn out this spring.', person({energy: 'high'})), 'energy: rested');
   assert.equal(noteProblem('I feel so lonely this spring.', person({company: 'high'})), 'company: plenty');
 });
+
+test('season words: a ban, except in the phrases the sheet itself uses ("summer fair")', async () => {
+  const {seasonPhrases, straySeason} = await import('../src/narration-student.js');
+  const facts = {kind: 'body', season: 'winter', rulings: [{what: 'a summer fair'}], events: [{what: 'a warm spring'}]};
+  const pairs = seasonPhrases(facts);
+  assert.ok(pairs.has('summer fair') && pairs.has('warm spring'));
+  assert.ok(!pairs.has('the summer') && ![...pairs].some((p) => p.includes('winter')), 'not the season field, nor a filler neighbour');
+  assert.equal(straySeason('You approved the summer fair after a warm spring.', pairs), null);
+  assert.equal(straySeason('Summer has come, and the summer fair is near.', pairs), 'summer');
+  assert.equal(straySeason('In the summer they rest.', pairs), 'summer');
+});
+
+test('the shipped notes student samples: varied, the same note for the same sheet, and the town by name', {skip: !existsSync(notesBundle)}, async () => {
+  const bundle = JSON.parse(readFileSync(notesBundle, 'utf8'));
+  if (bundle.config.decode !== 'sample') return;
+  const bin = readFileSync(new URL(bundle.blob, notesBundle));
+  const student = loadNarrationStudent(bundle, bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength));
+  const cards = JSON.parse(readFileSync(notesFixture, 'utf8')).cards.slice(0, 6).map((c) => ({...c.facts, town: 'Millbrook'}));
+  const once = await Promise.all(cards.map((f) => student.note(f)));
+  const again = await Promise.all(cards.map((f) => student.note(f)));
+  assert.deepEqual(once.map((n) => n?.text), again.map((n) => n?.text), 'seeded by the sheet');
+  assert.ok(!once.some((n) => /Hearthvale/.test(n?.text ?? '')), 'never the old name');
+});

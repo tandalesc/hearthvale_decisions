@@ -17,7 +17,8 @@
 
 import {createHash} from 'node:crypto';
 import {loadLocalConfig, createConcurrencyGate} from './system1.js';
-import {validateFacts, canonicalFacts, factLines, materialText, FactsError} from '../src/narrative-schema.js';
+import {validateFacts, canonicalFacts, materialText, FactsError} from '../src/narrative-schema.js';
+import {NOTE_SYSTEM, noteUser} from '../src/note-prompt.js';
 import {validateProseFacts, cardLines, yearLines, endLines, CHECKS, FALLBACKS, llmFields, CARD_EXAMPLES} from '../src/narrative-prose.js';
 
 export const NARRATE_TIMEOUT_MS = 6000;
@@ -25,44 +26,15 @@ export const MAX_BODY_BYTES = 8 * 1024;
 export const MAX_NOTE_CHARS = 420;
 export const MAX_NOTE_SENTENCES = 3;
 export const MAX_NOTE_WORDS = 60;
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 
-export const SYSTEM_PROMPT = [
-  'You write the short note a town leader reads after tapping a person, household, building or town body in the game Hearthvale.',
-  'The reader is the leader. "You" always means the leader. Never speak to the person or building as "you": write about them by name or as "they".',
-  'For a person, use their name or "they", never "he", "she", "his" or "her".',
-  'Write 2 or 3 short sentences, 55 words at most, in one paragraph.',
-  'Voice: a warm neighbour who knows the town. Common words. Short sentences. Active voice.',
-  'Choose the two or three facts that matter most: hardship, change, and the leader\'s rulings that touched them. Leave the rest out.',
-  'Use only the facts given. Do not invent names, numbers, places, feelings or causes. Do not link two facts with "because" or "so" unless a fact says one caused the other.',
-  'When a ruling touched them, say it plainly with "you", for example: "You put off the wage floor the labourers wanted." Keep the ruling\'s own verb: approved, refused, put off.',
-  'Say "last year" or "years ago" rather than year numbers.',
-  'No lists, headings, quotation marks, advice or questions. Do not mention facts, data, chances or the game.',
-].join('\n');
-
-const KIND_WORDS = {person: 'this person', household: 'this household', building: 'this building', body: 'this town body'};
-
-const factsMessage = (kind, lines) => `Facts about ${KIND_WORDS[kind]}:\n${lines.map((l) => `- ${l}`).join('\n')}\n\nWrite the note.`;
-
-// One worked example sets the voice: third person, "you" for the leader only.
-const EXAMPLE = [
-  {role: 'user', content: factsMessage('person', [
-    'Person: Edda Marsh.', 'It is year 42. Hearthvale is a town.',
-    'They are one of the labourers, works at the mill of the Holt family and a household of 4.',
-    'Wealth: poor, falling.', 'Mood of labourers: uneasy, falling.',
-    'On staying or going: likely to stay in their home; some chance to leave Hearthvale.',
-    'This year, they joined a strike.',
-    'Last year, you refused a wage floor, asked by the Union. It would have helped them. Their people backed it.',
-    'Rule in force: road and river tolls, set by you three years ago. It hurts them.',
-  ])},
-  {role: 'assistant', content: 'Edda Marsh is having a hard year at the Holt mill. You refused the wage floor the labourers backed, and this year Edda joined the strike. The family may yet leave Hearthvale.'},
-];
+// The note prompt is shared with the hosted worker and the training labels (src/note-prompt.js).
+export const SYSTEM_PROMPT = NOTE_SYSTEM;
 
 // -> {system, user, messages}
 export function buildPrompt(facts) {
-  // Durable lines only: the note is kept until something material changes.
-  const user = factsMessage(facts.kind, factLines(facts, {durable: true}));
-  return {system: SYSTEM_PROMPT, user, messages: [{role: 'system', content: SYSTEM_PROMPT}, ...EXAMPLE, {role: 'user', content: user}]};
+  const user = noteUser(facts);
+  return {system: SYSTEM_PROMPT, user, messages: [{role: 'system', content: SYSTEM_PROMPT}, {role: 'user', content: user}]};
 }
 
 // Entity notes are cached by their material facts (passing details do not count);
@@ -320,7 +292,7 @@ export const PROSE_TIMEOUT_MS = 15000;
 const PROSE_TOKENS = {card: 420, year: 140, end: 1000};
 
 const CARD_PROMPT = [
-  'You write the words on a proposal card in Hearthvale, a town-building game. The town leader reads the card; call the leader "you".',
+  'You write the words on a proposal card in a town-building game. The town leader reads the card; call the leader "you".',
   'Speak as the asker, with "we" or "I", in their own manner: let their two traits colour the words. A blunt farmer talks short and sharp; a careful steward weighs things.',
   'Return only a JSON object: {"why": "...", "options": {"<option key>": "..."}} with exactly the option keys listed.',
   '',
@@ -342,22 +314,22 @@ const CARD_PROMPT = [
 ].join('\n');
 
 const YEAR_PROMPT = [
-  'You write the line that closes a year in the chronicle of Hearthvale, a town in a town-building game.',
+  'You write the line that closes a year in a town\'s chronicle, in a town-building game.',
   'Return only a JSON object: {"text": "..."}.',
   'The text: 1 or 2 short sentences, 35 words at most, plain and warm, like an old chronicler writing in the town book.',
   'Name the one or two things that mattered most that year, with their real names from the facts: the event, the place, the body, the rule.',
-  'Write about the town as "Hearthvale" or "the town", and about the leader as "you". Do not restate the template line.',
+  'Call the town by the name the facts give it, or "the town", and the leader "you". Do not restate the template line.',
   'No numbers unless the facts give them. Do not invent names, places or events. No officialese.',
   '',
   'Examples:',
-  'Facts: the summer fair; you approved the festival fund, asked by the Festival Society; the Festival Society was founded; template: Year 12 ends. A new body sits.',
-  '{"text": "The year the fiddlers got their way: a festival fund, a Society of their own, and the best summer fair Hearthvale had seen."}',
+  'Facts: Ashford; the summer fair; you approved the festival fund, asked by the Festival Society; the Festival Society was founded; template: Year 12 ends. A new body sits.',
+  '{"text": "The year the fiddlers got their way: a festival fund, a Society of their own, and the best summer fair Ashford had seen."}',
   'Facts: the river floods; you put off a wall against the floods, asked by the River Authority; the labourers are uneasy, falling; template: Year 30 ends. People grow angry.',
   '{"text": "The river came over the banks again, and you put the flood wall off once more. In the low streets, the labourers stopped smiling."}',
 ].join('\n');
 
 const END_PROMPT = [
-  'You write the closing page of the chronicle of Hearthvale, a town in a town-building game, after 150 years.',
+  'You write the closing page of a town\'s chronicle, in a town-building game, after 150 years. Call the town by the name the facts give it.',
   'Return only a JSON object: {"eras": {"<era number>": "..."}, "closing": ["...", "...", "..."]} with one entry for each era listed.',
   'Each era: 2 or 3 short sentences, 60 words at most, telling that era from its facts, in the past tense.',
   '"closing": exactly three sentences, 25 words at most each, saying what the town became, from the facts.',

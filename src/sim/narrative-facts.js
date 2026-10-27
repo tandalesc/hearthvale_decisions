@@ -78,6 +78,8 @@ function wealthBand(state, wealth) {
 function header(state, kind, name) {
   return {
     v: FACTS_VERSION, kind, name: clean(name, 40) || 'Unknown',
+    // The town's own name (the player names it; unnamed towns are "Hearthvale").
+    town: clean(state.townName, 40) || 'Hearthvale',
     year: Math.max(-50, Math.min(400, yearNow(state))),
     season: SEASONS[Math.floor((state.time?.month ?? 0) / 3) % 4],
     era: ERAS[Math.max(0, Math.min(5, state.era ?? 0))],
@@ -1012,7 +1014,7 @@ export function cardFacts(state, cardId) {
     : {year: Math.floor(seen / MONTHS_PER_YEAR), month: seen - Math.floor(seen / MONTHS_PER_YEAR) * MONTHS_PER_YEAR};
   const head = header({...state, time}, 'card', card.title);
   const facts = {
-    v: 1, type: 'card', id: clean(card.id, 16), kind: card.kind, template: clean(String(card.templateId ?? '').replace(/\|/g, ' '), 60),
+    v: 1, type: 'card', id: clean(card.id, 16), town: clean(state.townName, 40) || 'Hearthvale', kind: card.kind, template: clean(String(card.templateId ?? '').replace(/\|/g, ' '), 60),
     category: card.category ? clean(card.category, 24) : undefined,
     title: cleanProse(card.title, 80) || 'A proposal', year: head.year, season: head.season, era: head.era,
     urgency: Math.max(0, Math.min(2, card.urgency ?? 0)), grain: card.againstGrain ? true : undefined,
@@ -1075,7 +1077,7 @@ function yearFacts(state, year) {
   }
   const wellbeing = hist.wellbeing?.[year] ?? state.indicators?.wellbeing;
   const facts = {
-    v: 1, type: 'year', year,
+    v: 1, type: 'year', year, town: clean(state.townName, 40) || 'Hearthvale',
     era: ERAS[Math.max(0, Math.min(5, entries.at(-1)?.era ?? state.era ?? 0))],
     archetype: clean(state.archetype ?? '', 24).replace(/-/g, ' ') || undefined,
     people: Number.isFinite(hist.pop?.[year]) ? {start: Math.round(hist.pop[Math.max(0, year - 1)] ?? hist.pop[year]), end: Math.round(hist.pop[year])} : undefined,
@@ -1125,7 +1127,7 @@ function endFacts(state) {
     };
   }).slice(0, 6);
   return finishPlain({
-    v: 1, type: 'end', year: now,
+    v: 1, type: 'end', year: now, town: clean(state.townName, 40) || 'Hearthvale',
     archetype: clean(state.archetype ?? '', 24).replace(/-/g, ' '),
     eraName: ERA_NAMES[state.era] ?? 'Town',
     people: Math.round(state.indicators?.pop ?? 0),

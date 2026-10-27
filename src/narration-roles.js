@@ -21,7 +21,7 @@
 // ("old Ford and Crown Hill").
 
 // Text attributes whose whole value is a name.
-const ENTITY_ATTRS = new Set(['name', 'body', 'by', 'where', 'district']);
+const ENTITY_ATTRS = new Set(['name', 'town', 'body', 'by', 'where', 'district']);
 const ENTITY_SCOPES = new Set(['torn']);
 // Two or more capitalised words ("Old Ford", "Town Watch"), inside any text.
 const PROPER = /\b[A-Z][a-z']+(?:[ -](?:of |the )?[A-Z][a-z']+)+\b/g;

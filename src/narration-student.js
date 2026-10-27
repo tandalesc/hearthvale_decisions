@@ -126,6 +126,76 @@ const repeatsWord = (words) => {
 // the passing season: the training sheets were all collected in spring, and the student learned
 // "Spring has come to Hearthvale" as a person's opening line whatever the month.
 const NOTE_BANNED = new Set(['spring', 'springs', 'summer', 'summers', 'autumn', 'autumns', 'winter', 'winters']);
+// ...except where the sheet's own texts use one: "the summer fair" (a ruling or an event) or
+// "a warm spring". Such a word is allowed only next to the neighbour the sheet gives it, so
+// "summer fair" passes and "Summer has come" is still dropped. The season field itself is not
+// a text (and v4 bundles never see it).
+const lowWords = (s) => String(s).toLowerCase().match(/[a-z']+/g) ?? [];
+// Neighbours that do not make a phrase ("the summer" would let "in the summer we..." through).
+const FILLER = new Set(['a', 'an', 'the', 'this', 'that', 'last', 'next', 'of', 'in', 'on', 'at', 'for', 'and', 'or', 'to', 'by', 'is', 'was', 'its', 'our', 'their']);
+export function seasonPhrases(facts) {
+  const pairs = new Set();
+  const walk = (v, key) => {
+    if (key === 'season') return;
+    if (typeof v === 'string') {
+      const ws = lowWords(v);
+      ws.forEach((w, i) => {
+        if (!NOTE_BANNED.has(w)) return;
+        const before = ws[i - 1], after = ws[i + 1];
+        if (before && !FILLER.has(before)) pairs.add(`${before} ${w}`);
+        if (after && !FILLER.has(after)) pairs.add(`${w} ${after}`);
+      });
+    } else if (Array.isArray(v)) v.forEach((x) => walk(x));
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, k);
+  };
+  walk(facts);
+  return pairs;
+}
+// A season word in text outside the sheet's own phrases, or null.
+export function straySeason(text, pairs) {
+  const ws = lowWords(text).map((w) => w.replace(/'s$/, ''));
+  for (let i = 0; i < ws.length; i++) {
+    if (!NOTE_BANNED.has(ws[i])) continue;
+    if (!pairs.has(`${ws[i - 1]} ${ws[i]}`) && !pairs.has(`${ws[i]} ${ws[i + 1]}`)) return ws[i];
+  }
+  return null;
+}
+// The subject's name, first name and town as "who" / "town": "Avice Yarrow came to Alderbury"
+// and "Ewan Fletcher came to Alderbury" open the same way.
+function maskSubject(text, facts) {
+  let t = String(text);
+  const name = String(facts?.name ?? '');
+  for (const [x, as] of [[name, 'who'], [name.split(' ')[0], 'who'], [String(facts?.town ?? ''), 'town']]) if (x.length > 2) t = t.split(x).join(as);
+  return t;
+}
+// A note's opener, for spreading openers over the notes a player reads: the first three words.
+export const noteOpener = (text) => lowWords(String(text).split(/[.!?]/)[0]).slice(0, 3).join(' ');
+// One token from the top-p share of softmax(lp / temperature); -1 when every token is banned.
+function drawToken(lp, {temperature = 0.8, topP = 0.9, rng = Math.random}) {
+  let max = -Infinity;
+  for (let i = 0; i < lp.length; i++) if (lp[i] > max) max = lp[i];
+  if (max <= -1e8) return -1;
+  const cand = [];
+  for (let i = 0; i < lp.length; i++) if (lp[i] > -1e8) cand.push([i, Math.exp((lp[i] - max) / temperature)]);
+  cand.sort((a, b) => b[1] - a[1]);
+  const total = cand.reduce((a, c) => a + c[1], 0);
+  let kept = 0, n = 0;
+  while (n < cand.length && kept < topP * total) kept += cand[n++][1];
+  let r = rng() * kept;
+  for (let j = 0; j < n; j++) { r -= cand[j][1]; if (r <= 0) return cand[j][0]; }
+  return cand[n - 1][0];
+}
+// mulberry32, seeded by a string.
+function seededRandom(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+  return () => {
+    h = (h + 0x6d2b79f5) | 0;
+    let t = Math.imul(h ^ (h >>> 15), 1 | h);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 const REPEATABLE = new Set(['their', 'there', 'these', 'those', 'which', 'would', 'could', 'should', 'about', 'other', 'still', 'while', 'where', 'being', 'after', 'again', 'every', 'since', 'under', 'because', 'though', 'through', 'before', 'never', 'always', 'right']);
 
 // bundle: the JSON header; blob: the weights file's bytes (ArrayBuffer) when the header names one.
@@ -274,11 +344,16 @@ export function loadNarrationStudent(bundle, blob = null) {
   // check (optional): text so far -> true when it says something the card contradicts; such a
   // beam is dropped at the end of a sentence, so the others get the room.
   // banWords (optional): words the text may never use, however many pieces spell them.
-  async function beam(encoded, task, {k = cfg.beam, alpha = cfg.alpha, block = cfg.block, pause, check, noRepeat = !!cfg.no_repeat, banWords = null} = {}) {
+  // banFirst (optional): words the text may not open with.
+  // sample (optional, {temperature, topP, rng}): k independent samples instead of a beam: each
+  // step draws one token from the top-p share of the softened distribution. A beam always takes
+  // the likeliest wording, so neighbours with like facts got the same note.
+  async function beam(encoded, task, {k = cfg.beam, alpha = cfg.alpha, block = cfg.block, pause, check, noRepeat = !!cfg.no_repeat, banWords = null, banFirst = null, sample = null} = {}) {
     const {mem, n, ban} = encoded, maxT = cfg.max_tgt;
     const cross = Array.from({length: L}, (_, l) => projectFlat(W, `decoder.layers.${l}.multihead_attn`, mem, n, d));
     const fresh = () => Array.from({length: L}, () => ({k: new Float32Array(maxT * d), v: new Float32Array(maxT * d)}));
-    let beams = [{toks: [], score: 0, cache: fresh(), sumLp: 0, minLp: Infinity, sumEnt: 0, sumH: new Float32Array(d)}];
+    const start = () => ({toks: [], score: 0, cache: fresh(), sumLp: 0, minLp: Infinity, sumEnt: 0, sumH: new Float32Array(d)});
+    let beams = sample ? Array.from({length: k}, start) : [start()];
     const finished = [];
     for (let t = 0; t < maxT && beams.length; t++) {
       const options = [];
@@ -293,11 +368,17 @@ export function loadNarrationStudent(bundle, blob = null) {
         // A notes bundle (config no_repeat): no content word twice, as the trainer decodes.
         if (noRepeat) for (const w of words) if (w.length >= 5 && /^[a-z]+$/.test(w) && !REPEATABLE.has(w)) banned.add(w);
         if (banWords) for (const w of banWords) banned.add(w);
+        if (banFirst && t === 0) for (const w of banFirst) banned.add(w);
         if (words.length >= block - 1) {
           const tail = words.slice(-(block - 1)).join(' ');
           for (let j = 0; j + block - 1 < words.length; j++) if (words.slice(j, j + block - 1).join(' ') === tail) banned.add(words[j + block - 1]);
         }
         for (const wd of banned) for (const i of idsOf.get(wd) ?? []) lp[i] = -1e9;
+        if (sample) {
+          const tok = drawToken(lp, sample);
+          if (tok >= 0) options.push({s: b.score + lp[tok], tok, parent: b});
+          continue;
+        }
         // Only the best k of this beam can make the overall best k.
         const best = [];
         for (let i = 0; i < V; i++) {
@@ -364,7 +445,13 @@ export function loadNarrationStudent(bundle, blob = null) {
   // Role tokens as the bundle's rows were made (notes: version 2; card bundles: 1).
   // config.drop: fact paths the bundle was trained without (the exporter's --drop), such as
   // 'season' for a notes bundle.
-  const rolesOf = (facts) => roleTriples(narrationTriples(facts, {drop: cfg.drop ?? []}), {version: voc.roles ?? 1});
+  // config.town: the bundle was trained on sheets that carry the town's name. Older bundles
+  // never saw it (their teacher was told the town is "Hearthvale"): drop the field, and put
+  // the real name in place of "Hearthvale" in what they write.
+  const drop = [...(cfg.drop ?? []), ...(cfg.town ? [] : ['town'])];
+  const rolesOf = (facts) => roleTriples(narrationTriples(facts, {drop}), {version: voc.roles ?? 1});
+  // Any bundle: a stray "Hearthvale" (the old default name, in a few teacher notes) becomes the town's own.
+  const ownTown = (text, facts) => (!facts?.town || facts.town === 'Hearthvale' ? text : text.replace(/\bHearthvale\b/g, facts.town));
 
   async function quote(facts, {pause, beam: width = cfg.beam, adaptive = true} = {}) {
     const {triples, roles} = rolesOf(facts);
@@ -380,30 +467,53 @@ export function loadNarrationStudent(bundle, blob = null) {
   // An inspector note (a notes bundle: task entity.note): a beam whose finished sentence fails
   // noteProblem is dropped; the pick must pass the worker's own rules for a note. No single-
   // candidate shortcut by default: the full beam (config beam, 8 for notes v2) is what was judged.
-  async function note(facts, {pause, beam: width = cfg.beam, adaptive = false} = {}) {
+  // avoid (optional): openers (noteOpener) the player has just read; the pick takes another
+  // candidate when one is as confident as the head's choice (createLocalNotes keeps the list).
+  // decode: 'beam' (the trainer's decoding), or 'sample' (config.decode for bundles chosen with it):
+  // width samples at config.temperature / top_p, seeded by the sheet so a note can be made again.
+  async function note(facts, {pause, beam: width = cfg.beam, adaptive = false, avoid = null, decode = cfg.decode ?? 'beam'} = {}) {
     const {triples, roles} = rolesOf(facts);
     const encoded = encode(triples, roles);
     const task = tk.get('entity.note');
-    const check = (text) => !!noteProblem(relex(text, roles), facts);
-    const opts = {pause, check, banWords: NOTE_BANNED};
+    const pairs = seasonPhrases(facts);
+    const allowed = new Set([...pairs].flatMap((p) => p.split(' ')));
+    const banWords = new Set([...NOTE_BANNED].filter((w) => !allowed.has(w)));
+    const seasonOk = (words) => !straySeason(words, pairs);
+    const check = (text) => { const words = relex(text, roles); return !!noteProblem(words, facts) || !seasonOk(words); };
+    const opts = {pause, check, banWords,
+      ...(decode === 'sample' ? {sample: {temperature: cfg.temperature ?? 0.8, topP: cfg.top_p ?? 0.9, rng: seededRandom(`${facts.kind}|${facts.name}|${facts.year}|${facts.town ?? ''}`)}} : {})};
+    const pickOpts = {seasonOk, avoid};
     if (adaptive && width > 1) {
-      const first = pickNote(facts, roles, encoded, await beam(encoded, task, {...opts, k: 1}));
+      const first = pickNote(facts, roles, encoded, await beam(encoded, task, {...opts, k: 1}), pickOpts);
       if (first?.confident) return first;
     }
-    return pickNote(facts, roles, encoded, await beam(encoded, task, {...opts, k: width}));
+    const picked = pickNote(facts, roles, encoded, await beam(encoded, task, {...opts, k: width}), pickOpts);
+    if (!picked || !avoid?.has(picked.opener)) return picked;
+    // Every candidate as sure as the pick opens the way a recent note did: decode once more
+    // without that first word, and take the result only if it is as confident.
+    const again = pickNote(facts, roles, encoded, await beam(encoded, task, {...opts, k: width, banFirst: new Set([picked.opener.split(' ')[0]])}), pickOpts);
+    return again && !avoid.has(again.opener) && again.confident === picked.confident ? again : picked;
   }
 
-  function pickNote(facts, roles, encoded, cands) {
-    let best = null;
+  function pickNote(facts, roles, encoded, cands, {seasonOk = () => true, avoid = null} = {}) {
+    const ok = [];
     for (const c of cands) {
       const text = untok(c.toks.map((i) => voc.words[i]));
       if (strayRoles(text, roles).length) continue;
-      const words = cleanNote(relex(text, roles));
-      if (fluency(words) || !noteOk(words) || noteProblem(words, facts)) continue;
+      const words = ownTown(cleanNote(relex(text, roles)), facts);
+      if (fluency(words) || !noteOk(words) || noteProblem(words, facts) || !seasonOk(words)) continue;
       const q = quality([...c.feats, encoded.unk]);
-      if (!best || q > best.quality) best = {text: words, quality: q};
+      ok.push({text: words, quality: q, confident: q >= bundle.quality.threshold, opener: noteOpener(maskSubject(words, facts))});
     }
-    return best && {...best, confident: best.quality >= bundle.quality.threshold};
+    if (!ok.length) return null;
+    ok.sort((a, b) => b.quality - a.quality);
+    const best = ok[0];
+    if (avoid?.has(best.opener)) {
+      // Only a candidate that keeps the pick's confidence: an unsure note costs Plus players a hosted call.
+      const other = ok.find((c) => !avoid.has(c.opener) && c.confident === best.confident);
+      if (other) return other;
+    }
+    return best;
   }
 
   function pick(facts, roles, encoded, cands) {
@@ -417,7 +527,7 @@ export function loadNarrationStudent(bundle, blob = null) {
       const checked = CHECKS.card(facts, {why: words, options});
       if (checked.used?.why !== 'llm' || factProblem(checked.prose.why, facts)) continue;
       const q = quality([...c.feats, encoded.unk]);
-      if (!best || q > best.quality) best = {why: checked.prose.why, quality: q};
+      if (!best || q > best.quality) best = {why: ownTown(checked.prose.why, facts), quality: q};
     }
     return best && {...best, confident: best.quality >= bundle.quality.threshold};
   }
@@ -474,9 +584,9 @@ export function createLocalNarration({base, fallbackBase, fetcher, yieldEvery = 
     }
     return loading;
   };
-  const narrate = async (facts) => {
+  const narrate = async (facts, opts = {}) => {
     const student = await load();
-    return student ? student[task](facts, {pause}) : null;
+    return student ? student[task](facts, {...opts, pause}) : null;
   };
   narrate.info = () => info;
   narrate.preload = () => { load(); };
@@ -484,6 +594,24 @@ export function createLocalNarration({base, fallbackBase, fetcher, yieldEvery = 
 }
 
 // The notes student for inspector notes: async (facts) -> {text, confident} | null, lazily loaded.
+// It remembers the openers of the last few notes it wrote for each kind (people, households,
+// buildings, bodies), so the people a player inspects in a row do not all open with the
+// student's favourite line ("Oh, what a day").
+export const RECENT_OPENERS = 8;
 export function createLocalNotes(options = {}) {
-  return createLocalNarration({...options, family: 'notes', task: 'note'});
+  const narrate = createLocalNarration({...options, family: 'notes', task: 'note'});
+  const recentByKind = new Map();
+  const notes = async (facts) => {
+    const recent = recentByKind.get(facts?.kind) ?? [];
+    recentByKind.set(facts?.kind, recent);
+    const n = await narrate(facts, {avoid: new Set(recent)});
+    if (n?.opener) {
+      recent.push(n.opener);
+      if (recent.length > RECENT_OPENERS) recent.shift();
+    }
+    return n;
+  };
+  notes.info = narrate.info;
+  notes.preload = narrate.preload;
+  return notes;
 }

@@ -883,3 +883,26 @@ test('a note wrapped whole in quotation marks is shown unwrapped; inner quotes a
   assert.deepEqual(out, {text: 'Ada rests by the fire.'});
   assert.ok(previews.every((t) => !t.startsWith('"')), 'previews are unwrapped too');
 });
+
+test('one note prompt for every writer: the town by its own name, lasting facts only, never "Hearthvale"', async () => {
+  const {NOTE_SYSTEM, noteUser} = await import('../src/note-prompt.js');
+  const {narrationSystem, noteMessage} = await import('../cloudflare/narration.js');
+  const facts = {...baseFacts(), town: 'Millbrook', now: {...(baseFacts().now ?? {}), energy: 'high', rent: 'light', work: 'working'}};
+  // The hosted worker, the local narrator and the training labels ask the same way.
+  assert.equal(narrationSystem(facts), NOTE_SYSTEM);
+  assert.equal(noteMessage(facts), noteUser(facts));
+  assert.equal(buildPrompt(facts).system, NOTE_SYSTEM);
+  assert.doesNotMatch(NOTE_SYSTEM, /Hearthvale/);
+  const user = noteUser(facts);
+  assert.match(user, /Millbrook is a/);
+  assert.doesNotMatch(user, /Hearthvale/);
+  // Passing details, and what most of the town shares, stay out of a kept note.
+  assert.doesNotMatch(user, /They feel|Right now|Rent weighs lightly|Work: in work/);
+  assert.match(noteUser({...facts, now: {...facts.now, rent: 'heavy'}}), /Rent weighs heavily/, 'a heavy rent is news');
+});
+
+test('fact lines: other people of their kind are "other", and plural subjects take "were"', () => {
+  const lines = factLines({...baseFacts(), story: [{year: 40, kind: 'displaced', group: 'farmers'}, {year: 41, kind: 'displaced'}]});
+  assert.ok(lines.some((l) => /other farmers were/.test(l)), lines.join('\n'));
+  assert.ok(!lines.some((l) => /\bthey was\b|farmers was/.test(l)), lines.join('\n'));
+});
