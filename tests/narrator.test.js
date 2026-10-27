@@ -354,6 +354,16 @@ import {validateProseFacts, checkCardProse, checkYearProse, checkEndProse, contr
 import {createProseWriter, parseJsonReply, buildProsePrompt, validateProseRequest} from '../server/narrator.js';
 import {createProseKeeper} from '../src/narrator-client.js';
 
+// The town fixture with every queued card brought before the council this month, as a
+// session would: only surfaced cards are narrated (cardsNeedingProse), and the card-prose
+// tests below are written against the fixture's oldest card.
+const shownTown = () => {
+  const state = fixtureState('town');
+  const now = state.time.year * 12 + state.time.month;
+  for (const card of state.docket) card.surfacedMonth ??= now;
+  return state;
+};
+
 const cardSheet = () => ({
   v: 1, type: 'card', id: 'c9', kind: 'proposal', template: 'ease:wage-floor', title: 'Ease the wage floor', year: 40,
   season: 'summer', era: 'town', asker: {name: 'Ivo Holt', role: 'steward', traits: ['careful', 'fair-minded']},
@@ -385,6 +395,27 @@ test('cardFacts: every card in the town and city fixtures gives valid facts', ()
     assert.ok(cardsNeedingProse(state).length > 0);
   }
   assert.equal(cardFacts(fixtureState('town'), 'nope'), null);
+});
+
+test('cardFacts: a card keeps the season it surfaced in; queued cards are not narrated', () => {
+  const state = fixtureState('town');
+  const queued = state.docket.filter((c) => c.kind !== 'budget' && c.surfacedMonth == null);
+  assert.ok(queued.length >= 2);
+  const [card, other] = queued;
+  const needing = () => cardsNeedingProse(state).map((c) => c.id);
+  assert.ok(!needing().includes(card.id) && !needing().includes(other.id), 'queued cards wait for prose');
+  // Surfaced in the winter of year 30; the reader still has it open two seasons on, in year 31.
+  state.time = {...state.time, year: 30, month: 10};
+  card.surfacedMonth = 30 * 12 + 10;
+  assert.ok(needing().includes(card.id) && !needing().includes(other.id));
+  state.time = {...state.time, year: 31, month: 4};
+  const facts = cardFacts(state, card.id);
+  assert.equal(facts.season, 'winter');
+  assert.equal(facts.year, 30);
+  assert.deepEqual(validateProseFacts(facts), facts);
+  // A card not yet surfaced reads as now (nothing asks for its prose until it is).
+  assert.equal(cardFacts(state, other.id).season, 'summer');
+  assert.equal(cardFacts(state, other.id).year, 31);
 });
 
 test('chronicleFacts: year and end sheets are valid', () => {
@@ -537,7 +568,7 @@ test('prose writer: retries without response_format, and 503 when upstream is do
 });
 
 test('prose keeper only requests selected cards and retries on explicit demand', async () => {
-  const state = fixtureState('town');
+  const state = shownTown();
   const card = cardsNeedingProse(state)[0];
   const stored = [];
   const actions = (name) => (name === 'setCardProse' ? (s, id, prose) => { stored.push({id, prose}); s.docket.find((c) => c.id === id).prose = prose; } : null);
@@ -650,7 +681,8 @@ test('whyLines puts rulings and story first and leaves out the subject line', ()
   assert.match(lines[0], /^Last year, you refused a wage floor/);
   assert.match(lines[1], /joined a strike/);
   assert.ok(!whyLines(baseFacts()).some((l) => l.startsWith('Person:')));
-  assert.match(whyLines(baseFacts()).at(-1), /^It is spring of year 42/);
+  assert.match(whyLines(baseFacts()).at(-1), /^It is year 42/);
+  assert.ok(!whyLines(baseFacts()).some((l) => /spring|summer|autumn|winter/.test(l)), 'a note never states the season');
 });
 
 test('prose keeper never generates annual chronicle in background', async () => {
@@ -714,7 +746,7 @@ test('Anthropic stream parser handles split events and rejects upstream errors',
   await assert.rejects(async () => { for await (const part of readAnthropicDeltas(errorBody)) void part; }, /provider error/);
 });
 test('Anthropic card narration always retains canonical option text', async () => {
-  const state = fixtureState('town');
+  const state = shownTown();
   const facts = cardFacts(state, cardsNeedingProse(state)[0].id);
   let calls = 0;
   const fetcher = async (url, init) => {
@@ -740,7 +772,7 @@ test('Anthropic card narration always retains canonical option text', async () =
 });
 
 test('hosted Anthropic envelope is consumed and saved by demand client', async () => {
-  const state = fixtureState('town');
+  const state = shownTown();
   const card = cardsNeedingProse(state)[0];
   const stored = [];
   const upstream = async () => new Response(`data: ${JSON.stringify({type:'content_block_delta',delta:{type:'text_delta',text:JSON.stringify({why:'We ask this now.'})}})}\n\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n`);
@@ -767,7 +799,7 @@ test('Anthropic parser rejects truncated valid-looking text and exhausted output
 });
 
 test('hosted quote keeps its final sentence and canonical effects', async () => {
-  const state=fixtureState('town');
+  const state=shownTown();
   const facts=cardFacts(state,cardsNeedingProse(state)[0].id);
   const why="I think we need a proper hall, as the moot house is cramped for all of us now. You approved the Festival Society last year, so a summer fair could follow it nicely. Still, I lean toward the hall, since the clerks of Water Hill are keen on it.";
   const stream=`data: ${JSON.stringify({type:'content_block_delta',delta:{type:'text_delta',text:JSON.stringify({why})}})}\n\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n`;
@@ -784,7 +816,7 @@ test('partial JSON why decoder waits for split escapes and handles unicode', () 
   assert.equal(partialCardWhy('{"why":"An unfinished escape \\'),null);
 });
 test('whole-quote validation rejects invalid endings and keeps fact guards', () => {
-  const state=fixtureState('town'),facts=cardFacts(state,cardsNeedingProse(state)[0].id);
+  const state=shownTown(),facts=cardFacts(state,cardsNeedingProse(state)[0].id);
   const valid='Our hall is cramped, but we could hold a summer fair instead. Which should come first?';
   const long=valid+' '+('Extra unsupported words '.repeat(20))+'.';
   assert.equal(checkHostedCardProse(facts,long).used.why,'template');
@@ -794,7 +826,7 @@ test('whole-quote validation rejects invalid endings and keeps fact guards', () 
   assert.notEqual(hostedNarrationKey(facts),JSON.stringify(facts));
 });
 test('provider previews validated complete prose with backpressure and final fallback is authoritative', async () => {
-  const state=fixtureState('town'),facts=cardFacts(state,cardsNeedingProse(state)[0].id);
+  const state=shownTown(),facts=cardFacts(state,cardsNeedingProse(state)[0].id);
   const valid='Our hall is cramped, but we could hold a summer fair instead. Which should come first?';
   const previews=[];let waiting=false;
   const parts=['{"why":"Our hall is cramped, but we could hold', ' a summer fair instead. Which should come first?', '" BROKEN}'];

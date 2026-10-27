@@ -1,6 +1,6 @@
 // The continual-update loop for decision students (docs/design/decision-distillation.md §7).
 //
-//   node scripts/distill-loop.js [--state data/loop/state.json] [--publish] [--dry] [--min-clients 1] [--fresh "TRAINER ARGS"] [--extra ROWS.jsonl]
+//   node scripts/distill-loop.js [--state data/loop/state.json] [--publish] [--dry] [--min-clients 1] [--fresh "TRAINER ARGS"] [--extra ROWS.jsonl] [--allow-no-novel]
 //   node scripts/distill-loop-watch.js --every 60 -- --publish   (a cycle whenever enough is new)
 //
 // One run turns what players' students flagged into the next student version:
@@ -37,7 +37,14 @@
 //      villages, where a lean on staying or leaving slows growth), rare-option
 //      ratios, KL on the held-out new rows, JS parity, bundle size and speed, and short canary towns played
 //      by the simulated player, as the complete-town comparison is (they must all finish, and the routine
-//      work share must stay near the current version's; their population is reported beside it).
+//      work share must stay near the current version's), the canary population guard (geometric-mean
+//      final population within 10% of the current version's) and active kind coverage (every kind the
+//      current bundle answers that the candidate's canary towns asked is in the candidate; kinds in
+//      "coverageRequireKinds", default none, must also be asked).
+//      These are the cloud loop's gates (cloudflare/training/loop.js, shared code in gates.js).
+//      Fewer than ten held-out new rows FAILS that gate; --allow-no-novel passes it explicitly
+//      (a --fresh or --extra-only cycle with no player reports). The export is int4 (--bits 4
+//      --group 32, as the shipped v8); "exportBits": 8 in the state's config for int8.
 //   6. With --publish and every gate passed: the bundle goes to
 //      public/students/decisions.vN.json, manifest.json names it latest, and
 //      the state file moves on. Otherwise the report says what failed.
@@ -63,6 +70,7 @@ import {decisionTriples, decisionOptions, FEATURES_VERSION} from '../src/decisio
 import {SNAPSHOTS, KIND_BY_ID} from '../src/sim/decisions/kinds.js';
 import {loadLocalConfig, requestDecisions} from '../server/system1.js';
 import {loadStudent} from '../src/decision-student.js';
+import {evaluateCanaryPopulation, evaluateKindCoverage, askedKinds} from '../cloudflare/training/gates.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -75,10 +83,14 @@ const cfg = {
   minRows: 50, qps: 40,
   epochs: 6, lr: 1e-3, maxBundleKB: 450, maxCachedUs: 400, tolerance: 0.03, kindTolerance: 0.2, maxBias: 0.05, tail: [0.67, 1.5],
   workShareDelta: 3, canary: {seeds: 4, start: 65, years: 40}, publishDir: 'public/students', excludeKinds: [],
+  // coverageRequireKinds: kinds that must be in the bundle AND asked in the canaries. Empty
+  // until a canary forces a strike (none asks strike_resolve today, review A7); then ['strike_resolve'].
+  exportBits: 4, exportGroup: 32, coverageMinAsked: 1, coverageRequireKinds: [],
   ...S.config,
 };
 if (flag('min-clients', null)) cfg.minClients = Number(flag('min-clients'));
 const publish = args.includes('--publish'), dry = args.includes('--dry'), fresh = flag('fresh', null), extra = flag('extra', null);
+const allowNoNovel = args.includes('--allow-no-novel');
 const next = S.current.version + 1;
 const out = resolve(ROOT, 'data', 'loop', `v${next}`);
 mkdirSync(out, {recursive: true});
@@ -234,8 +246,9 @@ await run(py, ['-u', 'scripts/train_decision_student.py', ...trainFiles, ...trai
 report.steps.trainArgs = trainArgs;
 await run(py, ['-u', 'scripts/train_error_head.py', runDir, '--data', ...trainFiles, '--eval', p(S.realplay)], {cwd: S.twm});
 const bundle = join(out, `decisions.v${next}.json`);
+// int4 with an fp16 scale per 32 values of a row, as the shipped v8 (cfg.exportBits 8 for int8).
 await run(py, ['scripts/export_decision_student.py', runDir, bundle, '--data', p(S.realplay), '--fixture', '64', '--version', String(next),
-  '--exclude-kinds', cfg.excludeKinds.join(',')], {cwd: S.twm});
+  '--exclude-kinds', cfg.excludeKinds.join(','), '--bits', String(cfg.exportBits), ...(cfg.exportBits === 4 ? ['--group', String(cfg.exportGroup)] : [])], {cwd: S.twm});
 report.steps.train = {run: runDir, bundle};
 save();
 
@@ -301,7 +314,8 @@ if (heldRows.length >= 10) {
   const nv = await evalJson([S.current.run, runDir], heldFile, 'novel-eval');
   const [a, b] = Object.values(nv.runs);
   gate('held-out new rows', b.kl <= a.kl, {rows: heldRows.length, current: a.kl, next: b.kl});
-}
+} else if (allowNoNovel) gate('held-out new rows', true, {rows: heldRows.length, skipped: true, reason: '--allow-no-novel: fewer than ten held-out new rows, passed by request'});
+else gate('held-out new rows', false, {rows: heldRows.length, reason: 'at least ten independent held-out new rows required (--allow-no-novel to pass without them)'});
 const check = await run('node', ['scripts/distill-check-student.js', bundle], {allowFail: true});
 const us = Number((/(\d+) µs with its state cached/.exec(check.text) ?? [])[1]);
 gate('JS parity', check.code === 0, {output: check.text.trim().split('\n').at(-1)});
@@ -310,23 +324,34 @@ const kb = (JSON.stringify(b.weights).length + JSON.stringify(b.vocab).length) /
 gate('size and speed', kb <= cfg.maxBundleKB && us <= cfg.maxCachedUs, {kb: Math.round(kb), cachedUs: us});
 // Canary towns: the same seeds under the current and the next version, played
 // by the simulated player (the complete-town comparison's setting).
-const canary = async (name, file) => {
+// The candidate's run records its questions (without need variants; answers are the
+// same either way) so that kind coverage can count the kinds the towns asked.
+const canary = async (name, file, {record = false} = {}) => {
   const dir = join(out, `canary-${name}`);
   const r = await run('node', ['--max-old-space-size=8000', 'scripts/distill-collect.js', dir, '--seeds', String(cfg.canary.seeds), '--start', String(cfg.canary.start),
-    '--years', String(cfg.canary.years), '--workers', String(cfg.canary.seeds), '--answer', 'student', '--student', file, '--player', '--no-record'], {allowFail: true});
+    '--years', String(cfg.canary.years), '--workers', String(cfg.canary.seeds), '--answer', 'student', '--student', file, '--player', ...(record ? ['--needs', '0'] : ['--no-record'])], {allowFail: true});
   const towns = existsSync(join(dir, 'towns.json')) ? JSON.parse(readFileSync(join(dir, 'towns.json'), 'utf8')).towns : [];
+  const asked = record && r.code === 0 && existsSync(join(dir, 'questions.jsonl')) ? await askedKinds(readLines(join(dir, 'questions.jsonl'))) : null;
   const work = towns.map((t) => { const m = t.shares?.morning ?? {}; const s = Object.values(m).reduce((x, y) => x + y, 0); return s ? 100 * (m.work ?? 0) / s : NaN; });
   // Geometric mean of the final population.
   const pops = towns.map((t) => t.town?.at(-1)?.pop).filter((v) => v > 0);
   const pop = pops.length ? Math.round(Math.exp(pops.reduce((x, v) => x + Math.log(v), 0) / pops.length)) : null;
-  return {ok: r.code === 0 && towns.length === cfg.canary.seeds, work: work.reduce((x, y) => x + y, 0) / work.length, pop};
+  return {ok: r.code === 0 && towns.length === cfg.canary.seeds, work: work.reduce((x, y) => x + y, 0) / work.length, pop, towns, asked};
 };
 const currentBundle = S.current.bundle ? p(S.current.bundle) : null;
-const cNew = await canary('next', bundle);
+const cNew = await canary('next', bundle, {record: true});
 const cOld = currentBundle ? await canary('current', currentBundle) : null;
 gate('canary towns', cNew.ok && (!cOld || Math.abs(cNew.work - cOld.work) <= cfg.workShareDelta),
   {finished: cNew.ok, workShareNext: Number(cNew.work.toFixed(1)), workShareCurrent: cOld ? Number(cOld.work.toFixed(1)) : null,
     popNext: cNew.pop, popCurrent: cOld?.pop ?? null});
+const expectedCanarySeeds = Array.from({length: cfg.canary.seeds}, (_, index) => 1000 + (cfg.canary.start + index) * 7919);
+const populationGate = evaluateCanaryPopulation(cOld, cNew, expectedCanarySeeds);
+gate('canary population', populationGate.pass, populationGate);
+// Kinds the current bundle answers that the candidate's canary towns asked must be in the candidate;
+// coverageRequireKinds must also be asked (see the config above).
+const previousKinds = S.current.bundle ? JSON.parse(readFileSync(p(S.current.bundle), 'utf8')).kinds : [];
+const coverage = evaluateKindCoverage({previousKinds, bundleKinds: b.kinds, asked: cNew.asked, excludeKinds: cfg.excludeKinds, minAsked: cfg.coverageMinAsked, requireKinds: cfg.coverageRequireKinds});
+gate('active kind coverage', coverage.pass, coverage);
 const passed = Object.values(report.gates).every((g) => g.pass);
 report.passed = passed;
 save();

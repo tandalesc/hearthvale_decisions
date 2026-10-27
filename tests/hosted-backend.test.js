@@ -342,3 +342,48 @@ test('live billing never inherits test subscription access or customer records',
  const signature=await hmac(live.STRIPE_WEBHOOK_SECRET,`${timestamp}.${raw}`);
  await assert.rejects(webhook(new Request('https://game.example/api/billing/webhook',{method:'POST',headers:{'stripe-signature':`t=${timestamp},v1=${signature}`},body:raw}),live,r=>r.text()),/Invalid event/);
 });
+// Shared town pages (E9): POST /api/towns keeps a cleaned summary in R2; GET /t/<id> draws it read-only.
+function bucket(){const items=new Map();return {items,async head(k){return items.has(k)?{key:k}:null;},async put(k,v){items.set(k,String(v));},async get(k){return items.has(k)?{text:async()=>items.get(k)}:null;}};}
+const townSummary={townName:'Oak <Ford>',year:150,eraName:'City',archetypeName:'a mill town',lead:'It began as a market town. Then it became a mill town.',
+ arc:[{year:0,name:'a market town'},{year:60,name:'a mill town'}],sentences:['Hearthvale became a mill town.','<script>alert(1)</script>'],
+ highlights:Array.from({length:20},(_,i)=>({year:i*7,text:`Moment ${i} & more`})),
+ compass:{from:1,to:150,axes:[{id:'industry',low:'Fields',high:'Industry',points:[[1,0],[75,0.4],[150,9]]}]},
+ bodies:{founded:[{name:'Craft Guild',year:12}],dissolved:[],refused:[{name:'Union',year:90}]},rulings:{approved:10,refused:3,lapsed:2,total:15},people:3200,rules:12,centres:[],extra:'dropped'};
+const townRequest=(body,headers={})=>new Request('https://game.example/api/towns',{method:'POST',headers:{Origin:'https://game.example','Content-Type':'application/json','CF-Connecting-IP':'203.0.113.9',...headers},body:JSON.stringify(body)});
+test('a finished town is shared to R2 and drawn read-only at /t/<id>, escaped and script-free',async()=>{
+ const f=await routeFixture({STUDENT_ARTIFACTS:bucket()});
+ const response=await worker.fetch(townRequest({page:townSummary}),f.bound,f.ctx);
+ assert.equal(response.status,201);
+ const {id,url}=await response.json();
+ assert.match(id,/^[a-z2-9]{10}$/);assert.equal(url,`/t/${id}`);
+ const stored=JSON.parse(f.bound.STUDENT_ARTIFACTS.items.get(`town-pages/v1/${id}.json`));
+ assert.equal(stored.v,1);assert.equal(stored.page.highlights.length,12);assert.equal(stored.page.extra,undefined);
+ assert.equal(stored.page.compass.axes[0].points[2][1],1,'trait values are clamped');
+ // Free players get it too: no sign-in was sent.
+ const page=await worker.fetch(new Request('https://game.example'+url),f.bound,f.ctx);
+ assert.equal(page.status,200);assert.match(page.headers.get('content-type'),/text\/html/);
+ assert.match(page.headers.get('content-security-policy'),/default-src 'none'/);
+ const html=await page.text();
+ assert.match(html,/Oak &lt;Ford&gt;/);assert.match(html,/&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+ assert.doesNotMatch(html,/<script/i);assert.match(html,/href="\/"/);assert.match(html,/Hearthvale/);
+ assert.match(html,/Moment 0 &amp; more/);assert.match(html,/Craft Guild/);assert.match(html,/15 requests were ruled on/);
+ const missing=await worker.fetch(new Request('https://game.example/t/zzzzzzzzzz'),f.bound,f.ctx);assert.equal(missing.status,404);
+ const odd=await worker.fetch(new Request('https://game.example/t/..%2Fsecret'),f.bound,f.ctx);assert.equal(odd.status,404);
+});
+test('town sharing checks origin, shape and a 20-a-day IP limit',async()=>{
+ const f=await routeFixture({STUDENT_ARTIFACTS:bucket()});
+ const cross=await worker.fetch(townRequest({page:townSummary},{Origin:'https://attacker.example'}),f.bound,f.ctx);
+ assert.equal(cross.status,403);assert.equal(f.bound.STUDENT_ARTIFACTS.items.size,0);
+ assert.equal((await worker.fetch(townRequest({page:{townName:'Empty'}}),f.bound,f.ctx)).status,400);
+ assert.equal((await worker.fetch(townRequest({page:'nope'}),f.bound,f.ctx)).status,400);
+ // A picture comes along only as a small image data URL.
+ const withImage=await worker.fetch(townRequest({page:townSummary,image:'data:image/jpeg;base64,AAAA'},{'CF-Connecting-IP':'198.51.100.1'}),f.bound,f.ctx);
+ const kept=JSON.parse(f.bound.STUDENT_ARTIFACTS.items.get(`town-pages/v1/${(await withImage.json()).id}.json`));assert.equal(kept.image,'data:image/jpeg;base64,AAAA');
+ const badImage=await worker.fetch(townRequest({page:townSummary,image:'javascript:alert(1)'},{'CF-Connecting-IP':'198.51.100.1'}),f.bound,f.ctx);
+ assert.equal(JSON.parse(f.bound.STUDENT_ARTIFACTS.items.get(`town-pages/v1/${(await badImage.json()).id}.json`)).image,undefined);
+ // The two invalid posts above already counted against this IP's day.
+ const statuses=[];for(let i=0;i<20;i++) statuses.push((await worker.fetch(townRequest({page:townSummary}),f.bound,f.ctx)).status);
+ assert.equal(statuses.filter((s)=>s===201).length,18);assert.equal(statuses.at(-1),429);
+ assert.equal((await worker.fetch(townRequest({page:townSummary},{'CF-Connecting-IP':'192.0.2.7'}),f.bound,f.ctx)).status,201,'another IP still can');
+ assert.equal((await worker.fetch(new Request('https://game.example/api/towns',{method:'GET'}),f.bound,f.ctx)).status,405);
+});

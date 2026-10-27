@@ -14,6 +14,17 @@ function field(label, hint, control) {
   return `<div class="field"><span>${esc(label)}${hint ? `<small>${esc(hint)}</small>` : ''}</span>${control}</div>`;
 }
 
+// A model in "About the town's models": what it does, then its version for bug reports.
+function about(label, what, cls) {
+  return `<div class="about-model"><b>${esc(label)}</b><span>${esc(what)}</span><small>Version <span class="${cls}">–</span></small></div>`;
+}
+
+// Plus: Fast or Quality, or neither until the player picks one.
+function narrationHint(value) {
+  const what = 'Fast writes in this browser and asks Haiku only when it is unsure. Quality asks Haiku first.';
+  return value === 'fast' || value === 'quality' ? what : `${what} Until you pick, card quotes ask Haiku first and notes start in this browser.`;
+}
+
 function switchCtl(name, on, label) {
   return `<button type="button" class="switch" role="switch" data-switch="${name}" aria-checked="${Boolean(on)}" aria-label="${esc(label)}"></button>`;
 }
@@ -46,10 +57,15 @@ export function createSettings(ctx) {
         <fieldset><legend>Play</legend>
           ${field('Title cards', 'Full-screen cards for a new age, a new body or a disaster. They pause the town.', seg('moments', p.moments, [['fast', 'While sped up'], ['always', 'Always'], ['never', 'Never']]))}
           ${field('New requests', 'Pause the town and open the Council when a request arrives, so none slips by. The town picks up its pace when you close the Council.', seg('requests', p.requests, [['notify', 'Notify'], ['pause', 'Pause and open']]))}
-          ${field('Decision model', 'The student that answers most of the town\'s questions in this browser.', '<b class="model-ver" style="font:500 13px var(--font-mono)">–</b>')}
-          ${field('Narration model', 'The student that writes the Council\'s card quotes in this browser.', '<b class="narration-ver" style="font:500 13px var(--font-mono)">–</b>')}
-          ${field('Notes model', 'The student that writes the note when you tap a person, household, building or body.', '<b class="notes-ver" style="font:500 13px var(--font-mono)">–</b>')}
-          ${ctx.entitlement?.()?.tier === 'paid' ? field('Narration', 'Fast writes card quotes and notes in this browser and asks Haiku only when it is unsure. Quality asks Haiku first.', seg('narration', p.narration, [['fast', 'Fast'], ['quality', 'Quality']])) : ''}
+          ${ctx.entitlement?.()?.tier === 'paid' ? field('Urgent requests at 10× and 20×', 'An event or a demand lasts only seconds this fast. Pause and open stops the town and shows it to you.', seg('requestsAtSpeed', p.requestsAtSpeed, [['pause', 'Pause and open'], ['notify', 'Notify']])) : ''}
+          ${ctx.entitlement?.()?.tier === 'paid' ? field('Narration', narrationHint(p.narration), seg('narration', p.narration, [['fast', 'Fast'], ['quality', 'Quality']])) : ''}
+          <details class="settings-about">
+            <summary>About the town's models</summary>
+            <p>Three small models run here, in your browser.</p>
+            ${about('Decision model', 'Decides how townsfolk and groups act, like whether a household moves or how a faction feels about a ruling.', 'model-ver')}
+            ${about('Narration model', 'Writes the asker\'s own words on Council cards.', 'narration-ver')}
+            ${about('Notes model', 'Writes the note when you tap a person, household, building or body.', 'notes-ver')}
+          </details>
         </fieldset>
         <fieldset><legend>Your town</legend>
           <p style="margin:0 0 8px;font-size:var(--fs-13);color:var(--ink-2)">The town saves itself every 30 seconds on this device.</p>
@@ -135,6 +151,7 @@ export function createSettings(ctx) {
           b.setAttribute('aria-checked', String(b === opt));
         }
         ctx.prefs.set(group.dataset.pref, opt.dataset.value);
+        if (group.dataset.pref === 'narration') setText(group.closest('.field')?.querySelector('small'), narrationHint(opt.dataset.value));
         return;
       }
       const sw = e.target.closest('[data-switch]');

@@ -326,3 +326,69 @@ test('int4 weights decode as the exporter packs them: low nibble first, an fp16 
   const want = q.flatMap((row, r) => row.map((v, c) => v * scales[r][Math.floor(c / 2)]));
   assert.deepEqual([...out], want);
 });
+
+// The bundle players download: the one public/students/manifest.json names latest (review C8).
+test('the shipped decision student is the manifest\'s latest, matches its trainer on the embedded fixture, and has the shape the game reads', async () => {
+  const {readFileSync, existsSync} = await import('node:fs');
+  const {checkBundleParity, bundleKB} = await import('../cloudflare/training/gates.js');
+  const dir = new URL('../public/students/', import.meta.url);
+  const manifest = JSON.parse(readFileSync(new URL('manifest.json', dir), 'utf8'));
+  assert.ok(Number.isInteger(manifest.latest) && manifest.versions[manifest.latest] === `decisions.v${manifest.latest}.json`);
+  for (const [v, file] of Object.entries(manifest.versions)) assert.ok(existsSync(new URL(file, dir)), `v${v}: ${file} is shipped`);
+  assert.ok(!(manifest.blocked ?? []).includes(manifest.latest), 'the shipped latest is not blocked');
+  const bundle = JSON.parse(readFileSync(new URL(manifest.versions[manifest.latest], dir), 'utf8'));
+  assert.equal(bundle.format, 'hearthvale-decision-student');
+  assert.equal(bundle.version, manifest.latest);
+  assert.equal(bundle.features, FEATURES_VERSION);
+  // Config and vocabulary as src/decision-student.js reads them.
+  assert.equal(bundle.config.arch, 'set');
+  for (const k of ['d_model', 'n_heads', 'question_layers', 'd_ff', 'max_triples']) assert.ok(Number.isInteger(bundle.config[k]) && bundle.config[k] > 0, `config.${k}`);
+  assert.equal(bundle.config.d_model % bundle.config.n_heads, 0);
+  assert.deepEqual(Object.keys(bundle.vocab).sort(), ['attrs', 'kind_options', 'options', 'scopes', 'state_scopes', 'values']);
+  for (const k of ['scopes', 'attrs', 'values', 'kind_options', 'options']) assert.deepEqual([bundle.vocab[k]['<pad>'], bundle.vocab[k]['<unk>']], [0, 1], `vocab.${k} reserves pad and unk`);
+  assert.deepEqual(bundle.vocab.state_scopes, ['town', 'district', 'proposal', 'body']);
+  const known = new Set(KINDS.map((k) => k.id));
+  assert.ok(bundle.kinds.includes('strike_resolve'), 'strike_resolve is answered');
+  for (const kind of bundle.kinds) {
+    assert.ok(known.has(kind), `${kind} is a game kind`);
+    for (const o of decisionOptions(kind)) assert.ok(`${kind}:${o}` in bundle.vocab.kind_options, `${kind}:${o} has an option embedding`);
+  }
+  assert.ok(bundleKB(bundle) <= 450, `${Math.round(bundleKB(bundle))} KB of weights and vocabulary`);
+  assert.ok(bundle.confidence?.thresholds?.threshold_p95 > 0, 'the confidence head\'s flag threshold');
+  // The trainer's own answers on the embedded fixture, as scripts/distill-check-student.js checks them.
+  const student = loadStudent(bundle);
+  assert.equal(student.hasConfidence, true);
+  const parity = checkBundleParity(student, {minRows: 8});
+  assert.ok(parity.pass, `parity: ${JSON.stringify(parity)}`);
+  assert.ok(parity.worst < 1e-4 && parity.worstConf < 1e-3);
+});
+
+test('student versions: a blocked latest falls back to the highest unblocked version, then to the shipped manifest', async () => {
+  const {createLocalAnswerer, createStudentVersions, chooseStudentVersion} = await import('../src/decision-local.js');
+  assert.equal(chooseStudentVersion({latest: 3, versions: {1: 'a', 2: 'b', 3: 'c'}, blocked: [3]}), '2');
+  assert.equal(chooseStudentVersion({latest: 3, versions: {1: 'a', 2: 'b', 3: 'c'}, blocked: [3, 2]}), '1');
+  assert.equal(chooseStudentVersion({latest: 3, versions: {1: 'a', 2: 'b', 3: 'c', 4: 'd'}, blocked: [3]}), '2', 'never a version above latest');
+  assert.equal(chooseStudentVersion({latest: 2, versions: {1: 'a', 2: 'b'}, blocked: [1, 2]}), null);
+  assert.equal(chooseStudentVersion({latest: 2, versions: {1: 'a', 2: 'b'}}, {pinned: '1', blocked: [1]}), '2', 'a blocked pin is not honoured');
+  assert.equal(chooseStudentVersion({latest: 2, versions: {1: 'a', 2: 'b'}}, {pinned: '1'}), '1');
+  const bundles = {'v1.json': {...randomBundle('mlp'), version: 1}, 'v2.json': {...randomBundle('mlp'), version: 2}, 'v3.json': {...randomBundle('mlp'), version: 3}};
+  const serve = (manifests) => async (url) => {
+    const {host, pathname} = new URL(url), name = pathname.split('/').pop();
+    const body = name === 'manifest.json' ? manifests[host] : bundles[name];
+    return {ok: !!body, status: body ? 200 : 404, json: async () => body};
+  };
+  const client = {ask: () => Promise.resolve(null), stats: () => ({state: 'idle'}), configure() {}, reset() {}, flush() {}};
+  const open = async (manifests, opts = {}) => {
+    const bus = createLocalAnswerer({client});
+    const versions = createStudentVersions({answerer: bus, base: 'https://hosted.test/students/', fallbackBase: 'https://shipped.test/students/', fetcher: serve(manifests), ...opts});
+    return [await versions.start(), bus];
+  };
+  const shipped = {latest: 2, versions: {1: 'v1.json', 2: 'v2.json'}};
+  const [v, bus] = await open({'hosted.test': {latest: 3, versions: {1: 'v1.json', 2: 'v2.json', 3: 'v3.json'}, blocked: [3]}, 'shipped.test': shipped});
+  assert.equal(v, '2', 'latest is blocked: the highest unblocked version');
+  assert.equal((await bus.ask('resident_routine', 'a', walker, {state: district})).model, 'student:resident_routine@v2');
+  assert.equal((await open({'hosted.test': {latest: 3, versions: {3: 'v3.json'}, blocked: [3]}, 'shipped.test': shipped}))[0], '2', 'nothing hosted is left: the shipped manifest');
+  assert.equal((await open({'hosted.test': {latest: 3, versions: {2: 'v2.json', 3: 'v3.json'}, blocked: [2, 3]}, 'shipped.test': shipped}))[0], '1', 'the shipped manifest skips what the hosted one blocks');
+  assert.equal((await open({'hosted.test': {latest: 2, versions: {1: 'v1.json', 2: 'v2.json'}, blocked: [1, 2]}, 'shipped.test': shipped}))[0], null, 'every version blocked: no student, local rules');
+  assert.equal((await open({'hosted.test': {latest: 3, versions: {1: 'v1.json', 2: 'v2.json', 3: 'v3.json'}, blocked: [1]}, 'shipped.test': shipped}, {pinned: '1'}))[0], '3', 'a blocked pin opens on latest');
+});

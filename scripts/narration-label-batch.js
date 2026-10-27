@@ -16,6 +16,9 @@
 //         each): the worker's own note request (cloudflare/narration.js narrationSystem and
 //         noteMessage, max 180 tokens, thinking off, low effort), as Plus players get it.
 //         fetch keeps a note's text and whether the worker would show it (noteOk).
+// --stratify season,era takes the picks in equal cells over those facts' values (per kind for
+//         notes; templates round-robin within a cell for cards), a short cell's remainder
+//         spread over the others; see stratify.
 // --skip MANIFEST.jsonl (repeatable) leaves out sheets an earlier batch already labelled.
 // send    submits the batch (needs --yes) and writes DIR/batch.json.
 // fetch   when the batch has ended, writes DIR/labels.jsonl ({facts, field: 'why', text,
@@ -105,6 +108,42 @@ function spreadKinds(sheets, n) {
   return {picked: out, templates: [...by.values()].filter((l) => l.length).length};
 }
 
+// --stratify season,era: equal cells over the named facts' values (season x era here), each
+// cell capped at its share; a cell short of its share (hamlet bodies) hands the rest to the
+// other cells evenly (water-filling), so the total stays n. Notes: within each kind, n split
+// evenly over the kinds; cards: one group, templates taken round-robin within each cell
+// (as spread does). Within a cell, sheets are taken by key hash.
+export function stratify(sheets, n, keys, {notes = true} = {}) {
+  const by = new Map(notes ? NOTE_KINDS.map((k) => [k, []]) : [['card', []]]);
+  for (const s of sheets.sort((a, b) => (rank(a.key) < rank(b.key) ? -1 : 1))) by.get(notes ? s.type : 'card')?.push(s);
+  const groups = [...by.keys()].filter((k) => by.get(k).length);
+  const out = [], templates = new Set();
+  groups.forEach((g, i) => {
+    let want = Math.floor(n / groups.length) + (i < n % groups.length ? 1 : 0);
+    const cells = new Map();
+    for (const s of by.get(g)) {
+      const c = keys.map((k) => s.facts?.[k] ?? '?').join('|');
+      if (!cells.has(c)) cells.set(c, []);
+      cells.get(c).push(s);
+      if (!notes) templates.add(s.facts.template ?? '?');
+    }
+    const lists = [...cells.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, l]) => (notes ? l : spread(l, l.length).picked));
+    const take = lists.map(() => 0);
+    let open = lists.map((_, j) => j);
+    while (want > 0 && open.length) {
+      const share = Math.max(1, Math.floor(want / open.length));
+      for (const j of open) {
+        if (want <= 0) break;
+        const k = Math.min(share, lists[j].length - take[j], want);
+        take[j] += k; want -= k;
+      }
+      open = open.filter((j) => take[j] < lists[j].length);
+    }
+    lists.forEach((l, j) => out.push(...l.slice(0, take[j])));
+  });
+  return {picked: out, templates: notes ? groups.length : templates.size};
+}
+
 async function build(args) {
   const [sheetsFile] = args.filter((a, i) => !a.startsWith('--') && !args[i - 1]?.startsWith('--'));
   const dir = arg(args, '--out');
@@ -122,13 +161,14 @@ async function build(args) {
     if (s.seeds.every((x) => heldOut.has(x))) test.push(s);
     else if (!s.seeds.some((x) => heldOut.has(x))) train.push(s);
   }
-  const pick = notes ? spreadKinds : spread;
+  const strat = String(arg(args, '--stratify', '')).split(',').filter(Boolean);
+  const pick = strat.length ? (rows, k) => stratify(rows, k, strat, {notes}) : notes ? spreadKinds : spread;
   const a = pick(train, nTrain), b = pick(test, nTest);
   const picked = [...a.picked.map((s) => ({s, split: 'train'})), ...b.picked.map((s) => ({s, split: 'test'}))];
   mkdirSync(dir, {recursive: true});
   const requests = picked.map(({s}) => (notes ? noteRequest : request)(s.key, s.facts));
   writeLines(join(dir, 'requests.jsonl'), requests);
-  writeLines(join(dir, 'manifest.jsonl'), picked.map(({s, split}) => ({custom_id: s.key, split, seeds: s.seeds, ...(notes ? {note: true, kind: s.type} : {template: s.facts.template})})));
+  writeLines(join(dir, 'manifest.jsonl'), picked.map(({s, split}) => ({custom_id: s.key, split, seeds: s.seeds, ...(notes ? {note: true, kind: s.type, season: s.facts.season, era: s.facts.era} : {template: s.facts.template, season: s.facts.season, era: s.facts.era})})));
 
   const sysTokens = requests[0].params.system[0].text.length / CHARS_PER_TOKEN;
   const userTokens = requests.reduce((n, r) => n + r.params.messages[0].content.length, 0) / CHARS_PER_TOKEN;

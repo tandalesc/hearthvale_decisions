@@ -41,7 +41,8 @@ export const sheetSchema = (facts) => SCHEMAS[facts?.type] ?? (facts?.kind ? FAC
 function walk(out, spec, value, scope, name, ctx) {
   if (value === undefined || value === null) return;
   const path = `${scope}.${name}`;
-  if ((scope === ctx.top && SKIP.has(name)) || ctx.drop.has(path)) return;
+  // drop matches the full path ('person.season') or the bare field name ('season').
+  if ((scope === ctx.top && SKIP.has(name)) || ctx.drop.has(path) || ctx.drop.has(name)) return;
   switch (spec.t) {
     case 'enum':
     case 'key':

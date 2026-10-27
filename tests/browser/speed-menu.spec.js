@@ -8,7 +8,8 @@ async function mount(page, tier, upgrade = false) {
     let speed = 1;
     window.chosenSpeeds = [];
     window.upgradeRequested = false;
-    const ctx = {speed: () => speed, lastSpeed: () => speed || 1, entitlement: () => ({tier}), setSpeed: (value) => { speed = value; window.chosenSpeeds.push(value); time.update({speed}); }, ...(upgrade ? {openAccount: (options) => { window.upgradeRequested = options.view === 'plans'; }} : {})};
+    window.lockedSpeeds = [];
+    const ctx = {speedLocked: (value) => window.lockedSpeeds.push(value), speed: () => speed, lastSpeed: () => speed || 1, entitlement: () => ({tier}), setSpeed: (value) => { speed = value; window.chosenSpeeds.push(value); time.update({speed}); }, ...(upgrade ? {openAccount: (options) => { window.upgradeRequested = options.view === 'plans'; }} : {})};
     const time = createTime(ctx, 'peek');
     time.el.style.cssText = 'position:fixed;bottom:8px;right:8px';
     document.body.append(time.el);
@@ -25,9 +26,14 @@ test('free speed popup lists all speeds, shows locked paid choices and selects a
   await expect(menu.getByRole('menuitemradio')).toHaveCount(5);
   await expect(menu.getByRole('menuitemradio', {name: '1×', exact: true})).toHaveAttribute('aria-checked', 'true');
   for (const speed of [10, 20]) await expect(menu.getByRole('menuitemradio', {name: `${speed}× Plus`})).toHaveAttribute('aria-disabled', 'true');
-  // aria-disabled entries remain discoverable, but can never set paid speeds.
+  // aria-disabled entries remain discoverable, but can never set paid speeds:
+  // choosing one keeps the speed, closes the menu and says why.
   await menu.getByRole('menuitemradio', {name: '10× Plus'}).dispatchEvent('click');
   expect(await page.evaluate(() => window.chosenSpeeds)).toEqual([]);
+  expect(await page.evaluate(() => window.lockedSpeeds)).toEqual([10]);
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toHaveText('1×');
+  await trigger.click();
   await menu.getByRole('menuitemradio', {name: '5×', exact: true}).click();
   await expect(menu).toHaveCount(0);
   await expect(trigger).toHaveText('5×');
@@ -55,7 +61,7 @@ test('paid popup supports keyboard selection, Escape and outside close', async (
   await expect(page.getByRole('menu')).toHaveCount(0);
 });
 
-test('phone popup keeps locked entries inert and offers a separate upgrade action', async ({page}) => {
+test('phone popup: a locked entry opens the plans, and a separate upgrade action does too', async ({page}) => {
   await page.setViewportSize({width: 390, height: 740});
   await mount(page, 'free', true);
   await page.locator('button.speed').click();
@@ -65,7 +71,11 @@ test('phone popup keeps locked entries inert and offers a separate upgrade actio
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(382);
   expect(bounds.y).toBeGreaterThanOrEqual(8);
   await menu.getByRole('menuitemradio', {name: '20× Plus'}).dispatchEvent('click');
-  expect(await page.evaluate(() => window.upgradeRequested)).toBe(false);
+  expect(await page.evaluate(() => window.upgradeRequested)).toBe(true);
+  expect(await page.evaluate(() => window.lockedSpeeds)).toEqual([20]);
+  await expect(menu).toHaveCount(0);
+  await page.evaluate(() => { window.upgradeRequested = false; });
+  await page.locator('button.speed').click();
   await menu.getByRole('menuitem', {name: 'Explore Plus'}).click();
   expect(await page.evaluate(() => window.upgradeRequested)).toBe(true);
   expect(await page.evaluate(() => window.chosenSpeeds)).toEqual([]);

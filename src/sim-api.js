@@ -5,7 +5,7 @@
 export const SELECTORS = ['selectTopBar', 'selectDocket', 'selectBodies', 'selectRuleBook', 'selectTensions', 'selectFactions',
   'selectChronicle', 'selectEraProgress', 'selectUnlocks', 'selectInspect',
   // Optional: later-era surfaces and disasters.
-  'selectEvents', 'selectBudget', 'selectCompass', 'selectEndPreview', 'selectCentres', 'selectApproval', 'selectBudgetSeason', 'selectAdvisers'];
+  'selectEvents', 'selectBudget', 'selectCompass', 'selectEndPreview', 'selectCentres', 'selectApproval', 'selectBudgetSeason', 'selectAdvisers', 'selectRulings', 'selectEndPage'];
 export const ACTIONS = ['rule', 'dissolveBody', 'setIndividualCap', 'strikeBudgetLine', 'approveAllBudgets', 'trimAllToFit', 'hireAdviser', 'dismissAdviser', 'setAdviserMode', 'redrawSlate', 'letStand'];
 
 export function realSim({index, view, fixtures = null, ser = null, rv = null}) {

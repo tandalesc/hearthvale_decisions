@@ -41,10 +41,10 @@ export function openPopover(anchor, content, {label = 'Details', place = 'auto'}
   return el;
 }
 
-export function eraContent(era) {
+export function eraContent(era, townName = 'Hearthvale') {
   const wrap = h('div');
   if (!era || era.final) {
-    wrap.innerHTML = '<h4>The last age</h4><p>Hearthvale has grown as far as it will. The chronicle keeps going.</p>';
+    wrap.innerHTML = `<h4>The last age</h4><p>${esc(townName || 'Hearthvale')} has grown as far as it will. The chronicle keeps going.</p>`;
     return wrap;
   }
   wrap.innerHTML = `<h4>Toward ${esc(era.nextName)}</h4>

@@ -209,7 +209,19 @@ the whole cost of approval by group.
 
 ### 2.6 Leftover delegation and standing-order code
 
-All of it is still live in the sim. Only the UI was removed (HANDOFF.md:103).
+**Now (October 2026):** this code is gone. Budgets and advisers took its place
+(step 8; tests/sim-advisers.test.js:206). An old save's `delegated`,
+`delegateCap` and `standingOrders` fields are dropped on load (`RETIRED`,
+institutions.js:1087). Proposals no longer get a `delegate` option
+(docket.js:59–60), and no "Let them decide" text is left in src/ui. What is
+left: `reportCard` and `body.report`, now only for bodies on a yearly budget
+(institutions.js:1848, 1876); the `delegated` outcome, read from old ruling
+histories (approval.js, subjects.js, narrative-facts.js); and the `delegate`
+option key and `delegated` act in the narration schema (narrative-prose.js,
+narrative-schema.js). The list below is what the audit found before that.
+
+When this was written, all of it was still live in the sim. Only the UI was
+removed (HANDOFF.md:103).
 
 - `canDelegate`, `setDelegated`, `setStandingOrder`, `standingOrderFor`
   (institutions.js:1133–1178).
@@ -222,7 +234,7 @@ All of it is still live in the sim. Only the UI was removed (HANDOFF.md:103).
 - View fields `delegated`, `delegateCap`, `canDelegate`, `standingOrders`
   (view.js:212–226). Unlocks `delegation` and `standingOrders`.
 - The **`delegate` option** ("Let them decide") on proposals
-  (docket.js:57–66, view.js:147). It still reaches the player.
+  (docket.js:57–66, view.js:147). It still reached the player then.
 - Stubs in src/ui/dev/stub-sim.js and tests in tests/sim-governance.test.js:176
   and :898.
 

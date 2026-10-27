@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fixtureState, stepTick, createRenderView, cellIndex, PACE} from '../src/sim/index.js';
 import {deckHeightAt, alongBridge} from '../src/sim/bridges.js';
-import {waterAt, FORDS, bankDistance} from '../src/terrain.js';
+import {waterAt, bankDistance, fordFactor, heightAt, waterLevelAt, WATER_SURFACE} from '../src/terrain.js';
 
 // A cell the nav grid treats as a ford (shallow water, code 2) is walkable too.
 function navFord(x, z) {
@@ -22,8 +22,14 @@ function onTowpath(x, z) {
   return c >= 0 && !terrainGrid().water[c] && bankDistance(x, z) >= -TOWPATH_SLACK;
 }
 
-// Fords are bands across the river (terrain.FORDS), wider than the flagged channel cells.
-const atFord = (z) => FORDS.some((f) => Math.abs(z - f.z) <= f.half + 1);
+// A ford as the terrain makes it: within a ford's shallowed band (fordFactor > 0: its
+// flat bed and the blend either side) and wadeable underfoot, the depth terrain.fordAt
+// allows (bed above -0.35 under the 0.025 surface). Wider than the flagged channel cells
+// (rows whose centre is wadeable): a leg leaving a ford's outermost row on a slant crosses
+// the corner of the next row's bank ramp, ankle-deep or above the water line (town
+// fixture, ford at z -314: the leg (5,-309) -> (-7,-299); see the test below).
+const WADE = WATER_SURFACE + 0.35;
+const atFord = (x, z) => fordFactor(z) > 0 && waterLevelAt(z) - heightAt(x, z) < WADE;
 
 // Clearly on a deck: within its width and away from the abutments (sim-world's deck
 // height also covers a 0.6 margin beside the deck, where bank walkers brush past).
@@ -38,8 +44,9 @@ function clearlyOnDeck(state, x, z) {
   return false;
 }
 import {PERSON_STRIDE_EXTENDED} from '../src/sim/render-view.js';
-import {footprints, cellOf, terrainGrid} from '../src/sim/roads.js';
+import {footprints, cellOf, terrainGrid, walkerGrid} from '../src/sim/roads.js';
 import {createRoutePlanner} from '../src/route-planner.js';
+import {findRoute, cellsToWaypoints} from '../src/navigation.js';
 
 const FRAME = 1 / 60;
 
@@ -79,7 +86,7 @@ function run(speed, ticks) {
       }
       // In the river only at a ford or on a bridge deck.
       const deckY = deckHeightAt(state, p.x, p.z);
-      if (waterAt(p.x, p.z) && deckY == null && !atFord(p.z) && !navFord(p.x, p.z) && !onTowpath(p.x, p.z)) {
+      if (waterAt(p.x, p.z) && deckY == null && !atFord(p.x, p.z) && !navFord(p.x, p.z) && !onTowpath(p.x, p.z)) {
         bad.wet++;
         bad.wetExample ??= {id: p.id, x: p.x, z: p.z};
       }
@@ -115,3 +122,28 @@ for (const speed of [1, 8]) {
     assert.ok(bad.deckSamples > 0, 'some walkers crossed a bridge');
   });
 }
+
+// The smallest case of a walker found in the river at 1x (person 1377, year 34): the town
+// fixture's valley (seed 2024) has a ford at z -314, and a route from the east bank to
+// the west wades it along its outermost row, then leaves on a slant. Every water cell it
+// enters must be a ford (never deep water), and every point along its legs must be dry,
+// on a ford's wadeable ground or a ford cell.
+test('a route over the ford at the south of the town fixture wades only the ford', () => {
+  const s = fixtureState('town');
+  const grid = walkerGrid(s);
+  const from = {x: 16.86, z: -309}, to = {x: -7, z: -299};
+  const r = findRoute(grid, cellOf(from.x, from.z), cellOf(to.x, to.z), {maxNodes: 40000});
+  assert.ok(r.cells, 'a route');
+  const water = terrainGrid().water;
+  const wet = [...r.cells].filter((c) => water[c]);
+  assert.ok(wet.length > 0, 'it wades');
+  assert.ok(wet.every((c) => water[c] === 2), `only ford cells (${wet.map((c) => water[c])})`);
+  const route = cellsToWaypoints(grid, r.cells, from, to);
+  for (let i = 2; i < route.length; i += 2) {
+    for (let t = 0; t <= 1; t += 0.01) {
+      const x = route[i - 2] + (route[i] - route[i - 2]) * t, z = route[i - 1] + (route[i + 1] - route[i - 1]) * t;
+      assert.ok(!waterAt(x, z) || atFord(x, z) || navFord(x, z) || onTowpath(x, z),
+        `(${x.toFixed(2)}, ${z.toFixed(2)}) is in the river, ${(waterLevelAt(z) - heightAt(x, z)).toFixed(2)} deep, off the ford`);
+    }
+  }
+});

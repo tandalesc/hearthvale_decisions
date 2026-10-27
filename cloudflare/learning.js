@@ -4,6 +4,8 @@ import initialManifest from '../public/students/manifest.json' with {type: 'json
 import {validateQuestion, validateState, stateKey} from '../src/decision-kinds.js';
 import {decisionOptions, FEATURES_VERSION} from '../src/decision-features.js';
 import {STUDENT_FAMILIES, studentPath} from '../src/student-families.js';
+import {loadStudent} from '../src/decision-student.js';
+import {bundleKB, checkBundleParity, realplayKL, RETIRED_KINDS} from './training/gates.js';
 const json = (body, status = 200) => Response.json(body, {status});
 const textEncoder = new TextEncoder();
 export const REQUIRED_GATES = ['real-play KL', 'real-play KL by traffic', 'no busy kind worse', 'largest option bias', 'young-town bias', 'rare options', 'JS parity', 'size and speed', 'canary towns', 'canary population', 'active kind coverage', 'held-out new rows'];
@@ -31,6 +33,10 @@ export async function handleLearningRequest(request, env) {
   if (!env.LEARNING_ADMIN_SECRET || request.headers.get('authorization') !== `Bearer ${env.LEARNING_ADMIN_SECRET}`) return json({error: 'Unauthorized'}, 401);
   if (path === '/api/learning/trigger' && request.method === 'POST') return json(await coordinator(env).trigger());
   if (path === '/api/learning/status') return json(await coordinator(env).status());
+  // Rollback and kill switch (docs/hosting.md): restore the release before the last
+  // publication, or block/unblock a version clients must not load. Through the
+  // coordinator's fetch (the RPC entrypoint in learning-runtime.js forwards it).
+  if ((path === '/api/learning/revert' || path === '/api/learning/block') && request.method === 'POST') return coordinator(env).fetch(request);
   return json({error: 'Not found'}, 404);
 }
 export class LearningCoordinator {
@@ -38,7 +44,36 @@ export class LearningCoordinator {
   exclusive(fn) { const result = this.queue.then(fn); this.queue = result.catch(() => {}); return result; }
   async manifest() { return await this.ctx.storage.get('manifest') ?? {...structuredClone(this.env.INITIAL_STUDENT_MANIFEST ?? initialManifest), artifacts: {}}; }
   async scheduleAlarm(at) { const existing = await this.ctx.storage.getAlarm(); if (existing === null || existing > at) await this.ctx.storage.setAlarm(at); }
-  async status() { const job = await this.ctx.storage.get('job'); return {manifest: await this.manifest(), job: job ? {...job, token: undefined} : null}; }
+  async status() { const job = await this.ctx.storage.get('job'), previous = await this.ctx.storage.get('previous'); return {manifest: await this.manifest(), job: job ? {...job, token: undefined} : null, previous: previous ? {latest: previous.manifest.latest, at: previous.at} : null}; }
+  // Version numbers only go up: a reverted or blocked version's file name is never
+  // reused (bundles are served immutable, so a client may still hold the old bytes).
+  async nextVersion(manifest) { return Math.max(manifest.latest, await this.ctx.storage.get('highest') ?? 0, ...(manifest.blocked ?? [])) + 1; }
+  // Restores the manifest and training assets saved by the last publication, in one
+  // transaction, and blocks the version it replaces. One level: a second revert
+  // without a publication in between is refused.
+  revert() { return this.exclusive(async () => {
+    const previous = await this.ctx.storage.get('previous');
+    if (!previous) return {state: 'unchanged', reason: 'No previous release to restore'};
+    const manifest = await this.manifest(), reverted = manifest.latest, highest = await this.ctx.storage.get('highest') ?? 0;
+    const restored = {...previous.manifest, blocked: [...new Set([...(previous.manifest.blocked ?? []), ...(manifest.blocked ?? []), reverted])].sort((a, b) => a - b)};
+    await this.ctx.storage.transaction(async storage => {
+      await storage.put('manifest', restored);
+      if (previous.assets) await storage.put('assets', previous.assets); else await storage.delete('assets');
+      await storage.put('highest', Math.max(highest, reverted));
+      await storage.delete('previous');
+    });
+    return {state: 'reverted', from: reverted, latest: restored.latest, blocked: restored.blocked};
+  }); }
+  // The kill switch: clients skip blocked versions at session start (src/decision-local.js).
+  block(version, blocked = true) { return this.exclusive(async () => {
+    const manifest = await this.manifest();
+    if (!Number.isInteger(version) || version < 1 || !manifest.versions?.[version]) return {error: 'Unknown version'};
+    const set = new Set(manifest.blocked ?? []);
+    if (blocked) set.add(version); else set.delete(version);
+    manifest.blocked = [...set].sort((a, b) => a - b);
+    await this.ctx.storage.put('manifest', manifest);
+    return {latest: manifest.latest, blocked: manifest.blocked};
+  }); }
   ingest({questions, client}) { return this.exclusive(async () => {
     if (!Array.isArray(questions) || questions.length > 64 || !client) throw new Error('Invalid report');
     const who = await digest(`${this.env.AUTH_SECRET}|learning|${client}`), now = Date.now();
@@ -88,6 +123,7 @@ export class LearningCoordinator {
     if (!assets) return {state: 'blocked', reason: 'bootstrap assets unavailable'};
     const manifest = await this.manifest();
     if (assets.current?.version !== manifest.latest) return {state: 'blocked', reason: 'Bootstrap checkpoint version must match latest release'};
+    if (manifest.blocked?.includes(manifest.latest)) return {state: 'blocked', reason: 'Latest release is blocked; revert or unblock it before training on it'};
     const day = new Date().toISOString().slice(0, 10), budgetKey = `budget:${day}`;
     const used = await this.ctx.storage.get(budgetKey) ?? 0, remaining = Math.max(0, Number(this.env.LEARNING_DAILY_LABEL_CAP ?? 10000) - used);
     const labelled = rows.filter(r => r.label?.model === this.env.DECISIONS_TEACHER_MODEL && r.label?.features === FEATURES_VERSION);
@@ -96,10 +132,12 @@ export class LearningCoordinator {
     if (selected.length < minRows) return {state: 'skipped', reason: 'label budget', rows: selected.length};
     const reserved = selected.filter(r => !labelled.includes(r)).length;
     const id = crypto.randomUUID(), token = crypto.randomUUID() + crypto.randomUUID();
-    const job = {id, token, base: manifest.latest, state: 'dispatching', attempts: 0, started: Date.now(), expires: Date.now() + 90 * 60000, reserved, day};
+    const next = await this.nextVersion(manifest);
+    const job = {id, token, base: manifest.latest, next, state: 'dispatching', attempts: 0, started: Date.now(), expires: Date.now() + 90 * 60000, reserved, day};
     // Reserve before dispatch: ambiguous crashes/retries never exceed today's cap.
     await this.ctx.storage.put(budgetKey, used + reserved);
-    await this.env.STUDENT_ARTIFACTS.put(`jobs/${id}/input.json`, JSON.stringify({rows: selected, assets, teacher: this.env.DECISIONS_TEACHER_MODEL, base: job.base, minRows}));
+    // nextVersion reaches the loop's state (runner.js spreads assets into it).
+    await this.env.STUDENT_ARTIFACTS.put(`jobs/${id}/input.json`, JSON.stringify({rows: selected, assets: {...assets, nextVersion: next}, teacher: this.env.DECISIONS_TEACHER_MODEL, base: job.base, minRows}));
     await this.ctx.storage.put('job', job);
     await this.dispatch(job);
     return {id, state: job.state};
@@ -132,6 +170,13 @@ export class LearningCoordinator {
   }); }
   async fetch(request) {
     const job = await this.ctx.storage.get('job'), url = new URL(request.url);
+    if (url.pathname === '/api/learning/revert' || url.pathname === '/api/learning/block') {
+      // Checked again here: the coordinator never trusts the caller to have done it.
+      if (!this.env.LEARNING_ADMIN_SECRET || request.headers.get('authorization') !== `Bearer ${this.env.LEARNING_ADMIN_SECRET}` || request.method !== 'POST') return json({error: 'Unauthorized'}, 401);
+      if (url.pathname === '/api/learning/revert') { const result = await this.revert(); return json(result, result.state === 'reverted' ? 200 : 409); }
+      const body = await request.json().catch(() => null), result = await this.block(body?.version, body?.blocked !== false);
+      return json(result, result.error ? 400 : 200);
+    }
     const match = /^\/api\/learning\/jobs\/([^/]+)\/(input|asset|upload|complete)$/.exec(url.pathname);
     if (!job || !match || match[1] !== job.id || request.headers.get('authorization') !== `Bearer ${job.token}` || Date.now() > job.expires || !['dispatching', 'running'].includes(job.state)) return json({error: 'Invalid job lease'}, 403);
     if (match[2] === 'input' && request.method === 'GET') { const object = await this.env.STUDENT_ARTIFACTS.get(`jobs/${job.id}/input.json`); return new Response(object.body); }
@@ -175,22 +220,85 @@ export class LearningCoordinator {
     if (!report?.passed || !REQUIRED_GATES.every(g => report.gates?.[g]?.pass === true) || report.gates?.['held-out new rows']?.pass === false) return json({error: 'Candidate failed gates'}, 422);
     const manifest = await this.manifest();
     if (manifest.latest !== job.base) return json({error: 'Stale base version'}, 409);
-    const version = manifest.latest + 1, prefix = `jobs/${id}/outputs/`;
+    const version = job.next ?? manifest.latest + 1, prefix = `jobs/${id}/outputs/`;
     for (const name of ['bundle.json', 'model.pt', 'novel-rows.jsonl']) if (!await this.env.STUDENT_ARTIFACTS.head(prefix + name)) return json({error: `Missing ${name}`}, 422);
     const bundle = await (await this.env.STUDENT_ARTIFACTS.get(prefix + 'bundle.json')).json();
     if (bundle.version !== version || bundle.features !== FEATURES_VERSION) return json({error: 'Bundle provenance mismatch'}, 422);
-    const assets = {...input.assets, current: {...input.assets.current, version, run: 'checkpoint', bundle: 'current.json'}, train: [...input.assets.train, `corpus/${id}.jsonl`]};
+    // Independent verification: the trainer's report is not enough (it wrote it).
+    const verification = await this.verify(bundle, input, id);
+    if (!verification.pass) { job.verification = verification; await this.ctx.storage.put('job', job); return json({error: 'Independent verification failed', verification}, 422); }
+    const {nextVersion: _next, ...inputAssets} = input.assets;
+    const before = structuredClone(manifest), beforeAssets = await this.ctx.storage.get('assets') ?? null;
+    const assets = {...inputAssets, current: {...input.assets.current, version, run: 'checkpoint', bundle: 'current.json'}, train: [...input.assets.train, `corpus/${id}.jsonl`]};
     assets.files = input.assets.files.filter(f => !['checkpoint/model.pt', 'current.json'].includes(f.path)).concat([
       {path: 'checkpoint/model.pt', key: prefix + 'model.pt'}, {path: 'current.json', key: prefix + 'bundle.json'}, {path: `corpus/${id}.jsonl`, key: prefix + 'novel-rows.jsonl'},
     ]);
     manifest.latest = version; manifest.versions[version] = `decisions.v${version}.json`; manifest.artifacts ??= {}; manifest.artifacts[version] = prefix + 'bundle.json';
-    job.state = 'published'; job.version = version; job.token = null;
+    job.state = 'published'; job.version = version; job.token = null; job.verification = verification;
     const consumed = new Set(Array.isArray(report.consumedHashes) ? report.consumedHashes : []);
     const consumedKeys = []; for (const row of input.rows) { const hash = await digest(row.key); if (consumed.has(hash)) consumedKeys.push(hash); }
-    await this.ctx.storage.transaction(async storage => { await storage.put('manifest', manifest); await storage.put('assets', assets); await storage.put('job', job); for (const hash of consumedKeys) { await storage.delete(`q:${hash}`); await storage.put(`trained:${hash}`, version); } });
+    await this.ctx.storage.transaction(async storage => { await storage.put('previous', {manifest: before, assets: beforeAssets, at: new Date().toISOString()}); await storage.put('highest', version); await storage.put('manifest', manifest); await storage.put('assets', assets); await storage.put('job', job); for (const hash of consumedKeys) { await storage.delete(`q:${hash}`); await storage.put(`trained:${hash}`, version); } });
     return json({state: 'published', version});
   }
+  // Recomputes, on the uploaded bundle and with the browser's student code, what the
+  // report claims for JS parity and size, and re-runs real-play KL on a sample of the
+  // frozen gate set (the bootstrap's `realplay` asset: the job can read it but never
+  // write it) against the current release. Fails closed.
+  async verify(bundle, input, id) {
+    const out = {pass: false, checks: {}};
+    const fail = (reason) => ({...out, reason});
+    let student, current;
+    try { student = loadStudent(bundle); } catch (error) { return fail(`Bundle does not load: ${String(error.message).slice(0, 200)}`); }
+    const parity = out.checks['JS parity'] = checkBundleParity(student, {minRows: Number(this.env.LEARNING_VERIFY_MIN_FIXTURE ?? 8)});
+    if (!parity.pass) return fail(parity.reason);
+    const config = input.assets.config ?? {}, kb = bundleKB(bundle), maxKB = config.maxBundleKB ?? 450;
+    out.checks['size'] = {pass: kb <= maxKB, kb: Math.round(kb), maxKB};
+    if (kb > maxKB) return fail('Bundle over the size limit');
+    const files = input.assets.files ?? [], gateFile = files.find(f => f.path === input.assets.realplay), currentFile = files.find(f => f.path === input.assets.current?.bundle);
+    const gateObject = gateFile && await this.env.STUDENT_ARTIFACTS.get(gateFile.key), currentObject = currentFile && await this.env.STUDENT_ARTIFACTS.get(currentFile.key);
+    if (!gateObject || !currentObject) return fail('Real-play gate set or current bundle unavailable');
+    try { current = loadStudent(JSON.parse(await readText(currentObject, currentFile.encoding))); } catch (error) { return fail(`Current bundle does not load: ${String(error.message).slice(0, 200)}`); }
+    const missingKinds = [...current.kinds].filter(kind => !RETIRED_KINDS.includes(kind) && !(config.excludeKinds ?? []).includes(kind) && !student.kinds.has(kind));
+    out.checks['kinds'] = {pass: !missingKinds.length, missing: missingKinds};
+    if (missingKinds.length) return fail('Candidate dropped a kind the current release answers');
+    const want = Number(this.env.LEARNING_VERIFY_ROWS ?? 2000), rows = [];
+    let seen = 0, seed = parseInt((await digest(id)).slice(0, 8), 16) >>> 0;
+    const random = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+    // Reservoir sample of the raw lines: only the kept ones are parsed.
+    for await (const line of objectLines(gateObject, gateFile.encoding)) {
+      seen++;
+      if (rows.length < want) rows.push(line);
+      else { const j = Math.floor(random() * seen); if (j < want) rows[j] = line; }
+    }
+    let sample;
+    try { sample = rows.map(line => JSON.parse(line)); } catch { return fail('Real-play gate set is not JSON lines'); }
+    const {rows: used, kl: [currentKL, nextKL]} = realplayKL([current, student], sample, {excludeKinds: config.excludeKinds ?? []});
+    const tolerance = config.tolerance ?? 0.03, minRows = Number(this.env.LEARNING_VERIFY_MIN_ROWS ?? 200);
+    const pass = used >= minRows && Number.isFinite(nextKL) && Number.isFinite(currentKL) && nextKL <= Math.max(currentKL, 0) * (1 + tolerance) + 1e-6;   // 1e-6: label rounding (KL can read slightly negative)
+    out.checks['real-play KL'] = {pass, rows: used, scanned: seen, current: currentKL, next: nextKL, tolerance};
+    if (!pass) return fail(used < minRows ? `Fewer than ${minRows} usable real-play rows` : 'Real-play KL worse than the current release');
+    // TODO(review C2/A5): the gate set is labelled by the teacher the bootstrap used; once
+    // a hosted-d1-labelled gate set is staged in R2, point `realplay` at it.
+    out.pass = true;
+    return out;
+  }
 }
+// Lines of an R2 object (gzip-decoded when the asset says so), streamed.
+async function* objectLines(object, encoding) {
+  let stream = new Response(object.body).body;
+  if (encoding === 'gzip') stream = stream.pipeThrough(new DecompressionStream('gzip'));
+  const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+  let rest = '';
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    rest += value;
+    const lines = rest.split('\n'); rest = lines.pop();
+    for (const line of lines) if (line.trim()) yield line;
+  }
+  if (rest.trim()) yield rest;
+}
+async function readText(object, encoding) { let text = ''; for await (const line of objectLines(object, encoding)) text += line + '\n'; return text; }
 export function validProbabilities(probabilities, options) { return !!probabilities && options.every(o => Number.isFinite(probabilities[o]) && probabilities[o] >= 0 && probabilities[o] <= 1) && Object.keys(probabilities).length === options.length && Math.abs(options.reduce((s, o) => s + probabilities[o], 0) - 1) < 0.001; }
 export class LearningContainer {
   constructor(ctx, env) { this.ctx = ctx; this.env = env; }

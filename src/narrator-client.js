@@ -27,13 +27,15 @@ export const whyLines = (facts, {limit} = {}) => whyOrder(facts, {limit});
 const DOWN_COOLDOWN_MS = 30000;
 
 // local: the notes student (narration-student.js createLocalNotes), async (facts) -> {text, confident} | null.
-// remote: whether this player may use the hosted narrator (Plus). prefer: 'fast' | 'quality' (Settings).
+// remote: whether this player may use the hosted narrator (Plus).
+// prefer: 'auto' (not chosen yet) | 'fast' | 'quality' (Settings).
 // Free players get the student's note whenever it has one (it passes the game's rules; graded,
 // even its least confident notes beat the template), else the template, with no request (the
-// hosted route refuses them). Plus, fast: the student when it is confident, the hosted
-// narrator when it is unsure. Plus, quality: the hosted narrator, the student when it cannot be had.
+// hosted route refuses them). Plus, auto or fast: the student when it is confident, the hosted
+// narrator when it is unsure (graded best for notes: handoff §1o). Plus, quality: the hosted
+// narrator, the student when it cannot be had.
 export function createNarratorClient({endpoint = '/api/narrate', fetcher = (...a) => globalThis.fetch(...a), cacheSize = 200, now = () => Date.now(),
-  local = null, remote = null, prefer = () => 'fast'} = {}) {
+  local = null, remote = null, prefer = () => 'auto'} = {}) {
   const hooks = {local, remote, prefer};
   const cache = new Map();      // material facts -> note (model or student text only)
   const inflight = new Map();   // canonical facts -> Promise<{text, source}>
@@ -367,10 +369,13 @@ const PROSE_RETRY_MS = 30000;
 
 // local: the narration student (src/narration-student.js), async (facts) -> {why, confident} | null.
 // remote: whether this player may use the hosted narrator (Plus). Without it the student
-// writes the card's quote; with it, the student stands in when the hosted reply is refused
-// or cannot be had. A quote the student is not confident in leaves the template text.
+// writes the card's quote. With it, Haiku writes it first and the student stands in when
+// the hosted reply is refused or cannot be had, unless the player chose Fast.
+// prefer: 'auto' (not chosen yet) | 'fast' | 'quality' (Settings). Only an explicit 'fast'
+// asks the student first: card quotes cost little, and Haiku contradicts the facts far less.
+// A quote the student is not confident in leaves the template text.
 export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) => globalThis.fetch(...a), now = () => Date.now(), actions = findAction,
-  local = null, remote = () => true, prefer = () => 'fast'} = {}) {
+  local = null, remote = () => true, prefer = () => 'auto'} = {}) {
   let pausedUntil = 0;
   const retryAt = new Map();   // item key -> time
   const counts = {llm: 0, template: 0, student: 0, failed: 0};
@@ -399,15 +404,15 @@ export function createProseKeeper({endpoint = '/api/narrate', fetcher = (...a) =
       if (signal?.aborted) return null;
       return mine ?? {prose: FALLBACKS[facts.type](facts), source: 'template'};
     }
-    // Plus, fast (the default): the student first, the hosted narrator when it is unsure.
+    // Plus, fast (chosen in Settings): the student first, the hosted narrator when it is unsure.
     // Without a local student (?narrator=hosted) the hosted narrator is asked at once.
-    if (local && prefer() !== 'quality') {
+    if (local && prefer() === 'fast') {
       const mine = await student(facts);
       if (signal?.aborted) return null;
       if (mine) return mine;
       return runHosted(job.kind, facts, signal, onToken);
     }
-    // Plus, quality: the hosted narrator first, the student when it cannot be had.
+    // Plus, quality or not chosen yet: the hosted narrator first, the student when it cannot be had.
     const hosted = await runHosted(job.kind, facts, signal, onToken);
     if (signal?.aborted || (hosted && hosted.source !== 'template')) return hosted;
     return (await student(facts)) ?? hosted;

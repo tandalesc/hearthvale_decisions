@@ -8,13 +8,14 @@ import {
 } from './policies.js';
 import {INSTITUTIONS, METRICS} from './institutions.js';
 import {EVENTS} from './events.js';
-import {ERA_NAMES, ARCHETYPE_NAMES, seasonOf, coin} from './text/voice.js';
+import {ERA_NAMES, ARCHETYPE_NAMES, seasonOf, coin, count, capitalise, joinList, wordCount, MAX_WORDS} from './text/voice.js';
 import {previewSummary} from './chronicle.js';
 import {seedCode} from './state.js';
 import {opinionOf} from './opinion.js';
 import {APPROVAL_SHOWN_ERA} from './approval.js';
 import {askOf, grantFor, seasonRoom, grantedThisSeason, budgetsUnlocked, BUDGET_CHOICES, SMALL_SHARE} from './budgets.js';
 import {AREAS, MODES, areaOf, adviserById, advisersReady, seatCount, standingScore, SEAT_BODIES} from './advisors.js';
+import {factionsFor} from './followups.js';
 
 const pct = (x) => Math.round((x ?? 0) * 100);
 const r1 = (x) => Math.round((x ?? 0) * 10) / 10;
@@ -47,6 +48,7 @@ export function selectTopBar(state) {
     homes: homesOf(state),
     homesWaiting: (state.households ?? []).filter((h) => h.homeId == null).length,
     seed: seedCode(state.seed),
+    rulings: rulingTally(state),
   };
 }
 
@@ -594,6 +596,7 @@ export function selectEraProgress(state) {
     yearsToCeiling: p.yearsToCeiling ?? 0,
     yearT: p.next != null ? Math.max(0, Math.min(1, (state.time.year - entered) / span)) : 1,
     conditions: (p.checks ?? []).map((c) => ({label: c.label, met: !!c.met, progress: Math.round(Math.max(0, Math.min(1, c.progress ?? 0)) * 100) / 100})),
+    lastAge: lastAge(state),
   };
 }
 
@@ -771,3 +774,192 @@ export const selectEvents = (state) => (state.events?.active ?? [])
 
 export const TITLE_CARD_EVENTS = Object.keys(EVENTS).filter((id) => EVENTS[id].titleCard);
 
+
+// ---------------------------------------------------------------------------
+// Your rulings (E2): the tally, the ledger and the age's look back
+// ---------------------------------------------------------------------------
+
+// A history entry's outcome as the ledger names it, or null for entries that
+// are not a ruling of their own (a debate's sides, a reply still being talked over).
+// 'enacted': a demand left unanswered that its body went ahead with (a lapse);
+// 'funded': a plan a body paid for from its own budget (no ruling was asked).
+const OUTCOME_OF = {
+  accepted: 'approved', refused: 'refused', deferred: 'put off', expired: 'lapsed',
+  enacted: 'enacted', budget: 'funded', compromise: 'settled', withdrawn: 'withdrawn',
+};
+const OUTCOME_WORDS = {
+  approved: 'Approved', refused: 'Refused', 'put off': 'Put off', lapsed: 'Lapsed',
+  enacted: 'Enacted by the body', funded: 'Paid from its budget', settled: 'Settled for a grant', withdrawn: 'Withdrawn',
+};
+const LEDGER_SKIP = new Set(['report', 'budget']);
+export const rulingOutcome = (h) => (h && !LEDGER_SKIP.has(h.kind) ? OUTCOME_OF[h.outcome] ?? null : null);
+
+// Counts of every ruling in the history: {approved, refused, lapsed, total}.
+// Cached on the history array (its length and last entry), so each snapshot is cheap.
+const tallyCache = new WeakMap();
+function tallyOf(list, from = 0, to = Infinity) {
+  const t = {approved: 0, refused: 0, lapsed: 0, total: 0};
+  for (const h of list) {
+    if (h.year < from || h.year >= to) continue;
+    const o = rulingOutcome(h);
+    if (!o) continue;
+    t.total++;
+    if (o === 'approved') t.approved++;
+    else if (o === 'refused') t.refused++;
+    else if (o === 'lapsed' || o === 'enacted') t.lapsed++;
+  }
+  return t;
+}
+export function rulingTally(state) {
+  const list = state.cardHistory ?? [];
+  const hit = tallyCache.get(list);
+  if (hit && hit.length === list.length && hit.last === list.at(-1)) return {...hit.tally};
+  const tally = tallyOf(list);
+  tallyCache.set(list, {length: list.length, last: list.at(-1), tally});
+  return {...tally};
+}
+
+// The ledger: your rulings, newest first (at most `limit`).
+// [{key, id, year, month, title, choice, outcome, outcomeText, from, bodyName, helps, hurts, at, followups}]
+export function selectRulings(state, {limit = 300} = {}) {
+  const list = state.cardHistory ?? [];
+  const lines = new Map();
+  for (const e of state.chronicle?.entries ?? []) {
+    if (e.refs?.followup && e.refs.card) (lines.get(e.refs.card) ?? lines.set(e.refs.card, []).get(e.refs.card)).push(e.text);
+  }
+  const rows = [];
+  for (let i = list.length - 1; i >= 0 && rows.length < limit; i--) {
+    const h = list[i];
+    const outcome = rulingOutcome(h);
+    if (!outcome) continue;
+    // A debate lists both sides' backers: a group on both counts only as helped.
+    const helps = factionsFor(state, h.helps);
+    rows.push({
+      key: `${h.id}:${i}`, id: h.id, year: h.year, month: h.month ?? 0, kind: h.kind,
+      title: h.ask ? capitalise(h.ask) : h.title, choice: outcome === 'lapsed' ? null : h.label ?? null,
+      outcome, outcomeText: OUTCOME_WORDS[outcome] ?? capitalise(outcome),
+      from: h.from, bodyName: bodyName(state, h.from),
+      helps, hurts: factionsFor(state, h.hurts).filter((n) => !helps.includes(n)),
+      byAdviser: !!h.advisedBy && !h.overruled,
+      at: h.at ?? null, followups: lines.get(h.id) ?? [],
+    });
+  }
+  return {rows, tally: rulingTally(state)};
+}
+
+// The age just ended, for its title card: the three biggest changes and your
+// rulings in it. {era, items: [text], tally: {approved, refused, lapsed}, line}
+const ageCache = new WeakMap();
+export function lastAge(state) {
+  const era = state.era ?? 0;
+  if (era < 1) return null;
+  const from = state.eraEntered?.[era - 1] ?? 0, to = state.eraEntered?.[era] ?? state.time.year;
+  const sig = `${era}:${from}:${to}`;
+  const hit = ageCache.get(state);
+  if (hit?.sig === sig) return hit.value;
+  const value = ageReview(state, era, from, to);
+  ageCache.set(state, {sig, value});
+  return value;
+}
+
+function ageReview(state, era, from, to) {
+  const changes = [];
+  // People: the yearly history (newest last), read back to the age's first year.
+  // (The last entry is the town as this year began; one entry a year before it.)
+  const pops = state.indicatorHistory?.pop ?? [];
+  const popAt = (year) => (pops.length ? pops[Math.max(0, Math.min(pops.length - 1, pops.length - 1 - (state.time.year - year)))] : null);
+  const then = popAt(from);
+  const now = to >= state.time.year ? state.indicators?.pop ?? popAt(to) : popAt(to);
+  if (Number.isFinite(then) && Number.isFinite(now) && Math.abs(now - then) >= 3) {
+    const d = Math.round(now - then);
+    changes.push({weight: Math.abs(d) / Math.max(10, then) * 3,
+      text: d > 0 ? `The town grew from ${count(then)} to ${count(now)} people.` : `The town shrank from ${count(then)} to ${count(now)} people.`});
+  }
+  const founded = (state.institutions ?? []).filter((b) => b.id !== 'moot' && b.foundedYear >= from && b.foundedYear <= to);
+  if (founded.length) {
+    const names = founded.slice(0, 2).map((b) => `the ${b.name.replace(/^the /i, '')}`);
+    const text = founded.length === 1 ? `${capitalise(names[0])} first sat.`
+      : founded.length === 2 ? `${capitalise(joinList(names))} first sat.` : `${capitalise(count(founded.length))} new bodies first sat.`;
+    changes.push({weight: founded.length, text});
+  }
+  const rules = Object.values(state.policies ?? {}).filter((p) => p.level > 0 && p.since >= from && p.since <= to).length;
+  if (rules) changes.push({weight: rules * 0.8, text: rules === 1 ? 'One new rule came to stand.' : `${capitalise(count(rules))} new rules came to stand.`});
+  const works = (state.cardHistory ?? []).filter((h) => h.year >= from && h.year <= to && h.outcome === 'accepted' && h.place).length;
+  if (works) changes.push({weight: works * 0.7, text: works === 1 ? 'One public work was begun.' : `${capitalise(count(works))} public works were begun.`});
+  changes.sort((a, b) => b.weight - a.weight);
+  const tally = tallyOf(state.cardHistory ?? [], from, to + 1);
+  const n = (x) => (x ? count(x) : 'none');
+  const line = tally.total ? `Your rulings this age: ${n(tally.approved)} approved, ${n(tally.refused)} refused, ${n(tally.lapsed)} lapsed.` : null;
+  return {era, from, to, items: changes.slice(0, 3).map((c) => c.text), tally, line};
+}
+
+
+// ---------------------------------------------------------------------------
+// The end page (E9): the town's story at year 150
+// ---------------------------------------------------------------------------
+
+// Each trait runs from −1 (low word) to +1 (high word), as on the compass.
+const END_AXES = [
+  ['industry', 'Fields', 'Industry'],
+  ['market', 'Commons', 'Markets'],
+  ['innovation', 'Old ways', 'New ways'],
+  ['authority', 'Freedom', 'Order'],
+];
+const END_PATH_POINTS = 50;
+const r2 = (x) => Math.round(Math.max(-1, Math.min(1, x ?? 0)) * 100) / 100;
+
+// What the town was, in one or two short lines: "It began as a market town. Then it became a mill town."
+function arcLine(arc) {
+  const names = arc.map((a) => a.name).filter((n, i, all) => n && n !== all[i - 1]);
+  if (!names.length) return '';
+  if (names.length === 1) return `It was ${names[0]} from first to last.`;
+  // The last few changes, as many as one short sentence holds.
+  for (let k = Math.min(3, names.length - 1); k >= 1; k--) {
+    const then = `Then it became ${names.slice(-k).join(', then ')}.`;
+    if (k === 1 || wordCount(then) <= MAX_WORDS) return `It began as ${names[0]}. ${then}`;
+  }
+  return '';
+}
+
+// The compass path thinned to at most END_PATH_POINTS years, one line per axis.
+function endCompass(path) {
+  const step = Math.max(1, Math.ceil(path.length / END_PATH_POINTS));
+  const picked = path.filter((_, i) => i % step === 0 || i === path.length - 1);
+  return {
+    from: picked[0]?.year ?? null,
+    to: picked.at(-1)?.year ?? null,
+    axes: END_AXES.map(([id, low, high]) => ({id, low, high, points: picked.map((p) => [p.year, r2(p[id])])})),
+  };
+}
+
+// A compact, serialisable summary for the end page and its share link, or
+// null before the chronicle closes (year 150). It reads the summary written
+// at that year's end, so it does not change as play goes on.
+export function selectEndPage(state) {
+  const s = state.chronicle?.summary;
+  if (!s) return null;
+  const arc = (s.arc ?? []).map((a) => ({year: a.year, name: a.name}));
+  const bodies = (s.institutions ?? []).filter((b) => b.id !== 'moot');
+  const tags = state.tags ?? {};
+  const closing = (s.prose?.closing ?? []).filter((t) => typeof t === 'string' && t);
+  return {
+    townName: state.townName || 'Hearthvale',
+    year: s.year,
+    eraName: s.eraName ?? '',
+    archetypeName: s.archetypeName ?? '',
+    arc,
+    lead: arcLine(arc),
+    sentences: closing.length ? closing : [...(s.sentences ?? [])],
+    highlights: (s.highlights ?? []).slice(0, 12).map((h) => ({year: h.year, season: h.season ?? null, text: h.text})),
+    compass: endCompass(s.compass ?? []),
+    bodies: {
+      founded: bodies.filter((b) => Number.isFinite(b.founded)).map((b) => ({name: b.name, year: b.founded})),
+      dissolved: bodies.filter((b) => b.dissolved != null).map((b) => ({name: b.name, year: b.dissolved})),
+      refused: (s.refused ?? []).map((id) => ({name: INSTITUTIONS[id]?.name ?? capitalise(id.replace(/-/g, ' ')), year: Number.isFinite(tags[`refused:${id}`]) ? tags[`refused:${id}`] : null})),
+    },
+    rulings: tallyOf(state.cardHistory ?? [], 0, (s.year ?? state.time.year) + 1),
+    people: s.people ?? 0,
+    rules: s.rules ?? 0,
+    centres: (s.centres ?? []).map((c) => ({name: c.name, line: c.line})),
+  };
+}

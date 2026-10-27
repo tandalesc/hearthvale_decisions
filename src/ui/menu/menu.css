@@ -369,6 +369,11 @@
 .mm-cloud-note.is-alert { background: var(--rust-soft); }
 .mm-cloud-note.is-alert > .i { color: var(--rust); }
 .mm-town-actions .mm-confirm { margin-top: 14px; }
+/* Add to home screen (Play, once there is a town to come back to). */
+.mm-install { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 4px 10px; align-items: center; margin-top: 18px; padding: 10px 12px; border-radius: 10px; background: var(--paper-2); font-size: var(--fs-13); color: var(--ink-2); }
+.mm-install > .i { width: 18px; height: 18px; color: var(--green); }
+.mm-install p { margin: 0; }
+.mm-install .btn-row { grid-column: 2; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .mm-versions { margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: var(--paper-2); }
 .mm-versions-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .mm-versions h3 { margin: 0; font: 600 var(--fs-18) var(--font-display); }

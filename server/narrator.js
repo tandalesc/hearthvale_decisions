@@ -47,7 +47,7 @@ const factsMessage = (kind, lines) => `Facts about ${KIND_WORDS[kind]}:\n${lines
 // One worked example sets the voice: third person, "you" for the leader only.
 const EXAMPLE = [
   {role: 'user', content: factsMessage('person', [
-    'Person: Edda Marsh.', 'It is spring of year 42. Hearthvale is a town.',
+    'Person: Edda Marsh.', 'It is year 42. Hearthvale is a town.',
     'They are one of the labourers, works at the mill of the Holt family and a household of 4.',
     'Wealth: poor, falling.', 'Mood of labourers: uneasy, falling.',
     'On staying or going: likely to stay in their home; some chance to leave Hearthvale.',

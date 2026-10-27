@@ -7,6 +7,7 @@ import {recordLearningReport,recordLearningLabels,handleLearningRequest} from '.
 import {observeNarration,logNarrationOutcome} from './narration-outcome.js';
 import {narrationStream} from './narration-stream.js';
 import {narrateAnthropic,validateNarrationFacts,narrationKey} from './narration.js';
+import {createTownPage,townPage} from './town-pages.js';
 
 export async function readText(request,max) {
  const declared=Number(request.headers.get('content-length')); if(declared>max) throw Object.assign(new Error('Request too large'),{status:413});
@@ -25,11 +26,15 @@ async function allowance(env,id,kind,amount,personal,global) {
 export default {
  async fetch(request,env,ctx) {
  const url=new URL(request.url),path=url.pathname;
+ // A shared town's read-only page (cloudflare/town-pages.js).
+ if(/^\/t\/[^/]*$/.test(path)) { try { return await townPage(request,env,path.slice(3)); } catch { return new Response('Service unavailable',{status:503,headers:{'Cache-Control':'no-store'}}); } }
  if(!path.startsWith('/api/')&&!path.startsWith('/students/')) return env.ASSETS.fetch(request);
  try {
   if(path==='/api/billing/webhook') { if(request.method!=='POST') return json(405,{error:'Method not allowed'}); await webhook(request,env,readText);return json(200,{received:true}); }
   if(path.startsWith('/api/learning/')||path.startsWith('/api/students/')||path.startsWith('/students/')) { const response=await handleLearningRequest(request,env);if(response) return response;const assetUrl=new URL(request.url);assetUrl.pathname=assetUrl.pathname.replace(/^\/api\/students\//,'/students/');return env.ASSETS.fetch(new Request(assetUrl,request)); }
   if(['POST','PUT','PATCH','DELETE'].includes(request.method) && (request.headers.get('origin')!==url.origin || request.headers.get('sec-fetch-site')==='cross-site')) return json(403,{error:'Origin not allowed'});
+  // Share a finished town: free and paid alike, limited per IP (cloudflare/town-pages.js).
+  if(path==='/api/towns') return await createTownPage(request,env,readText);
   const account=await session(request,env);
   const respond=async(status,body,headers={})=>json(status,body,{'Set-Cookie':cookie(await signSession(env,account)),...headers});
   const billing=account.email?await billingState(env,account.id,'read',{key:'billing'}):null;

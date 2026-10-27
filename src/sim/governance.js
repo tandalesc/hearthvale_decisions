@@ -220,10 +220,17 @@ function firstCard(state) {
 }
 
 function restore(state) {
+  // Faction sizes are counted once a year; a save keeps the live (year-old)
+  // counts, and a restored town must run on them exactly as the saved one would.
+  const counts = new Map((state.factions ?? []).map((f) => [f.id, [f.size, f.households]]));
   initGovernance(state);
   initBudgets(state);
   initAdvisers(state);
   initFactions(state);
+  for (const f of state.factions) {
+    const [size, households] = counts.get(f.id) ?? [];
+    if (Number.isFinite(size) && Number.isFinite(households)) Object.assign(f, {size, households});
+  }
   resetScheduler(state);
   forgetRetiredKinds(state);
   coalesceGrievancePetitions(state);

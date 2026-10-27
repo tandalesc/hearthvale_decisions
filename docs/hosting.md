@@ -30,7 +30,7 @@ The server independently rejects free live-teacher requests, including requests 
 | `STRIPE_PORTAL_CONFIGURATION` | App-specific customer portal configuration; otherwise Stripe's default is used |
 | `EMAIL_FROM` | Bare sender address on a domain onboarded to Cloudflare Email Service |
 | `AUTH_SECRET` | Stable random app signing secret, at least 32 characters |
-| `LEARNING_ADMIN_SECRET` | Separate random secret for manual training/status |
+| `LEARNING_ADMIN_SECRET` | Separate random secret for manual training, status, revert and block |
 | `LEARNING_PUBLIC_ORIGIN` | Exact deployed HTTPS origin without a trailing slash |
 
 The private file created during implementation already contains generated signing/admin secrets. Keep them stable. A Cloudflare account login is separate from these provider keys. Cloudflare Email Sending supports transactional sign-in links and includes 3,000 messages per month on Workers Paid; further sends cost $0.35 per 1,000. See [Email Service pricing](https://developers.cloudflare.com/email-service/platform/pricing/) and [domain setup](https://developers.cloudflare.com/email-service/get-started/send-emails/). Local sending is simulated unless a remote binding is explicitly enabled.
@@ -76,13 +76,37 @@ The accepted v7 candidate's private bootstrap staging directory is `data/strike-
 
 V7 extends the actual production v6 with `strike_resolve`. Full retraining passed the old gates but reduced population in paired canaries, so that candidate was rejected. The accepted variant keeps the original weights, shared vocabulary mappings and confidence calibration fixed, training only 288 new strike-specific parameters with the established six-epoch loss and optimizer. All 21 existing heads match v6 exactly over 39,261 evaluation rows; all 12 town trajectories also match. Strike held-out top-choice agreement is 93.45%, with KL 0.01492 across 397 rows. The canary towns contain no strike events, so strike quality is supported by held-out teacher labels rather than those town outcomes. See `benchmarks/strike-resolve-v7.json` for the full evidence and limitations.
 
-The container labels only missing questions, reuses trusted paid answers, warm-starts for six epochs, retrains confidence, and applies the existing KL, per-kind, bias, tail, JS parity, size/speed and simulated-town gates plus held-out new-row and strike coverage checks. Hosted Liquid `d1` is a new teacher relative to the old local teacher: its identity is retained on new labels, and the frozen evaluation gates protect against silent distribution drift. Insufficient data, a provider failure, or a failed gate leaves the published version unchanged.
+The container labels only missing questions, reuses trusted paid answers, warm-starts for six epochs, retrains confidence, exports int4 (`--bits 4 --group 32`, as v8; `exportBits: 8` in the config for int8), and applies the existing KL, per-kind, bias, tail, JS parity, size/speed and simulated-town gates plus held-out new-row and active kind coverage checks. Kind coverage counts the kinds the candidate's canary towns actually asked (the candidate's canary run records its questions for this). Every kind the current bundle answers that the canaries asked at least `coverageMinAsked` times (default 1) must be in the candidate: asked but absent fails. A current kind no canary asked is reported as `untested` and does not fail. Kinds listed in the config's `coverageRequireKinds` (default `[]`) must also be asked. The current canaries ask no strike questions, so `strike_resolve` is not required yet; add `["strike_resolve"]` once a canary that forces a strike exists. Until then, strike quality rests on held-out teacher labels, and the Worker's check that no current kind was dropped. The local loop (`scripts/distill-loop.js`) runs the same gates. It fails the held-out new-row gate below ten rows unless `--allow-no-novel` is passed (for a `--fresh` or `--extra`-only cycle). Hosted Liquid `d1` is a new teacher relative to the old local teacher: its identity is retained on new labels, and the frozen evaluation gates protect against silent distribution drift. Insufficient data, a provider failure, or a failed gate leaves the published version unchanged.
 
 Candidate artifacts are immutable. Only a valid completion for the current job and base version can atomically advance the release counter and manifest. Deferred reports remain eligible for a later run; consumed questions are remembered to avoid paying to label them again. Release artifacts and private training data are never served by the same unrestricted path.
 
 Automatic publication also requires complete canary population measurements for every scheduled seed in both the current and candidate runs. The candidate’s geometric mean final population must stay within a 10% decline from the current model; missing, nonpositive, nonfinite, duplicate, or mismatched measurements fail this guard. A candidate can pass every existing model and work-share gate and still be held for investigation by this population guard.
 
 To trigger an ad hoc job or inspect status, use a trusted HTTP client against `POST /api/learning/trigger` or `GET /api/learning/status` with `Authorization: Bearer <LEARNING_ADMIN_SECRET>`. Keep that value out of command history. A manual update increments the version only after successful validation and publication, just like the nightly job.
+
+### Independent verification before publication
+
+`complete()` does not take the trainer's `report.json` on trust: the container that wrote it holds the teacher key and has internet access. After the report's gates pass, the coordinator loads the uploaded `bundle.json` with the browser's own student code (`src/decision-student.js`) and re-checks it (`verify()` in `cloudflare/learning.js`, shared functions in `cloudflare/training/gates.js`):
+
+- **JS parity:** every embedded fixture row (at least 8; `LEARNING_VERIFY_MIN_FIXTURE`) is reproduced within 1e-4, and expected KL within 1e-3 relative.
+- **Size:** weights and vocabulary within the bootstrap config's `maxBundleKB` (450 KB by default).
+- **Kinds:** every kind the current release answers (except `enterprise_type_for_site`, and any `excludeKinds`) is still answered.
+- **Real-play KL:** a reservoir sample of `LEARNING_VERIFY_ROWS` (default 2,000) rows of the frozen real-play set named by the bootstrap's `realplay` asset, read from R2, is scored by the candidate and by the current release. The candidate's mean KL must stay within the bootstrap's `tolerance` (3%) of the current release's, on at least `LEARNING_VERIFY_MIN_ROWS` (default 200) usable rows. The job token can read that asset but cannot write it; uploads only reach `jobs/<id>/outputs/`.
+
+A candidate that changes its weights and rewrites its fixture to match passes parity but not the real-play check. Any failure, including a missing gate set or a current release that no longer loads, is a 422 and leaves the release unchanged; the verdict is kept on the job (`GET /api/learning/status`). Speed is not re-timed in the Worker. The real-play rows are labelled by the bootstrap's teacher; until a gate set labelled by hosted `d1` is staged (review C2/A5), the re-check compares against that teacher, as the container's gate does.
+
+### Rollback and kill switch
+
+Each publication saves the manifest and training assets it replaces as `previous` in the coordinator. Both admin endpoints take `Authorization: Bearer <LEARNING_ADMIN_SECRET>`:
+
+- `POST /api/learning/revert` restores the previous manifest and training assets in one transaction and adds the reverted version to the manifest's `blocked` list. It is one level deep: a second revert without a publication in between answers 409. The reverted bundle is no longer served from R2. The next job warm-starts from the restored release again.
+- `POST /api/learning/block` with `{"version": N}` adds N to `blocked`; `{"version": N, "blocked": false}` removes it. Only published versions can be blocked. While `latest` is blocked, `trigger` refuses to train on it.
+
+Clients read `blocked` at session start (`chooseStudentVersion` in `src/decision-local.js`). A blocked pin (`?student=N`) is ignored. A blocked `latest` falls back to the highest unblocked version up to `latest`. When no hosted version is left, the client falls back to the shipped `/students/manifest.json`, still skipping every version either manifest blocks, and to local rules when nothing is left. A session that already loaded a version keeps it until the next session.
+
+Version numbers only go up. The coordinator keeps the highest number it has published and gives each job its version (`nextVersion` in the job's assets, read by the loop). After reverting v9, the next candidate is v10, never a second v9. Bundles are served `immutable`, so a client could otherwise keep the bad bytes under a reused name.
+
+Not yet built: per-kind flagged and unknown counters by bundle version (review C4). They would tell you which version to block.
 
 ## Validation before launch
 

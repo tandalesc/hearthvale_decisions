@@ -261,7 +261,7 @@ export function restore(raw) {
   const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
   if (!data || data.version !== 2) {
     const err = new Error('Old save');
-    err.code = 'old-save';
+    err.code = 'old-version';
     throw err;
   }
   return data;

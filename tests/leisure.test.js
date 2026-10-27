@@ -178,7 +178,15 @@ test('a city has only a handful of anglers at once, a hamlet still has some', ()
     const pop = s.indicators.pop;
     if (f === 'city') {
       assert.ok(most <= pop * 0.003, `city: ${most} anglers at once for ${pop} people`);
-      assert.ok(most <= Math.max(1, shore / 100) * 2, `city: ${most} anglers along ${shore} m of shore`);
+      // About two anglers per 100 m of shore in reach. Nothing in the sim caps this
+      // (leisure.js weighs angling by trait, season, hour and settlementAngling), so it
+      // is a statistical bound on a count of rare, independent choices, roughly Poisson,
+      // and `most` is that count's peak over the run: a town whose mean sits at the
+      // density peaks within about two standard deviations of it (the city fixture,
+      // 624 m of shore: means 5.5 to 11.5 over 1.5-year windows, peaks 6 to 13). A town
+      // that lines its banks (anglingHere or settlementAngling lost) is far past this.
+      const density = Math.max(1, shore / 100) * 2;
+      assert.ok(most <= density + 2 * Math.sqrt(density), `city: ${most} anglers along ${shore} m of shore`);
     } else assert.ok(anglers.size >= 1, `${f}: someone goes fishing (${anglers.size})`);
   }
 });

@@ -37,6 +37,7 @@ import {createPlaces} from './components/places.js';
 import {createInspector} from './components/inspector.js';
 import {createNotices} from './components/notices.js';
 import {createMoments} from './components/moment.js';
+import {createEndPage} from './components/endpage.js';
 import {createSettings} from './components/settings.js';
 import {createRailColumn} from './components/rail-column.js';
 import {createResize} from './components/resize.js';
@@ -45,6 +46,7 @@ import {createTip} from './components/tip.js';
 import {closePopover, eraContent, openPopover, overlayContent} from './components/popover.js';
 import {explainer, EXPLAINERS} from './components/explainer.js';
 import * as M from './model.js';
+import {allowedSpeeds} from '../entitlements.js';
 
 const REFRESH_MS = 250;
 // The Chronicle view's lines, a page at a time; the notice stack needs only the latest.
@@ -67,6 +69,11 @@ const DRAWER_VIEWS = [
 // Phone strip order after the Council, and the snap each view opens at.
 const NAV_VIEWS = ['rules', 'people', 'tensions', 'chronicle', 'places'];
 const NAV_SNAP = {council: 2, rules: 2, chronicle: 2};
+// A card's ruling controls; Space on one of these pauses instead of ruling.
+const RULING = '.card .options, .card .minor-options, .card [data-advice="stand"]';
+// Urgent requests pause and open by default at this pace and above (announce).
+const FAST_SPEED = 10;
+const isUrgent = (c) => c.kind === 'event' || c.kind === 'demand' || (c.urgency ?? 0) >= 2;
 const UNLOCK_NAMES = {places: 'Places', ruleBook: 'The Rule Book', people: 'People', tensions: 'Tensions', overlays: 'The map', bodies: 'Body dashboards', debates: 'Debates', approval: 'Approval'};
 
 // host.ui(req) gives a snapshot of the town (src/sim-snapshot.js), host.inspect(target)
@@ -110,7 +117,8 @@ export function createApp(host) {
     speed: () => host.speed(),
     lastSpeed: () => host.lastSpeed(),
     toggleMute: () => prefs.set('muted', !prefs.get('muted')),
-    openEraPopover: (anchor, place = 'above') => openPopover(anchor, eraContent(data.era), {label: 'Toward the next age', place}),
+    speedLocked: (s) => speedLocked(s),
+    openEraPopover: (anchor, place = 'above') => openPopover(anchor, eraContent(data.era, townName()), {label: 'Toward the next age', place}),
     focusDocket,
     // The inspector's bundle for a pick: {model, facts, peek}, or a Promise of it.
     loadInspect: (pick) => {
@@ -124,6 +132,10 @@ export function createApp(host) {
     openPlaces: () => (layout === 'phone' ? setPhoneTab('places') : setDrawer('places')),
     openRuleBook: (category) => openRuleBook(category),
     openDocket: (opts) => openDocket(opts),
+    // "Your rulings" in the Council, with a filter ('lapsed', 'refused', 'body:<id>').
+    openRulings: (filter) => openRulings(filter),
+    // The town's story at year 150 (the end page).
+    openEndPage: () => openEndPage(),
     shortName: (b) => shortName(b),
     moreChronicle: () => { chronicleLimit += CHRONICLE_PAGE * 2; refresh(true); },
     onInspectorChange: (open) => onInspectorChange(open),
@@ -166,9 +178,28 @@ export function createApp(host) {
   const moments = createMoments({
     root,
     onMomentOpened: () => { setClean(false); momentPaused = host.speed(); if (momentPaused) host.setSpeed(0); syncLabels(); },
-    onMomentClosed: () => { if (momentPaused && !moments.isOpen) host.setSpeed(momentPaused); momentPaused = 0; syncLabels(); },
+    onMomentClosed: () => {
+      if (momentPaused && !moments.isOpen) host.setSpeed(momentPaused);
+      momentPaused = 0;
+      syncLabels();
+      // The age's title card first, then the town's story.
+      if (endWaiting) { endWaiting = false; openEndPage(); }
+    },
   });
   let momentPaused = 0;
+  // The end page pauses the town as a title card does, and puts the pace back on Continue.
+  let endPaused = 0, endWaiting = false;
+  const endPage = createEndPage({
+    root,
+    thumbnail: () => host.thumbnail?.() ?? null,
+    onOpened: () => { setClean(false); closePopover(); endPaused = host.speed(); if (endPaused) host.setSpeed(0); syncLabels(); refresh(true); },
+    onClosed: () => { if (endPaused && !moments.isOpen) host.setSpeed(endPaused); endPaused = 0; syncLabels(); refresh(true); },
+  });
+  function openEndPage({after = false} = {}) {
+    if (!data.unlocks.endPage) return;
+    if (after && moments.isOpen) { endWaiting = true; return; }
+    endPage.open();
+  }
   let requestPaused = 0; // the pace a new request paused ("Pause and open"), put back when the Council closes
   // The Council. The town keeps its pace while it is open; the time controls
   // stay in reach for a player who wants to stop and think.
@@ -179,6 +210,9 @@ export function createApp(host) {
     onOpen: () => {
       closePopover();
       notices.stack.querySelector('[data-key="request"]')?.remove();
+      // Lapses are counted again from here: the player is back at the table.
+      notices.stack.querySelector('[data-key="lapsed"]')?.remove();
+      lapsedAway = 0;
       // Notices wait, hidden, while the Council is open, and come back after.
       if (layout !== 'phone') notices.setHeld(true);
       toggleClass(root, 'council-open', true);
@@ -318,6 +352,10 @@ export function createApp(host) {
     const [kind, id] = String(opts.filter ?? '').split(':');
     openCouncil({page: kind === 'body' ? id : opts.page, cardId: opts.cardId});
   }
+  function openRulings(filter = 'all') {
+    if (layout === 'phone' && (phoneTab !== 'council' || sheet.index === 0)) setPhoneTab('council', NAV_SNAP.council);
+    openCouncil({page: 'rulings', ledger: filter});
+  }
 
   function setDrawer(id, silent) {
     if (layout === 'phone' && id) return setPhoneTab(id);
@@ -371,6 +409,15 @@ export function createApp(host) {
     else if (activeDrawer !== 'people') setDrawer('people');
     refresh(true);
     requestAnimationFrame(() => views.people.showApproval());
+  }
+
+  // The town's own name, chosen on the main menu; older towns are Hearthvale.
+  function townName() { return data.townName || 'Hearthvale'; }
+
+  // A speed outside the player's tier (keys 4 and 5, or a locked menu item):
+  // keep the current speed and say why.
+  function speedLocked(s) {
+    notices.toast(`${s}× is part of Plus.`);
   }
 
   function focusDocket(cardId) {
@@ -535,15 +582,29 @@ export function createApp(host) {
     });
   }
 
+  // A ruling lands with a receipt (what it did, in a line: followups.js), and
+  // keyboard focus moves on to the next waiting card once the ruled one is gone.
   function onRule(card, option) {
+    const hadFocus = council.el.contains(document.activeElement);
     act('rule', [card.id, option.key], (result) => {
       if (result && result.ok === false) {
         notices.toast(M.actionError(result));
         return;
       }
       audio?.play(card.kind === 'report' ? 'tick' : 'chime');
+      if (result?.receipt) notices.toast(result.receipt, 5200);
       refresh(true);
+      if (hadFocus) nextDraw().then(() => focusNextCard(card.id));
     });
+  }
+
+  function focusNextCard(ruledId) {
+    if (!council.isOpen || council.page === 'rulings') return;
+    const at = document.activeElement;
+    // Leave focus alone if the player has already moved it somewhere that is still there.
+    if (at && at !== document.body && at.isConnected && !at.closest(`[data-id="${CSS.escape(ruledId)}"]`) && council.el.contains(at)) return;
+    if (council.docket.count) council.docket.focus();
+    else council.el.querySelector('.dk-cards')?.focus({preventScroll: true});
   }
 
   // ---------- growth, moments, nudges ----------
@@ -562,10 +623,16 @@ export function createApp(host) {
         }
       }
     }
+    // The chronicle closes at year 150: its story opens once, full screen.
+    const ended = prevUnlocks && unlocks.endPage && !prevUnlocks.endPage;
     prevUnlocks = {...unlocks};
+    if (ended) queueMicrotask(() => openEndPage({after: true}));
 
     if (prevEra != null && top.era > prevEra) {
-      showMoment({title: `Hearthvale is a ${top.eraName?.toLowerCase() ?? 'new place'} now`, text: lastMoment() ?? 'The town has grown into a new age.', icon: 'spark', sound: 'fanfare', camera: true});
+      // A look back at the age just ended: its biggest changes and your rulings in it.
+      const age = data.era?.lastAge?.era === top.era ? data.era.lastAge : null;
+      const items = age ? [...(age.items ?? []).slice(0, 3), age.line].filter(Boolean) : [];
+      showMoment({title: `${townName()} is a ${top.eraName?.toLowerCase() ?? 'new place'} now`, text: lastMoment() ?? 'The town has grown into a new age.', items, icon: 'spark', sound: 'fanfare', camera: true});
     }
     prevEra = top.era;
 
@@ -604,6 +671,8 @@ export function createApp(host) {
     }
     seenEvents = eventIds;
 
+    noteLapses(top.rulings);
+
     const cardIds = cards.map((c) => c.id);
     if (seenCards) {
       const added = cards.filter((c) => !seenCards.has(c.id));
@@ -616,6 +685,26 @@ export function createApp(host) {
     seenCards = new Set(cardIds);
     announceSeason(data.season);
     announceSlate(data.advisers);
+  }
+
+  // Requests that lapse (no one ruled; the town muddled through, or the body
+  // went ahead) while the Council is closed: one notice that counts them and
+  // opens "Your rulings" at the lapsed ones. The snapshot carries the town's
+  // running count (top.rulings.lapsed); this session counts from the first one seen.
+  let lapsedSeen = null, lapsedAway = 0;
+  function noteLapses(tally) {
+    const n = tally?.lapsed;
+    if (!Number.isFinite(n)) return;
+    const added = lapsedSeen == null ? 0 : n - lapsedSeen;
+    lapsedSeen = n;
+    if (added <= 0) return;
+    const away = !council.isOpen || (layout === 'phone' && sheet.index === 0);
+    if (!away) return;
+    lapsedAway += added;
+    notices.major({key: 'lapsed', icon: 'scroll',
+      title: `${lapsedAway} ${lapsedAway === 1 ? 'request' : 'requests'} lapsed while you were away`,
+      text: 'No one ruled, so the town went its own way.',
+      onClick: () => { lapsedAway = 0; openRulings('lapsed'); }});
   }
 
   // New cards never open a panel or take focus: a request notice lingers in
@@ -658,10 +747,16 @@ export function createApp(host) {
     if (!added.length) return;
     // "Pause and open" (Settings): stop the town and show the request now.
     // The Council puts the pace back when it closes (unless the player has).
-    if (prefs.get('requests') === 'pause' && !moments.isOpen) {
+    // At 10× and above a card lives a few seconds, so an urgent one (an event,
+    // a demand, a pressing ask) pauses and opens by default; a stored
+    // 'requestsAtSpeed' preference ('notify' or 'pause') overrides that.
+    const urgent = added.find(isUrgent);
+    const atSpeed = prefs.get('requestsAtSpeed') ?? 'pause';
+    const pauseFast = urgent && host.speed() >= FAST_SPEED && atSpeed === 'pause';
+    if ((prefs.get('requests') === 'pause' || pauseFast) && !moments.isOpen) {
       const speed = host.speed();
       if (speed) { requestPaused = speed; host.setSpeed(0); }
-      if (!council.isOpen || (layout === 'phone' && sheet.index === 0)) openCard(added[0]);
+      if (!council.isOpen || (layout === 'phone' && sheet.index === 0)) openCard(pauseFast ? urgent : added[0]);
       return;
     }
     if (council.isOpen && layout !== 'phone') return;
@@ -728,7 +823,7 @@ export function createApp(host) {
   // World name labels hide in clean view and behind title cards and dialogs.
   let labelsShown = null;
   function syncLabels() {
-    const on = !clean && !moments.isOpen && !settings.isOpen && !confirmLayer;
+    const on = !clean && !moments.isOpen && !endPage.isOpen && !settings.isOpen && !confirmLayer;
     if (on === labelsShown || typeof world?.setLabelsVisible !== 'function') return;
     labelsShown = on;
     world.setLabelsVisible(on);
@@ -874,6 +969,7 @@ export function createApp(host) {
     const councilShown = council.isOpen || (phone && phoneTab === 'council');
     if (councilShown && council.page) visible.push(council.page);
     if (councilShown && !visible.includes('rules')) visible.push('rules');
+    if (endPage.isOpen) visible.push('endpage');
     return visible;
   }
 
@@ -941,6 +1037,7 @@ export function createApp(host) {
       fresh,
       season: data.season,
       advisers: data.advisers,
+      rulings: data.top?.rulings ?? null,
     });
   }
 
@@ -985,15 +1082,21 @@ export function createApp(host) {
       else if (id === 'chronicle') {
         const lines = M.chronicle(panels.chronicle ?? []);
         const total = panels.chronicleTotal ?? lines.length;
-        views.chronicle.update(lines, {show: data.unlocks.endPreview, summary: data.unlocks.endPreview ? panels.endPreview ?? null : null, centres: (data.centres?.centres ?? []).filter((c) => !c.mergedInto).map((c) => ({id: c.id, name: c.name})), earlier: total > lines.length});
+        views.chronicle.update(lines, {show: data.unlocks.endPreview, ended: Boolean(data.unlocks.endPage), summary: data.unlocks.endPreview ? panels.endPreview ?? null : null, centres: (data.centres?.centres ?? []).filter((c) => !c.mergedInto).map((c) => ({id: c.id, name: c.name})), earlier: total > lines.length});
       }
       else if (id === 'tensions') views.tensions.update(M.tensions(panels.tensions ?? []));
       else if (id === 'places') views.places.update(data.centres, data.here);
+      else if (id === 'rulings') council.updateLedger(panels.rulings ?? null);
       else {
         const body = data.bodies.find((b) => b.id === id);
         const purse = id === 'moot' && data.unlocks.budget ? panels.budget ?? null : null;
         if (body) bodyView(id).update(body, {cards: data.cards, unlocks: data.unlocks, purse});
       }
+    }
+    // The end page's summary comes only while it is open.
+    if (endPage.isOpen) {
+      if (brought.has('endpage')) endPage.update(panels.endPage ?? null);
+      else missing = true;
     }
     if (missing || (needRules && !brought.has('rules'))) queueMicrotask(() => refresh(true));
     if (councilShown) council.fit();
@@ -1009,6 +1112,7 @@ export function createApp(host) {
       // Open dialogs (title cards, settings, the Rule Book) handle Esc
       // themselves; this catches it when focus is somewhere else.
       if (moments.isOpen) return moments.close();
+      if (endPage.isOpen) return endPage.close();
       if (settings.isOpen) return settings.close();
       closePopover();
       if (confirmLayer) return closeConfirm();
@@ -1019,16 +1123,21 @@ export function createApp(host) {
       // With nothing else open, Esc puts away the notices on screen.
       return notices.dismissAll();
     }
-    if (typing || settings.isOpen || moments.isOpen || confirmLayer) return;
+    if (typing || settings.isOpen || moments.isOpen || endPage.isOpen || confirmLayer) return;
     if (clean && !/^[hH ]$/.test(e.key) && e.code !== 'Space') return;
-    if (e.code === 'Space' && !(e.target instanceof HTMLButtonElement)) {
+    // Space pauses, but leaves other buttons to the browser. A ruling never
+    // goes through on Space: on a card's choices it pauses too (Enter rules).
+    if (e.code === 'Space' && (!(e.target instanceof HTMLButtonElement) || e.target.closest(RULING))) {
       e.preventDefault();
       host.setSpeed(host.speed() ? 0 : host.lastSpeed());
     } else if (e.key === '1') host.setSpeed(1);
     else if (e.key === '2') host.setSpeed(3);
     else if (e.key === '3') host.setSpeed(5);
-    else if (e.key === '4') host.setSpeed(10);
-    else if (e.key === '5') host.setSpeed(20);
+    else if (e.key === '4' || e.key === '5') {
+      const s = e.key === '4' ? 10 : 20;
+      if (allowedSpeeds(ctx.entitlement()).includes(s)) host.setSpeed(s);
+      else return speedLocked(s);
+    }
     else if (e.key === 'h' || e.key === 'H') setClean(!clean);
     else if ((e.key === 'f' || e.key === 'F') && fsSupported) toggleFullscreen();
     else if (/^[cCdD]$/.test(e.key)) {

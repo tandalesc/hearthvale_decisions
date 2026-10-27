@@ -9,7 +9,6 @@ import {createBudgetCard, budgetNextText} from './budget.js';
 import {adviceBanner, bindAdvice} from './advisers.js';
 import {isMinorKey} from '../model.js';
 import {createCardNarration} from './card-narration.js';
-import {isPaid} from '../../entitlements.js';
 const AVATAR_TINTS = ['#e3ead3', '#efe2c8', '#d9ebec', '#f3dfd4', '#e6e0ef', '#e9e4cf'];
 
 export function isMinor(option) {
@@ -159,7 +158,8 @@ export function createCard(card, ctx) {
   });
 
   let latest = card;
-  const narration = createCardNarration(card, {allowSummaryToggle: !isPaid(ctx.entitlement?.())});
+  // Everyone can show or hide the asker's quote; the game's explanation always shows.
+  const narration = createCardNarration(card);
   el.querySelector('.card-narration-slot').replaceWith(narration.el);
   bindAdvice(el, ctx, () => latest);
   el.__update = (next) => {

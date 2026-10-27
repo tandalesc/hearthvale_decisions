@@ -122,6 +122,10 @@ const repeatsWord = (words) => {
   }
   return false;
 };
+// A note is kept until something material about its subject changes, so it may not speak of
+// the passing season: the training sheets were all collected in spring, and the student learned
+// "Spring has come to Hearthvale" as a person's opening line whatever the month.
+const NOTE_BANNED = new Set(['spring', 'springs', 'summer', 'summers', 'autumn', 'autumns', 'winter', 'winters']);
 const REPEATABLE = new Set(['their', 'there', 'these', 'those', 'which', 'would', 'could', 'should', 'about', 'other', 'still', 'while', 'where', 'being', 'after', 'again', 'every', 'since', 'under', 'because', 'though', 'through', 'before', 'never', 'always', 'right']);
 
 // bundle: the JSON header; blob: the weights file's bytes (ArrayBuffer) when the header names one.
@@ -269,7 +273,8 @@ export function loadNarrationStudent(bundle, blob = null) {
 
   // check (optional): text so far -> true when it says something the card contradicts; such a
   // beam is dropped at the end of a sentence, so the others get the room.
-  async function beam(encoded, task, {k = cfg.beam, alpha = cfg.alpha, block = cfg.block, pause, check, noRepeat = !!cfg.no_repeat} = {}) {
+  // banWords (optional): words the text may never use, however many pieces spell them.
+  async function beam(encoded, task, {k = cfg.beam, alpha = cfg.alpha, block = cfg.block, pause, check, noRepeat = !!cfg.no_repeat, banWords = null} = {}) {
     const {mem, n, ban} = encoded, maxT = cfg.max_tgt;
     const cross = Array.from({length: L}, (_, l) => projectFlat(W, `decoder.layers.${l}.multihead_attn`, mem, n, d));
     const fresh = () => Array.from({length: L}, () => ({k: new Float32Array(maxT * d), v: new Float32Array(maxT * d)}));
@@ -287,6 +292,7 @@ export function loadNarrationStudent(bundle, blob = null) {
         const banned = new Set(words.length ? [words.at(-1)] : []);
         // A notes bundle (config no_repeat): no content word twice, as the trainer decodes.
         if (noRepeat) for (const w of words) if (w.length >= 5 && /^[a-z]+$/.test(w) && !REPEATABLE.has(w)) banned.add(w);
+        if (banWords) for (const w of banWords) banned.add(w);
         if (words.length >= block - 1) {
           const tail = words.slice(-(block - 1)).join(' ');
           for (let j = 0; j + block - 1 < words.length; j++) if (words.slice(j, j + block - 1).join(' ') === tail) banned.add(words[j + block - 1]);
@@ -315,9 +321,12 @@ export function loadNarrationStudent(bundle, blob = null) {
         if (check && o.tok !== EOS && /[.!?]$/.test(voc.words[o.tok]) && check(untok(child.toks.map((i) => voc.words[i])))) continue;
         // no_repeat: drop a beam once it finishes a word it has used, however many pieces
         // spell it (the ban above only catches a one-token word), as the trainer decodes.
-        if (noRepeat) {
+        if (noRepeat || banWords) {
           const ws = wordsOf(child.toks.filter((x) => x !== EOS));
-          if (repeatsWord(o.tok === EOS || t === maxT - 1 ? ws : ws.slice(0, -1))) continue;
+          const done = o.tok === EOS || t === maxT - 1 ? ws : ws.slice(0, -1);
+          if (noRepeat && repeatsWord(done)) continue;
+          // A banned word spelled by several pieces shows only once it is finished.
+          if (banWords && done.some((w) => banWords.has(w.replace(/'s$/, '')))) continue;
         }
         if (o.tok === EOS || t === maxT - 1) finished.push({...child, norm: o.s / child.toks.length ** alpha});
         else {
@@ -353,7 +362,9 @@ export function loadNarrationStudent(bundle, blob = null) {
   // between decoding steps so a caller on the main thread can yield.
   // Greedy first (a third of the time); the full beam only when that quote is not confident.
   // Role tokens as the bundle's rows were made (notes: version 2; card bundles: 1).
-  const rolesOf = (facts) => roleTriples(narrationTriples(facts), {version: voc.roles ?? 1});
+  // config.drop: fact paths the bundle was trained without (the exporter's --drop), such as
+  // 'season' for a notes bundle.
+  const rolesOf = (facts) => roleTriples(narrationTriples(facts, {drop: cfg.drop ?? []}), {version: voc.roles ?? 1});
 
   async function quote(facts, {pause, beam: width = cfg.beam, adaptive = true} = {}) {
     const {triples, roles} = rolesOf(facts);
@@ -374,11 +385,12 @@ export function loadNarrationStudent(bundle, blob = null) {
     const encoded = encode(triples, roles);
     const task = tk.get('entity.note');
     const check = (text) => !!noteProblem(relex(text, roles), facts);
+    const opts = {pause, check, banWords: NOTE_BANNED};
     if (adaptive && width > 1) {
-      const first = pickNote(facts, roles, encoded, await beam(encoded, task, {pause, k: 1, check}));
+      const first = pickNote(facts, roles, encoded, await beam(encoded, task, {...opts, k: 1}));
       if (first?.confident) return first;
     }
-    return pickNote(facts, roles, encoded, await beam(encoded, task, {pause, k: width, check}));
+    return pickNote(facts, roles, encoded, await beam(encoded, task, {...opts, k: width}));
   }
 
   function pickNote(facts, roles, encoded, cands) {

@@ -115,7 +115,7 @@ for (const ending of ['accepted', 'rejected', 'cancelled']) test(`worker narrati
     },ending);
     if(ending==='accepted') {
       await expect(card.locator('.card-flavour')).toHaveText('The farmers are indifferent after the bumper harvest.');
-      await expect(card.locator('.card-narration-toggle')).toBeHidden();
+      await expect(card.locator('.card-narration-toggle')).toBeVisible();
       await expect(card.locator('.card-why')).toBeHidden();
     }
     else await expect(card.locator('.card-flavour')).not.toHaveText('A complete sentence from the town.');
@@ -352,6 +352,6 @@ test('Plus waits from the first card render while free and saved prose stay inst
   await expect(page.locator('.docket').first().locator('.card-narration-placeholder')).toBeHidden();
   await page.evaluate(()=>window.loadingTest.docket.update([{...window.loadingTest.card,prose:{why:'A generated town quote.',source:'llm'}}]));
   await expect(page.locator('.docket').first().locator('.card-flavour')).toBeVisible();
-  await expect(page.locator('.docket').first().locator('.card-narration-toggle')).toBeHidden();
+  await expect(page.locator('.docket').first().locator('.card-narration-toggle')).toBeVisible();
   await expect(page.locator('.docket').first().locator('.card-why')).toBeHidden();
 });

@@ -60,3 +60,52 @@ test('the tablet Council and the phone sheet stay clear of the chrome when open'
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
   }
 });
+
+test('the home-screen offer sits under Play once a town is kept, and fits a phone', async ({page}) => {
+  test.setTimeout(90000);
+  const errors = await open(page, {fixture: 'hamlet'});
+  await page.locator('.settings-btn').click();
+  await page.locator('.settings [data-act="save"]').click();
+  await expect(page.locator('.toast')).toContainText('saved');
+  await page.setViewportSize({width: 375, height: 667});
+  await Promise.all([page.waitForNavigation(), page.locator('.settings [data-act="menu"]').click()]);
+  await page.locator('[data-go="play"]').click();
+  // Desktop Chrome without an install offer: nothing to show.
+  await expect(page.locator('[data-go="continue"]')).toBeVisible();
+  await expect(page.locator('.mm-install')).toHaveCount(0);
+
+  // Chrome hands over its offer after the screen is drawn.
+  await page.evaluate(() => {
+    const e = new Event('beforeinstallprompt', {cancelable: true});
+    e.prompt = async () => { window.prompted = true; };
+    e.userChoice = Promise.resolve({outcome: 'dismissed'});
+    dispatchEvent(e);
+  });
+  const offer = page.locator('.mm-install');
+  await expect(offer.locator('[data-act="install"]')).toBeVisible();
+  for (const button of await offer.locator('button').all()) {
+    const box = await button.boundingBox();
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.x + box.width).toBeLessThanOrEqual(375);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
+  await offer.locator('[data-act="install"]').click();
+  expect(await page.evaluate(() => window.prompted)).toBe(true);
+  await expect(offer).toHaveCount(0);
+
+  // iOS has no offer: the Share-menu tip instead, until "Not now".
+  await page.evaluate(() => Object.defineProperty(navigator, 'userAgent', {get: () => 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)'}));
+  await page.locator('.mm-back').click();
+  await page.locator('[data-go="play"]').click();
+  await expect(offer).toContainText('tap Share, then Add to Home Screen');
+  await expect(offer.locator('[data-act="install"]')).toHaveCount(0);
+  await offer.locator('[data-act="install-later"]').click();
+  await expect(offer).toHaveCount(0);
+  await page.locator('.mm-back').click();
+  await page.locator('[data-go="play"]').click();
+  await expect(offer).toHaveCount(0);
+
+  // The dev server never registers the offline worker.
+  expect(await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length)).toBe(0);
+  expect(errors).toEqual([]);
+});

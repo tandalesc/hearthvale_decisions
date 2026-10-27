@@ -10,7 +10,7 @@
 // per session and per year that grows with the era. Events and demands are
 // urgent and surface at once. Surfaced cards last two years.
 
-import {monthIndex} from './clock.js';
+import {monthIndex, season} from './clock.js';
 import {setTag} from './state.js';
 import {delta} from './pressures.js';
 import {invalidateCtx} from './conditions.js';
@@ -28,6 +28,7 @@ import {cardAdded, policyChanged, negotiationRequested} from './decisions/schedu
 import {deriveSubjects, subjectsOf, subjectOpen, subjectInFlight, subjectCooling} from './subjects.js';
 import * as budgets from './budgets.js';
 import * as advisers from './advisors.js';
+import {noteAccepted, rulingReceipt, followupsMonthly} from './followups.js';
 
 export const SESSION_CAP = [1, 1, 2, 2, 2, 3];
 export const YEAR_CAP = [2, 3, 3, 4, 4, 4];   // design-systems §9.1
@@ -311,6 +312,25 @@ const capFor = (table, era) => table[Math.max(0, Math.min(table.length - 1, era 
 export const sessionCap = (era) => capFor(SESSION_CAP, era);
 export const yearCap = (era) => capFor(YEAR_CAP, era);
 
+// The year's cards are spread over its four sessions: each quarter gets
+// floor(cap / 4), and the remainder goes to that many quarters in turn from
+// quarter (year % 4), so over the years every season gets an equal share
+// (cap 2: spring+summer, summer+autumn, autumn+winter, winter+spring). Worked
+// out from year and era, so saves carry nothing new.
+export function quarterAllowance(era, year, quarter) {
+  const slots = yearCap(era);
+  const extra = ((quarter - year % 4) + 4) % 4 < slots % 4 ? 1 : 0;
+  return Math.floor(slots / 4) + extra;
+}
+
+// What this year's sessions up to and including this one may show between
+// them: what a quiet quarter left unused carries forward to the next.
+export function allowanceThrough(era, year, quarter) {
+  let total = 0;
+  for (let q = 0; q <= quarter; q++) total += quarterAllowance(era, year, q);
+  return total;
+}
+
 function surface(state, card) {
   const m = monthIndex(state.time);
   card.surfacedMonth = m;
@@ -332,12 +352,17 @@ export function docketQuarterly(state) {
     PRIORITY[a.kind] - PRIORITY[b.kind] || b.urgency - a.urgency || a.createdMonth - b.createdMonth || a.id.localeCompare(b.id));
   const shown = [];
   let room = sessionCap(state.era);
+  // Ordinary asks wait for their quarter's share of the year; an event or a
+  // demand may take a later quarter's, as long as the year's cap holds.
+  const allowed = allowanceThrough(state.era, state.time.year, season(state.time.month));
   for (const card of waiting) {
     if (card.kind === 'report') {
       surface(state, card);
       continue;
     }
-    if (room <= 0 || g.cardsThisYear >= yearCap(state.era)) break;
+    // Reports are not capped: one is never held back behind the asks.
+    if (room <= 0 || g.cardsThisYear >= yearCap(state.era)) continue;
+    if (!URGENT.has(card.kind) && g.cardsThisYear >= allowed) continue;
     surface(state, card);
     shown.push(card);
     room--;
@@ -359,6 +384,8 @@ export function docketMonthly(state) {
     if (card.expiresMonth == null || m < card.expiresMonth) continue;
     expire(state, card);
   }
+  // A year and five years after an approval, the chronicle says how it went.
+  followupsMonthly(state);
 }
 
 // A plan overtaken while it waited (the work began, the building went up, the
@@ -458,6 +485,7 @@ function record(state, card, choice, outcome, extra = {}) {
         [`petition:${p.faction}:${card.data.grievance}`, p.mood])),
     } : {}),
     ...(card.data?.workId ? {place: card.data.workId} : {}),
+    ...(Number.isFinite(card.data?.x) && Number.isFinite(card.data?.z) ? {at: {x: card.data.x, z: card.data.z}} : {}),
     ...(card.data?.demand != null ? {demand: card.data.demand} : {}),
     ...(card.data?.mood != null ? {mood: card.data.mood} : {}),
     ...(card.data?.batch || /\?$/.test(card.title ?? '') ? {ask: askOf(card)} : {}),
@@ -466,6 +494,8 @@ function record(state, card, choice, outcome, extra = {}) {
     subjects,
   });
   if (state.cardHistory.length > 3000) state.cardHistory.splice(0, 500);
+  // A year and five years on, the chronicle says how it went (followups.js).
+  if (outcome === 'accepted') noteAccepted(state, card, card.options?.find((o) => o.key === choice));
 }
 
 // A budget answer's figures (asked, granted) in the history.
@@ -507,7 +537,9 @@ export function rule(state, cardId, optionKey, opts = {}) {
     addCard(state, {...card.data.plan, data: {...card.data.plan.data, escalated: true}});
   }
   invalidateCtx(state);
-  return {ok: true, outcome};
+  // What the ruling did, in a line, for the player's receipt (followups.js).
+  const receipt = adviser ? null : rulingReceipt(state, card, option, outcome);
+  return {ok: true, outcome, ...(receipt ? {receipt} : {})};
 }
 
 // A budget answered with a trim to fit (budgets.trimAllToFit): factor of the ask.

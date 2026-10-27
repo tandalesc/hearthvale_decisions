@@ -40,6 +40,16 @@ test('free speed controls cycle 1/3/5 and sessions reject paid speeds', () => {
   assert.equal(entitledSpeed(0), 0);
 });
 
+test('a locked speed keeps the current speed when the caller passes it', () => {
+  for (const current of [0, 1, 3, 5]) {
+    assert.equal(entitledSpeed(10, {tier: 'free'}, current), current);
+    assert.equal(entitledSpeed(20, undefined, current), current);
+  }
+  assert.equal(entitledSpeed(10, {tier: 'paid'}, 3), 10);
+  assert.equal(entitledSpeed(5, {tier: 'free'}, 3), 5);
+  assert.equal(entitledSpeed(0, {tier: 'free'}, 3), 0);
+});
+
 test('session loading fails closed without blocking offline play', async () => {
   assert.equal((await loadEntitlement(async () => { throw new Error('offline'); })).tier, 'free');
   assert.equal((await loadEntitlement(async () => ({ok: true, json: async () => ({tier: 'paid'})}))).tier, 'paid');

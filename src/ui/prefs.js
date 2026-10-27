@@ -14,7 +14,8 @@ export const DEFAULT_PREFS = {
   master: 0.8, ambience: 0.6, ui: 0.7, muted: false,
   moments: 'fast',          // fast: blocking title cards at 3× and 5× only | always | never
   requests: 'notify',       // notify: a notice, the town keeps going | pause: pause and open the Council at each new request
-  narration: 'fast',        // card quotes, Plus: fast = the student first, Haiku when it is unsure | quality = Haiku first
+  requestsAtSpeed: 'pause', // Plus, at 10× and 20×: pause = an urgent request pauses and opens even under Notify | notify = a notice like any other
+  narration: 'auto',        // Plus: auto (not chosen) = Haiku first for card quotes, the student first for notes | fast = the student first, Haiku when it is unsure | quality = Haiku first
   settingsTab: 'game',      // the Settings tab opened last
   approvalTab: 'faction',   // the People view's Approval breakdown shown last
   binderWidth: null,        // px, the panel's dragged width; null is the layout default

@@ -184,3 +184,20 @@ test('phone: views unlocked while playing slide into the strip with the reveal',
   await expect(page.locator('.sheet .rulebook')).toBeVisible();
   await expect(page.locator('.sheet-nav [data-view="rules"] .dot')).toBeHidden();
 });
+
+test('phone: Your rulings works inside the sheet like the other Council pages', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  const errors = await open(page, {fixture: 'town'});
+  test.skip(await hv(page, () => window.hearthvale.sim) !== 'real', 'real sim not present');
+  await page.locator('.sheet-nav [data-view="council"]').click();
+  const chip = page.locator('.sheet .dk-index [data-page="rulings"]');
+  await chip.scrollIntoViewIfNeeded();
+  await chip.click();
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.sheet .ledger-row').first()).toBeVisible();
+  await expect(page.locator('.sheet .ledger-filters [data-filter="all"]')).toHaveAttribute('aria-pressed', 'true');
+  expect(await hv(page, () => document.documentElement.scrollWidth)).toBe(390);
+  const wide = await page.locator('.sheet .ledger-row').evaluateAll((els) => els.some((e) => e.getBoundingClientRect().right > innerWidth + 0.5));
+  expect(wide).toBe(false);
+  expect(errors).toEqual([]);
+});

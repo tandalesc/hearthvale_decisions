@@ -57,6 +57,8 @@ export function restore(raw, {services = {}} = {}) {
   // Saves from before water bodies have no terrainVersion and keep their valley (1).
   setTerrainSeed('terrainSeed' in data ? data.terrainSeed : null, data.terrainVersion ?? 1, data.terrainArchetype ?? null);
   const state = {...emptyState(data.seed), terrainSeed: data.terrainSeed ?? null, terrainVersion: data.terrainVersion ?? 1, terrainArchetype: data.terrainArchetype ?? null, ...data};
+  // Saves from before ruling follow-ups (followups.js) start with none waiting.
+  state.followups ??= [];
   runPhase('restore', state, {services});
   return state;
 }
