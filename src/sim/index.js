@@ -30,9 +30,11 @@ import {createState as baseCreateState, useTerrainOf} from './state.js';
 import {registerSystem} from './hooks.js';
 import {worldSystem} from './world.js';
 import {governanceSystem} from './governance.js';
+import {followupsSystem} from './followups.js';
 
 registerSystem(governanceSystem);
 registerSystem(worldSystem);
+registerSystem(followupsSystem);
 
 const MAX_TICKS_PER_CALL = 40;      // 4 s of sim time; any backlog beyond that is dropped
 

@@ -54,7 +54,7 @@
 //    "config": {"maxPerClient": 400, "excludeKinds": [...], ...}}  // overrides of the defaults below;
 //                                                            // excludeKinds: kinds left to the hosted model
 import {spawn} from 'node:child_process';
-import {evaluateCanaryPopulation} from './gates.js';
+import {evaluateCanaryPopulation, evaluateKindCoverage, askedKinds} from './gates.js';
 import {createHash} from 'node:crypto';
 import {createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync, createWriteStream, statSync} from 'node:fs';
 import {createInterface} from 'node:readline';
@@ -76,12 +76,18 @@ const cfg = {
   minRows: 50, qps: 40,
   epochs: 6, lr: 1e-3, maxBundleKB: 450, maxCachedUs: 400, tolerance: 0.03, kindTolerance: 0.2, maxBias: 0.05, tail: [0.67, 1.5],
   workShareDelta: 3, canary: {seeds: 4, start: 65, years: 40}, publishDir: 'public/students', excludeKinds: [],
+  // coverageRequireKinds: kinds that must be in the bundle AND asked in the canaries. Empty
+  // until a canary forces a strike (none asks strike_resolve today, review A7); then ['strike_resolve'].
+  exportBits: 4, exportGroup: 32, coverageMinAsked: 1, coverageRequireKinds: [],
   ...S.config,
 };
 if (flag('min-clients', null)) cfg.minClients = Number(flag('min-clients'));
 const publish = args.includes('--publish'), dry = args.includes('--dry'), fresh = flag('fresh', null), extra = flag('extra', null);
-const next = S.current.version + 1;
-const out = resolve(ROOT, 'data', 'loop', `v${next}`);
+// The coordinator names the version (S.nextVersion, from the job's assets): numbers
+// only go up, so after a revert the next version skips the reverted one. The work
+// directory stays v<current + 1>, where runner.js reads the report.
+const next = S.nextVersion ?? S.current.version + 1;
+const out = resolve(ROOT, 'data', 'loop', `v${S.current.version + 1}`);
 mkdirSync(out, {recursive: true});
 const report = {version: next, from: S.current.version, at: new Date().toISOString(), config: cfg, steps: {}, gates: {}, published: false};
 const save = () => writeFileSync(join(out, 'report.json'), JSON.stringify(report, null, 2));
@@ -218,8 +224,9 @@ report.consumedHashes = [...new Set([...labelled.map(a => a.key), ...[...byKey.k
 report.steps.trainArgs = trainArgs;
 await run(py, ['-u', 'scripts/train_error_head.py', runDir, '--data', ...trainFiles, '--eval', p(S.realplay)], {cwd: S.twm});
 const bundle = join(out, `decisions.v${next}.json`);
+// int4 with an fp16 scale per 32 values of a row, as the shipped v8 (cfg.exportBits 8 for int8).
 await run(py, ['scripts/export_decision_student.py', runDir, bundle, '--data', p(S.realplay), '--fixture', '64', '--version', String(next),
-  '--exclude-kinds', cfg.excludeKinds.join(',')], {cwd: S.twm});
+  '--exclude-kinds', cfg.excludeKinds.join(','), '--bits', String(cfg.exportBits), ...(cfg.exportBits === 4 ? ['--group', String(cfg.exportGroup)] : [])], {cwd: S.twm});
 report.steps.train = {run: runDir, bundle};
 save();
 
@@ -291,27 +298,26 @@ const check = await run('node', ['scripts/distill-check-student.js', bundle], {a
 const us = Number((/(\d+) µs with its state cached/.exec(check.text) ?? [])[1]);
 gate('JS parity', check.code === 0, {output: check.text.trim().split('\n').at(-1)});
 const b = JSON.parse(readFileSync(bundle, 'utf8'));
-const previousKinds = S.current.bundle ? JSON.parse(readFileSync(p(S.current.bundle), 'utf8')).kinds : [];
-const requiredKinds = [...new Set(['strike_resolve', ...previousKinds.filter(kind => kind !== 'enterprise_type_for_site')])];
-const missingKinds = requiredKinds.filter(kind => !b.kinds.includes(kind));
-gate('active kind coverage', missingKinds.length === 0, {required: requiredKinds, missing: missingKinds});
 const kb = (JSON.stringify(b.weights).length + JSON.stringify(b.vocab).length) / 1024;
 gate('size and speed', kb <= cfg.maxBundleKB && us <= cfg.maxCachedUs, {kb: Math.round(kb), cachedUs: us});
 // Canary towns: the same seeds under the current and the next version, played
 // by the simulated player (the complete-town comparison's setting).
-const canary = async (name, file) => {
+// The candidate's run records its questions (without need variants; answers are the
+// same either way) so that kind coverage can count the kinds the towns asked.
+const canary = async (name, file, {record = false} = {}) => {
   const dir = join(out, `canary-${name}`);
   const r = await run('node', ['--max-old-space-size=8000', 'scripts/distill-collect.js', dir, '--seeds', String(cfg.canary.seeds), '--start', String(cfg.canary.start),
-    '--years', String(cfg.canary.years), '--workers', String(cfg.canary.seeds), '--answer', 'student', '--student', file, '--player', '--no-record'], {allowFail: true});
+    '--years', String(cfg.canary.years), '--workers', String(cfg.canary.seeds), '--answer', 'student', '--student', file, '--player', ...(record ? ['--needs', '0'] : ['--no-record'])], {allowFail: true});
   const towns = existsSync(join(dir, 'towns.json')) ? JSON.parse(readFileSync(join(dir, 'towns.json'), 'utf8')).towns : [];
+  const asked = record && r.code === 0 && existsSync(join(dir, 'questions.jsonl')) ? await askedKinds(readLines(join(dir, 'questions.jsonl'))) : null;
   const work = towns.map((t) => { const m = t.shares?.morning ?? {}; const s = Object.values(m).reduce((x, y) => x + y, 0); return s ? 100 * (m.work ?? 0) / s : NaN; });
   // Geometric mean of the final population.
   const pops = towns.map((t) => t.town?.at(-1)?.pop).filter((v) => v > 0);
   const pop = pops.length ? Math.round(Math.exp(pops.reduce((x, v) => x + Math.log(v), 0) / pops.length)) : null;
-  return {ok: r.code === 0 && towns.length === cfg.canary.seeds, work: work.reduce((x, y) => x + y, 0) / work.length, pop, towns};
+  return {ok: r.code === 0 && towns.length === cfg.canary.seeds, work: work.reduce((x, y) => x + y, 0) / work.length, pop, towns, asked};
 };
 const currentBundle = S.current.bundle ? p(S.current.bundle) : null;
-const cNew = await canary('next', bundle);
+const cNew = await canary('next', bundle, {record: true});
 const cOld = currentBundle ? await canary('current', currentBundle) : null;
 gate('canary towns', cNew.ok && (!cOld || Math.abs(cNew.work - cOld.work) <= cfg.workShareDelta),
   {finished: cNew.ok, workShareNext: Number(cNew.work.toFixed(1)), workShareCurrent: cOld ? Number(cOld.work.toFixed(1)) : null,
@@ -319,6 +325,11 @@ gate('canary towns', cNew.ok && (!cOld || Math.abs(cNew.work - cOld.work) <= cfg
 const expectedCanarySeeds = Array.from({length: cfg.canary.seeds}, (_, index) => 1000 + (cfg.canary.start + index) * 7919);
 const populationGate = evaluateCanaryPopulation(cOld, cNew, expectedCanarySeeds);
 gate('canary population', populationGate.pass, populationGate);
+// Kinds the current bundle answers that the candidate's canary towns asked must be in the candidate;
+// coverageRequireKinds must also be asked (see the config above).
+const previousKinds = S.current.bundle ? JSON.parse(readFileSync(p(S.current.bundle), 'utf8')).kinds : [];
+const coverage = evaluateKindCoverage({previousKinds, bundleKinds: b.kinds, asked: cNew.asked, excludeKinds: cfg.excludeKinds, minAsked: cfg.coverageMinAsked, requireKinds: cfg.coverageRequireKinds});
+gate('active kind coverage', coverage.pass, coverage);
 const passed = Object.values(report.gates).every((g) => g.pass);
 report.passed = passed;
 save();

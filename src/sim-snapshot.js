@@ -6,7 +6,8 @@
 //
 // Selector outputs are raw (app.js maps them through ui/model.js); a selector that
 // throws gives null, as app.js's safe() did. `want` names the views on screen: 'rules',
-// 'people', 'chronicle', 'tensions' and 'moot' (the Town Council's purse). Everything
+// 'people', 'chronicle', 'tensions', 'moot' (the Town Council's purse), 'rulings'
+// (the Council's "Your rulings" ledger) and 'endpage' (the town's story at year 150). Everything
 // in it must survive structuredClone.
 
 export function uiSnapshot(sim, state, req = {}, narrator = null) {
@@ -45,6 +46,8 @@ export function uiSnapshot(sim, state, req = {}, narrator = null) {
   }
   if (want.has('tensions')) panels.tensions = run(() => V.selectTensions(state));
   if (want.has('moot') && u.budget) panels.budget = run(() => V.selectBudget?.(state));
+  if (want.has('rulings')) panels.rulings = run(() => V.selectRulings?.(state));
+  if (want.has('endpage') && u.endPage) panels.endPage = run(() => V.selectEndPage?.(state));
   out.panels = panels;
 
   // The ambience reads a few raw fields.

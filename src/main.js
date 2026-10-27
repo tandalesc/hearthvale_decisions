@@ -332,7 +332,9 @@ async function boot() {
   // a second; below the chosen speed when the sim's frame budget runs out.
   let reached = null, reachedSim = 0, reachedReal = 0;
   const setSpeed = (s) => {
-    s = entitledSpeed(s, entitlement);
+    // A locked speed keeps the current one (the UI says why). Resuming at a
+    // speed the tier lost (after signing out of Plus) resumes at 1×.
+    s = entitledSpeed(s, entitlement, speed || 1);
     if (s === speed) return;
     if (s > 0) lastSpeed = s;
     speed = s;

@@ -187,8 +187,38 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
     if (latest) items.push({go: 'continue', label: 'Continue', sub: `${latest.name || 'Hearthvale'}, year ${latest.year ?? 0}. ${townLine(latest)}`, cls: 'mm-continue'});
     items.push({go: 'new', label: 'New town', sub: 'Choose a valley and begin with seven families.'});
     items.push({go: 'towns', label: 'Manage Towns', sub: towns.length ? `${towns.length} ${towns.length === 1 ? 'town' : 'towns'} on this device.` : 'Find and manage the towns saved on this device.'});
-    body.innerHTML = `<section class="mm-screen" aria-labelledby="mm-play-title"><h2 id="mm-play-title" tabindex="-1">Play</h2>${menuList(items, 'Play')}</section>`;
+    body.innerHTML = `<section class="mm-screen" aria-labelledby="mm-play-title"><h2 id="mm-play-title" tabindex="-1">Play</h2>${menuList(items, 'Play')}${installRow()}</section>`;
   }
+
+  // ---------- add to home screen ----------
+  // Offered once the player has a town to come back to. Chrome hands over its install
+  // prompt (index.html keeps it); iOS has none, so it gets the Share-menu tip instead.
+  function installRow() {
+    if (!towns.length || installedOrDismissed()) return '';
+    const prompt = window.hearthvaleInstall;
+    if (!prompt && !isIOS()) return '';
+    const text = prompt ? 'Keep Hearthvale on your home screen. It plays offline too.' : 'To keep Hearthvale on your home screen, tap Share, then Add to Home Screen.';
+    return `<div class="mm-install" role="group" aria-label="Add to home screen">${icon('sprout')}<p>${esc(text)}</p>
+      <div class="btn-row">${prompt ? `<button type="button" class="btn btn-secondary" data-act="install">Add to home screen</button>` : ''}<button type="button" class="btn btn-ghost" data-act="install-later">Not now</button></div></div>`;
+  }
+  async function install() {
+    const prompt = window.hearthvaleInstall;
+    window.hearthvaleInstall = null;
+    if (prompt) {
+      try { await prompt.prompt(); await prompt.userChoice; } catch { /* the offer lapsed */ }
+    }
+    body.querySelector('.mm-install')?.remove();
+    body.querySelector('[data-autofocus]')?.focus({preventScroll: true});
+  }
+  // The offer can arrive after the Play screen is drawn: add the row without redrawing.
+  const onInstallOffer = () => {
+    if (root.dataset.screen !== 'play') return;
+    body.querySelector('.mm-install')?.remove();
+    body.querySelector('.mm-screen')?.insertAdjacentHTML('beforeend', installRow());
+  };
+  const onInstalled = () => { window.hearthvaleInstall = null; body.querySelector('.mm-install')?.remove(); };
+  addEventListener('hearthvale-install', onInstallOffer);
+  addEventListener('appinstalled', onInstalled);
 
   function renderNew() {
     body.innerHTML = `
@@ -468,6 +498,13 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
       prefs.set('muted', !on);
       return;
     }
+    if (act === 'install') return install();
+    if (act === 'install-later') {
+      try { localStorage.setItem(INSTALL_LATER, String(Date.now())); } catch { /* asked again next time */ }
+      body.querySelector('.mm-install')?.remove();
+      body.querySelector('[data-autofocus]')?.focus({preventScroll: true});
+      return;
+    }
     if (act === 'found') return found();
     if (act === 'play' && selected) return pick({kind: 'load', id: selected.id});
     if (act === 'export' && selected) return exportTown(selected);
@@ -617,6 +654,8 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
       cloudPanel?.destroy();
       darkMedia.removeEventListener?.('change', onDark);
       removeEventListener('resize', onResize);
+      removeEventListener('hearthvale-install', onInstallOffer);
+      removeEventListener('appinstalled', onInstalled);
       document.removeEventListener('keydown', onEscape);
       map?.dispose();
       root.classList.add('mm-out');
@@ -629,6 +668,17 @@ export function createMainMenu({saves, cloud, prefs, start = 'title', openAccoun
     },
     element: root,
   };
+}
+
+// "Not now" on the home-screen offer holds for a month.
+const INSTALL_LATER = 'hearthvale-install-later';
+function installedOrDismissed() {
+  if (matchMedia('(display-mode: standalone)').matches || navigator.standalone) return true;
+  try { return Date.now() - Number(localStorage.getItem(INSTALL_LATER) || 0) < 30 * 864e5; } catch { return false; }
+}
+// iPhone and iPad (iPadOS reports a Mac with touch).
+function isIOS() {
+  return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
 // The game's theme, text size and motion settings, applied before the game's

@@ -45,7 +45,7 @@ Nothing in the game follows a script. Unlocks are built from conditions that com
 
 <p align="center"><img src="docs/media/eras.svg" alt="Diagram: six eras from Hamlet to Metropolis, with buildings growing from a thatched hut to a tall building with a rooftop garden" width="100%"></p>
 
-A year passes in about a minute, so a whole chronicle takes an evening. Each new era widens the town's horizons. Stone and brick arrive, then terraces, then civic halls and iron bridges, and finally towers with gardens on their roofs. The old quarter keeps its thatch, so a 150-year-old city still shows the hamlet it started as.
+A year passes in about two minutes at normal speed, so a whole chronicle takes a few evenings. Each new era widens the town's horizons. Stone and brick arrive, then terraces, then civic halls and iron bridges, and finally towers with gardens on their roofs. The old quarter keeps its thatch, so a 150-year-old city still shows the hamlet it started as.
 
 <table>
 <tr>
@@ -63,7 +63,9 @@ A year passes in about a minute, so a whole chronicle takes an evening. Each new
 <p align="center"><img src="docs/media/council.jpg" alt="The game's interface over a metropolis: the City Council docket shows Orchard Town Ward Council asking for a market charter, with merchants for it and three choices" width="100%">
 <br><sub>Year 169. A neighbourhood that grew into its own town now has its own ward council, and it wants a market day of its own.</sub></p>
 
-The interface starts nearly empty and grows with the town. At first it's one council and a few numbers. As institutions form, each one takes its own place in the side dock, with its own dashboard, docket and budget. Each card says who is asking, why now, and what each choice costs. Small chips show which groups will cheer and which will grumble. You can ask a body to handle its own affairs, give it standing orders, or dissolve it.
+*These pictures are older than the current Council layout, so the screen in the game looks different now.*
+
+The interface starts nearly empty and grows with the town. At first it's one council and a few numbers. As institutions form, each one gets its own page in the Council, with its own dashboard, cards and purse. Each card says who is asking, why now, and what each choice costs. Small chips show which groups will cheer and which will grumble. Once the town is big enough, each body brings a budget at the end of the year. You approve it, trim it or refuse it, and the body pays for its own small things from what you grant. Later you can seat advisers from among the townsfolk to answer routine cards for you, and you can still change their answers. You can also dissolve a body.
 
 The writing aims to be easy to read: short sentences, plain words, a little warmth.
 

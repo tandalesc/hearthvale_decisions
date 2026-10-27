@@ -22,6 +22,8 @@ New baselines:
 
 `town-hash` decade hashes change only by the save's version field from `031e7f4` on (identical with it read as 2): headless towns plan no walks.
 
+Not a speed-up, but it moves every baseline: from the docket calendar change (October 2026, uncommitted at the time of writing; the year's card cap spread over the four quarterly sessions, `src/sim/docket.js` `quarterAllowance`) towns diverge from the first year a session would have shown two cards. `town-hash` at year 150: seed 66 `7836bc5082fc1bf1` → `0f10eba54f8d4ac7`, seed 7 `c8d923130e47be8a` → `50d49ea650070c9e`, seed 12 `26842848dd55ec2f` → `bac0f9102b2da6f3`. `benchmark-city` at its defaults (5×, 60 s): city `c1b1a38c49b0dd35` → `07353a0b155df1c6`, town `2491ad17f97544fb` → `8daa351140eea394`. Compare later speed-ups against the new values.
+
 **Not committed: shared route post-processing** (item 5). Walkers given the same cell path shared one centre line (decks, rounding, skirting), and each took its lane from one full lane worked out per side. One path is delivered about 2.3 times in the frozen town and fewer in a growing one. A new shared entry with its first lane costs 188 µs against 142 µs for a walker's own pipeline, and it breaks even at about three walkers a path. Measured: delivery −15 % in the frozen town, +20 % in the growing one. The patch is kept outside the repo, in the session notes.
 
 **All of it together, k = 2, CPU profile, run side by side with `b907b29`:**

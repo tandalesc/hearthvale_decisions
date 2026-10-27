@@ -267,15 +267,31 @@ export function createLocalAnswerer({client, students = [], budgetMs = BUDGET_MS
 // One published student version per play session. A later session refreshes the
 // manifest; opening another town in this session keeps the already loaded model.
 // Saved governance.studentVersion records provenance rather than a permanent pin.
+//
+// The manifest's `blocked` list is the kill switch (docs/hosting.md): a blocked
+// version is never loaded. When `latest` (or the pin) is blocked the highest
+// unblocked version up to latest is used; when none is left, the shipped manifest
+// at `fallbackBase`, still skipping every version either manifest blocks.
+export function chooseStudentVersion(manifest, {pinned = null, blocked = []} = {}) {
+  const versions = manifest?.versions ?? {}, latest = Number(manifest?.latest);
+  const block = new Set([...(Array.isArray(manifest?.blocked) ? manifest.blocked : []), ...blocked].map(Number));
+  const ok = (v) => v != null && !!versions[v] && !block.has(Number(v));
+  if (pinned != null && ok(pinned)) return String(pinned);
+  if (ok(manifest?.latest)) return String(manifest.latest);
+  const rest = Object.keys(versions).map(Number).filter((v) => Number.isInteger(v) && (!Number.isFinite(latest) || v <= latest) && ok(v)).sort((a, b) => b - a);
+  return rest.length ? String(rest[0]) : null;
+}
 export function createStudentVersions({answerer, base, manifestURL = null, fallbackBase = null, pinned = null, fetcher = (...a) => globalThis.fetch(...a)}) {
   let current = null, started = null;
+  const blocked = new Set();
   async function loadPublished(directory, manifestUrl) {
     try {
       const response = await fetcher(manifestUrl);
       if (!response.ok) return false;
       const manifest = await response.json();
-      const want = String(pinned != null && manifest.versions?.[pinned] ? pinned : manifest.latest);
-      if (!manifest.versions?.[want]) return false;
+      for (const v of Array.isArray(manifest.blocked) ? manifest.blocked : []) blocked.add(Number(v));
+      const want = chooseStudentVersion(manifest, {pinned, blocked: [...blocked]});
+      if (want == null) return false;
       const kinds = await answerer.use(new URL(manifest.versions[want], directory).href, fetcher);
       if (!kinds) return false;
       current = want;

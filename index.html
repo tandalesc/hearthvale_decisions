@@ -20,7 +20,7 @@
       /* The loading screen (src/ui/loading.js). Inline so it is in the first paint,
          before any script runs. Colours are the paper and ink of src/ui/tokens.css. */
       #boot {
-        --paper: #fafbf2; --paper-3: #e9ebdb; --ink: #2f3f2f; --ink-2: #5a6a55; --muted: #7f8a73;
+        --paper: #fafbf2; --paper-3: #e9ebdb; --ink: #2f3f2f; --ink-2: #5a6a55; --muted: #66705c;
         --line: #dde3cf; --green: #526d42; --leaf: #9bb671;
         position: fixed; inset: 0; z-index: 200;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -120,6 +120,32 @@
           s.style.animationDelay = (i * 6) + 's';
           out.appendChild(s);
         }
+      })();
+    </script>
+    <script>
+      // Offline play (public/sw.js), in builds only: vite.config.js sets the flag, so the
+      // dev server and tests never register a worker. ?sw=0 removes it.
+      (function () {
+        // Chrome's install offer, kept for the menu's "Add to home screen" row (menu.js).
+        addEventListener('beforeinstallprompt', function (e) {
+          e.preventDefault();
+          window.hearthvaleInstall = e;
+          dispatchEvent(new Event('hearthvale-install'));
+        });
+        if (!('serviceWorker' in navigator)) return;
+        var off = new URLSearchParams(location.search).get('sw') === '0';
+        if (off || !window.__hearthvaleBuild) {
+          if (off) navigator.serviceWorker.getRegistrations().then(function (rs) { rs.forEach(function (r) { r.unregister(); }); });
+          return;
+        }
+        addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js?b=' + encodeURIComponent(window.__hearthvaleBuild)).then(function () { return navigator.serviceWorker.ready; }).then(function (reg) {
+            // What this visit already fetched, so the next one works offline.
+            var urls = performance.getEntriesByType('resource').map(function (e) { return e.name; })
+              .filter(function (u) { return u.indexOf(location.origin + '/') === 0; });
+            if (reg.active) reg.active.postMessage({type: 'warm', urls: urls});
+          }).catch(function () { /* online only */ });
+        });
       })();
     </script>
     <noscript>Hearthvale needs JavaScript to run.</noscript>

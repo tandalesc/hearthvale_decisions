@@ -23,7 +23,7 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
   let view = null;
   let modelEnabled = true;
   let proseKeeper = null;
-  let narrationPrefer = 'fast';   // Plus: 'fast' (student first) or 'quality' (hosted first)
+  let narrationPrefer = 'auto';   // Plus: 'auto' (not chosen: hosted first for cards), 'fast' (student first) or 'quality' (hosted first)
   // With the model off every ask resolves to null, so actors use local rules.
   const decisions = client && new Proxy(client, {
     get(target, key) {
@@ -170,7 +170,7 @@ export function createSimSession({sim, narrator = null, routes = null, decisions
       stats: () => proseKeeper?.stats?.() ?? null,
       // Settings: load the student if it has not been needed yet, and report.
       refresh() { localProse?.preload?.(); return proseKeeper?.stats?.() ?? null; },
-      configure({prefer} = {}) { if (prefer === 'fast' || prefer === 'quality') narrationPrefer = prefer; },
+      configure({prefer} = {}) { if (prefer === 'auto' || prefer === 'fast' || prefer === 'quality') narrationPrefer = prefer; },
     },
 
     decisions: {

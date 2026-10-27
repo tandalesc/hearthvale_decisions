@@ -1,6 +1,6 @@
 # Cloud saves and recovery
 
-Cloud saves are available to signed-in players. A free account can create one active cloud town; a Plus account can create ten. Downgrading never deletes or locks existing towns: all remain readable, writable, restorable and deletable. The lower limit applies when adding or reactivating a town. Each compressed save is limited to 5 MiB, its decompressed stream to 30 MiB, and each account to 800 writes and 512 MiB uploaded per UTC day. Local device saves are independent of these limits.
+Cloud saves are available to signed-in players. A free account can create one active cloud town; a Plus account can create ten. Downgrading never deletes or locks existing towns: all remain readable, writable, restorable and deletable. The lower limit applies when adding or reactivating a town. Each compressed save is limited to 16 MiB, its decompressed stream to 64 MiB, and each account to 800 writes and 2 GiB uploaded per UTC day. Local device saves are independent of these limits.
 
 The Worker authenticates the signed `__Host-hearthvale` session, derives the account Durable Object from its server-side account ID, and requires the exact same `Origin` for PUT, POST and DELETE. Every cloud request must send `X-Cloud-Account` equal to the opaque `cloudAccountId` from the current session; a mismatch returns HTTP 409 `account_changed`. R2 objects remain private under `cloud-saves/v1/<account-id>/`, separate from student artifacts. The client never supplies a storage account ID. `GET /api/session` provides `cloudAccountId` for local account separation and `limits.cloudTowns`.
 
@@ -18,7 +18,7 @@ All responses use `Cache-Control: no-store` (or `private, no-store`). UUIDs are 
 | `POST /api/cloud/towns/:id/restore` | JSON `{backupId,baseRevision,saveId}`. Creates a new revision and returns `{town}`. |
 | `POST /api/cloud/recover` | Rebuilds an empty account catalog from the newest verified private R2 catalog snapshot, including an intentionally empty snapshot. Returns `{recovered,from}`. Rejects a nonempty catalog. |
 
-On stale writes or deletes, HTTP 409 returns `{code:'conflict',town:<latest>}`; the server never overwrites the latest revision. A repeated save ID returns the original successful result from the recent receipt window. HTTP 409 with `code:'limit'` means the account has no new active slot. HTTP 413 means the compressed request exceeds 5 MiB. A 429 `rate` means the account has used its daily write budget.
+On stale writes or deletes, HTTP 409 returns `{code:'conflict',town:<latest>}`; the server never overwrites the latest revision. A repeated save ID returns the original successful result from the recent receipt window. HTTP 409 with `code:'limit'` means the account has no new active slot. HTTP 413 means the compressed request exceeds 16 MiB. A 429 `rate` means the account has used its daily write budget.
 
 ## Durability and retention
 

@@ -166,7 +166,14 @@ export function createDocket(ctx, {empty = ['Nothing waits for you.', 'The town 
       if (id) active = id;
       lastSig = '';
       render(0);
-      stack.querySelector('.card:not(.is-next) .option')?.focus({preventScroll: false});
+      // Focus the open card itself, not an option: Space then pauses the town
+      // instead of pressing a ruling. Tab reaches the options from here.
+      // (A ruled card still folding away is not the open one.)
+      const card = stack.querySelector('.card:not(.is-next):not([data-leaving])');
+      if (card) {
+        card.tabIndex = -1;
+        card.focus({preventScroll: false});
+      }
     },
     setVisible(value) { visible = value; if (!value) { requested = null; waiting = null; ctx.cancelCardProse?.(); } else render(); },
     get count() { return cards.length; },

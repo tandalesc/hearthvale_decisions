@@ -55,7 +55,7 @@ test('student routes: decisions keep their paths, narration has its own director
 });
 
 // The prose keeper's routing, on a real town's first card.
-async function route({remote, quote, hosted, prefer = 'fast'}) {
+async function route({remote, quote, hosted, prefer}) {
   const {fixtureState} = await import('../src/sim/fixtures.js');
   const {cardsNeedingProse} = await import('../src/sim/narrative-facts.js');
   const st = fixtureState('town');
@@ -64,9 +64,9 @@ async function route({remote, quote, hosted, prefer = 'fast'}) {
   let calls = 0;
   const k = createProseKeeper({
     remote: () => remote,
-    prefer: () => prefer,
+    ...(prefer ? {prefer: () => prefer} : {}),
     local: async () => quote,
-    fetcher: async () => { calls++; return hosted(); },
+    fetcher: async (_url, init) => { calls++; return hosted(JSON.parse(init.body).facts); },
     actions: (name) => (name === 'setCardProse' ? (_s, cid, prose) => stored.push({id: cid, ...prose}) : null),
   });
   await k.requestCard(st, id);
@@ -96,17 +96,51 @@ test('Plus on Quality gets the hosted quote, and the student when the hosted one
   assert.equal(generic.stored[0]?.source, 'student', 'and for a hosted quote the checks refuse');
 });
 
-test('Plus on Fast (the default) takes a confident student quote and asks the hosted narrator only when it is unsure', async () => {
-  const sure = await route({remote: true, quote: confident, hosted: refused});
+test('Plus on Fast takes a confident student quote and asks the hosted narrator only when it is unsure', async () => {
+  const sure = await route({remote: true, prefer: 'fast', quote: confident, hosted: refused});
   assert.equal(sure.calls, 0, 'no hosted call when the student is confident');
   assert.equal(sure.stored[0]?.source, 'student');
-  const unsure = await route({remote: true, quote: {why: 'x', confident: false}, hosted: refused});
+  const unsure = await route({remote: true, prefer: 'fast', quote: {why: 'x', confident: false}, hosted: refused});
   assert.equal(unsure.calls, 1, 'an unsure student hands the card to the hosted narrator');
   assert.equal(unsure.stats.prefer, 'fast');
 });
 
-const bundleFile = new URL('../public/students/narration/narration.v3.json', import.meta.url);
-const fixtureFile = new URL('./fixtures/narration.v3.fixture.json', import.meta.url);
+test('Plus who has not chosen gets the hosted quote first, and the student when it cannot be had', async () => {
+  // A reply the checks accept: the card's own reason, said again, and its template option lines.
+  const llm = (facts) => new Response(JSON.stringify({source: 'llm', prose: {
+    why: `Hear us out. ${facts.why}`,
+    options: Object.fromEntries(facts.options.map((o) => [o.key, o.tradeoff ?? ''])),
+  }}));
+  for (const prefer of [undefined, 'auto']) {
+    const down = await route({remote: true, prefer, quote: confident, hosted: refused});
+    assert.equal(down.calls, 1, 'Haiku is asked even when the student is confident');
+    assert.equal(down.stored[0]?.source, 'student', 'the student stands in for a narrator that is down');
+    assert.equal(down.stats.prefer, 'auto');
+    const up = await route({remote: true, prefer, quote: confident, hosted: llm});
+    assert.equal(up.calls, 1);
+    assert.equal(up.stored[0]?.source, 'llm', 'a hosted quote that passes the checks is kept');
+  }
+  const free = await route({remote: false, quote: confident, hosted: refused});
+  assert.deepEqual([free.calls, free.stored[0]?.source], [0, 'student'], 'free players are unchanged');
+});
+
+// The shipped bundles are the ones the manifests name as latest (review C8), each with
+// its own trainer fixture: a new version must ship tests/fixtures/<family>.v<N>.fixture.json.
+const latestOf = (family) => JSON.parse(readFileSync(new URL(`../public/students/${family}/manifest.json`, import.meta.url), 'utf8')).latest;
+const narrationLatest = latestOf('narration'), notesLatest = latestOf('notes');
+const bundleFile = new URL(`../public/students/narration/narration.v${narrationLatest}.json`, import.meta.url);
+const fixtureFile = new URL(`./fixtures/narration.v${narrationLatest}.fixture.json`, import.meta.url);
+const notesBundle = new URL(`../public/students/notes/notes.v${notesLatest}.json`, import.meta.url);
+const notesFixture = new URL(`./fixtures/notes.v${notesLatest}.fixture.json`, import.meta.url);
+test('the shipped narration and notes manifests name versions with a bundle and a trainer fixture', () => {
+  assert.ok(narrationLatest >= 3 && notesLatest >= 3, `narration v${narrationLatest}, notes v${notesLatest}`);
+  assert.ok(existsSync(bundleFile) && existsSync(fixtureFile), 'narration bundle and fixture');
+  assert.ok(existsSync(notesBundle) && existsSync(notesFixture), 'notes bundle and fixture');
+  for (const [bundle, fixture, latest] of [[bundleFile, fixtureFile, narrationLatest], [notesBundle, notesFixture, notesLatest]]) {
+    assert.equal(JSON.parse(readFileSync(bundle, 'utf8')).version, latest, `${bundle.pathname} is version ${latest}`);
+    assert.ok(JSON.parse(readFileSync(fixture, 'utf8')).cards.length >= 8, `${fixture.pathname} has at least 8 cards`);
+  }
+});
 test('the shipped narration student reproduces its training run on the fixture', {skip: !existsSync(bundleFile)}, async () => {
   const bundle = JSON.parse(readFileSync(bundleFile, 'utf8'));
   let blob = null;
@@ -182,8 +216,6 @@ test('role tokens, version 2: a token per number fact, the sheet\'s own fields f
   assert.equal(relex(d, roles), note);
 });
 
-const notesBundle = new URL('../public/students/notes/notes.v2.json', import.meta.url);
-const notesFixture = new URL('./fixtures/notes.v2.fixture.json', import.meta.url);
 test('the shipped notes student reproduces its training run, and writes notes the game would show', {skip: !existsSync(notesBundle)}, async () => {
   const bundle = JSON.parse(readFileSync(notesBundle, 'utf8'));
   const bin = readFileSync(new URL(bundle.blob, notesBundle));
@@ -209,9 +241,9 @@ test('inspector notes: free players get any student note, else the template; Plu
   const {createNarratorClient} = await import('../src/narrator-client.js');
   const facts = JSON.parse(readFileSync(notesFixture, 'utf8')).cards.find((c) => c.facts.kind === 'person').facts;
   const hostedReply = () => new Response(JSON.stringify({text: 'A hosted note.', source: 'llm'}), {headers: {'content-type': 'application/json'}});
-  const run = async ({paid, prefer = 'fast', mine, hosted = hostedReply}) => {
+  const run = async ({paid, prefer, mine, hosted = hostedReply}) => {
     let calls = 0;
-    const client = createNarratorClient({fetcher: async () => { calls++; return hosted(); }, local: async () => mine, remote: () => paid, prefer: () => prefer});
+    const client = createNarratorClient({fetcher: async () => { calls++; return hosted(); }, local: async () => mine, remote: () => paid, ...(prefer ? {prefer: () => prefer} : {})});
     const meta = [];
     const text = await client.narrate(facts, {onMeta: (m) => meta.push(m.source)});
     return {text, calls, source: meta.at(-1)};
@@ -223,10 +255,14 @@ test('inspector notes: free players get any student note, else the template; Plu
   assert.deepEqual([r.source, r.calls], ['student', 0], 'free players: even an unsure student note beats the template, and no hosted request');
   r = await run({paid: false, mine: null});
   assert.equal(r.source, 'fallback', 'no note that passes the rules: the template');
-  r = await run({paid: true, mine: sure});
+  r = await run({paid: true, prefer: 'fast', mine: sure});
   assert.deepEqual([r.source, r.calls], ['student', 0]);
-  r = await run({paid: true, mine: unsure});
+  r = await run({paid: true, prefer: 'fast', mine: unsure});
   assert.deepEqual([r.text, r.calls], ['A hosted note.', 1]);
+  for (const prefer of ['auto', undefined]) {
+    r = await run({paid: true, prefer, mine: sure});
+    assert.deepEqual([r.source, r.calls], ['student', 0], 'not chosen yet: notes stay student first');
+  }
   r = await run({paid: true, prefer: 'quality', mine: sure});
   assert.deepEqual([r.text, r.calls], ['A hosted note.', 1], 'quality: hosted first');
   r = await run({paid: true, prefer: 'quality', mine: sure, hosted: () => new Response('{}', {status: 503})});

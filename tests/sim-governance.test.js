@@ -14,7 +14,7 @@ import {
   emergenceHolds, eligibleTemplates,
 } from '../src/sim/institutions.js';
 import {
-  addCard, makeCard, docketQuarterly, rule, sessionCap, yearCap, SESSION_CAP,
+  addCard, makeCard, docketQuarterly, rule, sessionCap, yearCap, SESSION_CAP, quarterAllowance, allowanceThrough,
 } from '../src/sim/docket.js';
 import {EVENTS, eventsMonthly, fireEvent} from '../src/sim/events.js';
 import {immigrate} from '../src/sim/households.js';
@@ -258,24 +258,109 @@ test('rulings move coin between accounts and never create it', () => {
 // ---------------------------------------------------------------------------
 // Docket
 
+// The year's cap is spread over its four sessions (rotating with the year),
+// so a full queue no longer spends it all in spring and summer: each session
+// shows its quarter's share, never more than the session cap.
 test('sessions surface cards up to the cap for the era', () => {
   for (const era of [0, 2, 5]) {
     const s = freshTown();
     s.era = era;
+    s.governance.cardsThisYear = 0;
     for (let i = 0; i < 8; i++) {
       addCard(s, makeCard(s, {kind: 'proposal', from: 'moot', templateId: `t${i}`, title: `Card ${i}`, why: 'Test.',
         options: [{key: 'do', label: 'Do it', tradeoff: 'Test.'}]}));
     }
-    s.time.month = 3;
-    const shown = docketQuarterly(s);
-    assert.equal(shown.length, sessionCap(era), `era ${era} session`);
     assert.equal(SESSION_CAP[era], sessionCap(era));
-    let total = shown.length;
-    for (const month of [6, 9]) {
+    let total = 0;
+    for (const [q, month] of [0, 3, 6, 9].entries()) {
       s.time.month = month;
-      total += docketQuarterly(s).length;
+      const shown = docketQuarterly(s).length;
+      assert.ok(shown <= sessionCap(era), `era ${era} session`);
+      assert.equal(shown, quarterAllowance(era, s.time.year, q), `era ${era} quarter ${q} share`);
+      total += shown;
     }
-    assert.ok(total <= yearCap(era), `era ${era} year cap`);
+    assert.equal(total, yearCap(era), `era ${era} year cap`);
+    assert.equal(allowanceThrough(era, s.time.year, 3), yearCap(era));
+  }
+});
+
+test('the year\'s share rotates through the seasons; a quiet quarter carries; events may take a later share', () => {
+  // Over four years every season gets the same number of slots.
+  for (const era of [0, 1, 3]) {
+    const seasons = [0, 0, 0, 0];
+    for (let year = 0; year < 4; year++) for (let q = 0; q < 4; q++) seasons[q] += quarterAllowance(era, year, q);
+    assert.deepEqual(seasons, Array(4).fill(yearCap(era)), `era ${era}`);
+  }
+  const plan = (s, i) => makeCard(s, {kind: 'proposal', from: 'moot', templateId: `t${i}`, title: `Card ${i}`, why: 'Test.',
+    options: [{key: 'do', label: 'Do it', tradeoff: 'Test.'}]});
+  // A city with nothing to ask until winter may show a full session then.
+  const city = freshTown();
+  city.era = 5;
+  city.governance.cardsThisYear = 0;
+  for (const month of [0, 3, 6]) { city.time.month = month; assert.equal(docketQuarterly(city).length, 0); }
+  for (let i = 0; i < 8; i++) addCard(city, plan(city, i));
+  city.time.month = 9;
+  assert.equal(docketQuarterly(city).length, sessionCap(5));
+  // A hamlet in a year whose two shares fall in autumn and winter: a queued
+  // event surfaces in spring, a proposal waits, and the event used autumn's share.
+  const s = freshTown();
+  s.era = 0;
+  s.time.year = 2;
+  addCard(s, plan(s, 0));
+  const event = makeCard(s, {kind: 'event', from: 'moot', templateId: 'e', title: 'An event', why: 'Test.',
+    options: [{key: 'ok', label: 'Ok', tradeoff: 'Test.'}]});
+  s.docket.push(event);
+  const session = (month) => { s.time.month = month; return docketQuarterly(s).map((c) => c.id); };
+  assert.deepEqual(session(0), [event.id]);
+  assert.deepEqual(session(3), []);
+  assert.deepEqual(session(6), []);
+  assert.equal(session(9).length, 1, 'the proposal comes in winter');
+  assert.equal(s.governance.cardsThisYear, yearCap(0));
+});
+
+// Faction sizes are counted once a year, so mid-year they lag the households.
+// A restore keeps the saved counts rather than recounting: otherwise a loaded
+// town ran on different numbers from the one that was saved.
+test('a restored town keeps the faction counts it was saved with', () => {
+  const s = createState(21);
+  runMonths(s, 18);
+  s.factions[0].size += 3;
+  s.factions[0].households += 1;
+  const text = serialize(s);
+  const r = restore(text);
+  assert.deepEqual(r.factions.map((f) => [f.id, f.size, f.households]), s.factions.map((f) => [f.id, f.size, f.households]));
+  assert.equal(serialize(r), text);
+});
+
+// A grown town's asks come round in every season, and the sessions never
+// show more in a year than its cap.
+test('cards surface across all four seasons over the years', () => {
+  const s = createState(7);
+  const seen = new Set();
+  const seasons = [0, 0, 0, 0];
+  const perYear = {};
+  let lastSession = null;
+  for (let q = 0; q < 44 * 4; q++) {
+    runMonths(s, 3);
+    assert.ok(s.governance.cardsThisYear <= yearCap(s.era), 'within the year cap');
+    for (const c of s.docket) {
+      if (c.surfacedMonth == null || seen.has(c.id)) continue;
+      seen.add(c.id);
+      if (c.kind !== 'report' && c.kind !== 'budget') seasons[Math.floor((c.surfacedMonth % 12) / 3)]++;
+    }
+    const ls = s.governance.lastSession;
+    if (ls && ls.month !== lastSession) {
+      lastSession = ls.month;
+      const y = Math.floor(ls.month / 12);
+      perYear[y] = (perYear[y] ?? 0) + ls.cards.length;
+      assert.ok(perYear[y] <= yearCap(s.era), `year ${y}: ${perYear[y]} cards`);
+    }
+    for (const card of [...s.docket]) if (card.surfacedMonth != null) rule(s, card.id, card.kind === 'report' ? 'ok' : card.options[0].key);
+  }
+  const total = seasons.reduce((a, b) => a + b, 0);
+  assert.ok(total > 100, `${total} cards`);
+  for (const [i, n] of seasons.entries()) {
+    assert.ok(n / total >= 0.15 && n / total <= 0.35, `season ${i}: ${n} of ${total}`);
   }
 });
 

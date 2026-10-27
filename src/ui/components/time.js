@@ -56,7 +56,11 @@ function speedSeg(ctx) {
       const item = h('button.speed-menu-option', {type: 'button', role: 'menuitemradio', tabindex: '-1', dataset: {value: speed}},
         h('span.speed-menu-mark', {'aria-hidden': 'true'}), h('span', null, `${speed}×`), h('span.speed-menu-plan'));
       item.addEventListener('click', () => {
+        // A locked speed keeps the current one, says why and shows the plans.
         if (!allowedSpeeds(ctx.entitlement?.()).includes(speed)) {
+          close(true);
+          ctx.speedLocked?.(speed);
+          ctx.openAccount?.({view: 'plans'});
           return;
         }
         ctx.setSpeed(speed);

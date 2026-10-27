@@ -260,6 +260,10 @@ test('settings: display and accessibility persist, with the student shown under 
   await page.locator('[data-pref="textSize"] [data-value="large"]').click();
   expect(await hv(page, () => document.documentElement.dataset.text)).toBe('large');
   await page.locator('.settings [role="tab"][data-tab="game"]').click();
+  // The model versions sit in a collapsed "About the town's models".
+  const about = page.locator('.settings-about');
+  await expect(page.locator('.model-ver')).toBeHidden();
+  await about.locator('summary').click();
   await expect(page.locator('.model-ver')).toBeVisible();
   await expect(page.locator('.settings [data-act="menu"]')).toBeVisible();
   await page.keyboard.press('Escape');

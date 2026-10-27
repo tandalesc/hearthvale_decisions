@@ -96,6 +96,7 @@ def main():
     ap.add_argument('--no-repeat', action='store_true', help='the runtime decodes without reusing a content word (notes)')
     ap.add_argument('--task', default=None, help='the fixture\'s prompts from this task only (entity.note for a notes bundle)')
     ap.add_argument('--roles', type=int, default=1, help='role tokens version the run was exported with (src/narration-roles.js); 2 for notes')
+    ap.add_argument('--drop', default='', help="fact paths the rows were exported without (narration-student-export.js --drop), e.g. season")
     ap.add_argument('--fixture-out', help='where the parity fixture goes (default OUT with .fixture.json); it is not shipped')
     a = ap.parse_args()
 
@@ -158,7 +159,8 @@ def main():
 
     bundle = {'format': FORMAT, 'version': a.version, 'features': FEATURES_VERSION, **({'task': a.task} if a.task else {}),
               'teacher': 'claude-haiku-5-5', 'config': {**cfg, 'heads': 4, 'max_tgt': S.MAX_TGT, 'max_bag': C.max_bag,
-                                                         'beam': a.beam, 'alpha': 0.7, 'block': 3, **({'no_repeat': True} if a.no_repeat else {})},
+                                                         'beam': a.beam, 'alpha': 0.7, 'block': 3, **({'no_repeat': True} if a.no_repeat else {}),
+                                                         **({'drop': a.drop.split(',')} if a.drop else {})},
               'vocab': vocab, 'weights': weights, 'quality': quality, 'bits': a.bits,
               'blob': os.path.basename(a.out).replace('.json', '.bin'), 'blob_bytes': blob.size,
               'params': sum(v.numel() for v in model.state_dict().values())}

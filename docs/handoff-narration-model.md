@@ -6,6 +6,12 @@ Goal: replace Haiku for the narrator's prose with a model under 1 MB that runs i
 
 ## 1. Where it stands
 
+**Corrections (27 October 2026).** Checked against the code:
+- The pointer-generator trainer in §1a (`scripts/narration-train.py`) is superseded by `scripts/narration-student.py`. The student has no copy head. Names, places and numbers come in as role tokens (`src/narration-roles.js`), and the decoder only places them. The table below still lists the old trainer.
+- `card.why`, the card's reason, is an input, not a task. The student keeps it in the triples (`scripts/narration-student-export.js`). Its tasks are `card.quote`, `card.option` and `entity.note`. The `card.why` row in §1a's table is the old trainer's template-copy task.
+- The header comment of `scripts/export-narration-student.py` says int8 with a float32 scale per row, as base64. The code (`export_weight`) writes fp16 scales into a separate `.bin` file: one scale per row at int8, one per group of 32 values at int4. The shipped v3 bundle is int8.
+- The quality head's AUC 0.91 in §1c is not the shipped figure. The bundles record `quality.auc` of 0.755 (v1), 0.750 (v2) and 0.760 (v3): candidate AUC on test towns from `scripts/narration-quality.py`. Compare against those.
+
 | Step | State |
 |---|---|
 | Fact sheets → triples (`src/narration-features.js`) | done, tested |
@@ -522,3 +528,164 @@ Template rows are unlimited and free. They teach copying and keeping the facts s
 
   Neither has been rerun on its own yet.
 - **The handed-off session** "Narration dataset and tiny triples-to-text model" (branch `claude/friendly-fermi-562b8c`) has the same commit. It kept restarting the collection after it was stopped, so it was stopped again. Archive it, or tell it plainly what to do, before relying on it.
+
+## 1q. "Spring has come": the notes student's season tic (27 October 2026)
+
+Players saw most inspector notes open with "Spring has come to Hearthvale", in every season, and the line stayed for years. Two causes, both in the data:
+- `scripts/narration-collect.js` took its entity sheets when the year turned, so every training sheet, and all 24 fixture sheets, read `season: spring`.
+- `noteMessage` (`cloudflare/narration.js`) told the writer "It is spring of year N" even though a note is kept until something material changes. Haiku opened person notes with the weather, and the student learned it as the person-note opener: on the fixture it says "Spring has finally come" with the season fact removed, and with it set to any season.
+
+Fixed without a retrain:
+- The notes beam bans the four season words (`NOTE_BANNED` in `src/narration-student.js`, `banWords` on `beam()`, possessives included). On the fixture the person openers become "Oh, it's good to see you" and the like; 23 of 24 still show.
+- The note prompt's head line is now "It is year N" for every writer (`taggedLines` in `src/narrative-schema.js`), so hosted notes stop saying it too.
+
+## 1r. Notes v4 plan: balanced data, no season (27 October 2026)
+
+The miss was in sampling, not the model: every entity sheet was taken at month 0. The plan, in order; each step has a check.
+
+1. **Collect balanced sheets.** `narration-collect.js` now takes a quarter of each year's entity sheets in each season, at a month inside the season that varies with the seed and year, with a different sample each quarter; bodies, which are few, are all taken in one season a year, rotating. On two seeds to year 30: person, household and building sheets were 118 / 116 / 116 / 116 across spring to winter (bodies 54 / 54 / 57 / 61). Cards are not sampled, so they keep the sim's own calendar (about 35% spring, 10% winter, because the yearly card cap resets at month 0). Run: 40 seeds, 150 years, the same held-out seed values as v3 (`held_out` in rrh-llm-1 `~/narration/note2x-r2-tpl/metrics.json`). *Check:* per-kind season shares within 22–28%, and era and kind counts close to the v3 collection's.
+2. **Label with balanced samples.** `narration-label-batch.js build --notes` picks by key hash; add `--stratify season` so each kind's 6,250 training sheets and 150 test sheets are a quarter per season, then `send --yes` and `fetch --sheets`. Two batches of 25,000 as before (about $0.85 each). *Check:* the manifest's season shares per kind and split; the pass rate of `noteOk` against v3's 64%.
+3. **Export without the season.** `narration-student-export.js --only-notes --roles 2 --note-templates 50000 --drop season --held-out …` (`drop` now matches bare field names as well as `person.season`). The bundle records `config.drop`, and the runtime drops the same fact, so training and play see the same triples. *Check:* no `season` triple in any row.
+4. **Train on rrh-llm-1, GPU 1**, two seeds side by side with `runs.sh`, the `note2x-r2-tpl` arguments (read them from its `metrics.json`), a BPE relearned on the new corpus, `--qat 0 --no-repeat --beam 8 --eval-batch 16`. *Check:* held-out note loss against v3's 1.24; the two seeds within 0.03 of each other.
+5. **Export and probe.** `export-narration-student.py --task entity.note --roles 2 --bits 8 --beam 8 --no-repeat --share 0.8 --fixture 24 --version 4 --drop season`. Parity 24/24 in `tests/narration-student.test.js`. Run the fixture through the student **with the season ban off**: *check* zero season words, and no single opener above 15% of person notes (v3: "Spring has come" on about 60% of them).
+6. **Quality head and judge.** Grade validation and test candidates with the corrected quality rubric, train the head, pick, and judge v4 against v3 and Haiku on at least 600 test entities (about $0.60 in all). *Gate:* v4 mean within 0.05 of v3 and good share within 2 points, poor share no worse, bodies not worse than v3's 2.91.
+7. **Publish** as notes v4 (manifest latest 4, fixture `notes.v4.fixture.json`), keep the season ban as a check, and bump `NARRATION_REVISION` (now 5, so cached Plus notes are rewritten without the season). Write the numbers here as §1s.
+
+The card-quote student has the same prompt line ("It is spring of year N") and a spring-heavy card calendar. It is not durable, so the season is true when the quote is written; leave it, but measure how often card quotes open with the season before deciding.
+
+## 1s. Notes v4: balanced data, no season. Shipped (27 October 2026)
+
+This section carries out §1r. **v4 passes the gate and is installed:** `public/students/notes/notes.v4.json` + `notes.v4.bin`, manifest latest 4, fixture `tests/fixtures/notes.v4.fixture.json`.
+- Bundle facts: 96 KB header + 652 KB int8; 644,876 parameters; id `816305ec`; `config.drop: ["season"]`; beam 8; `no_repeat`; head threshold 0.0259 (most confident 80%).
+- The season ban (`NOTE_BANNED`) stays as a check. `NARRATION_REVISION` stays 5.
+
+**1. Collection.** 40 seeds × 150 years, the balanced collector: 236,421 distinct sheets.
+- Entity sheets are exactly 25% per season in each kind.
+- Eras are uneven. Bodies, for example: hamlet 646, village 2,807, town 9,439, borough 14,286, city 21,464, metropolis 12,608. People and households have the same shape.
+- Cards are 47% spring, 31% summer, 15% autumn and 7% winter (the sim's card calendar).
+  - **Follow-up for the card-quote student:** the docket is being changed to spread cards over the seasons. The card sheets in this collection predate that change, so a card retrain should recollect.
+
+**2. Labels.** `narration-label-batch.js build` has a new `--stratify season,era` option, which works for cards as well as `--notes`.
+- It makes equal cells over the named facts' values: per kind for notes, with templates round-robin inside each cell for cards.
+- Each cell is capped at its share. A short cell's remainder is spread evenly over the other cells (water-filling), so totals stay at n.
+- The manifest now records each sheet's season and era.
+
+Two batches, built with `--notes --held-out <v3's 8 seeds> --stratify season,era`; the second used `--skip` on the first's manifest:
+
+| batch | train | test | cost |
+|---|---|---|---|
+| `notes1` | 25,000 | 600 | $0.84 |
+| `notes2` | 25,000 | 0 | $0.82 |
+
+- **Training sheets:** 6,250 per kind in each batch, 25.0% per season.
+  - Eras are 1,041–1,042 per kind and era.
+  - Bodies are short of hamlets: 524 in batch 1 and none left for batch 2. The other body eras got 1,145–1,146 in batch 1 and 1,007–1,311 in batch 2.
+- **Test sheets:** 150 per kind, 25 per era. Seasons are 24 / 24 / 28 / 24%, because 150 does not split evenly over 24 cells.
+- **The worker's `noteOk`:** 35.1% pass raw and 63.6% after `cleanNote` (v3: 64%).
+  - By kind: person 38.1%, household 66.1%, building 75.1%, body 75.2%.
+  - By season: 63.3–64.0%.
+
+**3. Export.** `narration-student-export.js SHEETS --notes notes1/labels.jsonl --notes notes2/labels.jsonl --only-notes --roles 2 --note-templates 50000 --drop season --held-out …` produced:
+- 32,188 model rows;
+- 100,600 pretrain rows (50,600 Haiku notes and 50,000 template notes);
+- 50,600 prompt rows;
+- **no season triple in any row.**
+
+The 1,277 Haiku targets with a season word (4.0%) are almost all "summer fair", a ruling or event the sheet names; 145 (0.45%) use a season word some other way. A second file without `--drop` (`notes-pairs-season.jsonl`) is only for re-decoding v3.
+
+**4. Training** on rrh-llm-1 GPU 1.
+- Setup:
+  - `runs.sh` with `ROWS=notes4-pairs.jsonl`, using the `note2x-r2-tpl` arguments: 20 + 40 epochs, d 96, e 64, 4 layers, SwiGLU ff 128, `--stance-who`, smoothing 0.05, lr 0.002, batch 128.
+  - Also `--bpe bpe4.json` (2,048 symbols relearned on the new corpus), `--no-repeat --beam 8 --eval-batch 16 --eval-max 600 --qat 0`.
+  - 1,937 s each, side by side.
+- The box's `narration-student.py` was the old copy (no `--no-repeat` or `--eval-batch`). It is now the repo's version; the old one is kept as `narration-student.py.bak-v3`.
+- **Held-out loss** is the trainer's own smoothed loss on passing notes. §1m's 1.24 was measured another way; v3's own `metrics.json` says 1.754 on its old test sheets.
+
+| run | val | test |
+|---|---|---|
+| v4 seed 0 (`notes4-s0`) | 1.969 | 1.930 |
+| **v4 seed 1 (`notes4-s1`, exported)** | 1.970 | **1.915** |
+| v3 on the same new rows (`notes4-v3dec`: `--load note2x-r2-tpl`, season-kept rows) | 2.021 | 1.938 |
+
+- The seeds are within 0.015 of each other. v4 is level with or slightly better than v3 on the same sheets.
+
+**5. Export and probe.**
+- Command: `export-narration-student.py notes4-s1 … --version 4 --task entity.note --roles 2 --bits 8 --beam 8 --no-repeat --share 0.8 --fixture 24 --drop season`.
+- The fixture is season-mixed (5 spring, 8 summer, 7 autumn, 4 winter).
+- **Parity:**
+  - top notes match the trainer on 23/24 (the first 8: 8/8);
+  - confident 15/24 (first 8: 4/8);
+  - `note()` gives a note for 22/24;
+  - median 130 ms, p90 158 ms in Node;
+  - `node --test tests/narration*.test.js`: 83/83.
+- **Season probe**, with the season ban off: the trainer's decodes on the 600 test sheets, and `student.beam` on the fixture.
+
+| | top candidate with a season word | the same, leaving out "summer fair" | person notes' top opener (head's pick) |
+|---|---|---|---|
+| v3 (re-decoded, no ban) | 289/597 (**48%**) | 281/597 | "Spring has finally come" 35%; spring openers ≈ 85% |
+| v3 as shipped (runtime, ban on) | — | 0/550 | "Oh, it's good to see you" 34.5% |
+| v4 seed 0 / seed 1 (no ban) | 26/600 / 22/600 | **0/600 / 0/600** (1 of 4,800 seed-1 candidates) | "Oh, what a day" 15.5% (23/148) |
+| v4 runtime (ban on) | — | 0/582 | "Oh, what a day" 18.2% (27/148) |
+| v4 on the fixture (no ban) | 3/24 | 0/24 | (only 3 person notes) |
+
+- All 22 test notes that say "summer fair" are on sheets that list a summer fair.
+- **The season tic is gone.** The person-opener target of under 15% is missed narrowly, at 15.5% (18.2% with the ban). It is far below v3, and no target has that opener above 3.1%.
+
+**6. Head and judge.**
+- **Grading:** all 4,800 validation candidates and all 4,800 test candidates, with the corrected quality rubric (`narration-note-verdicts.js --rubric quality`; test with `--eval`).
+  - Validation: $0.401, 41.9% good.
+  - Test: $0.400, 2 ungraded.
+- **The head** (`narration-quality.py`):
+  - candidate AUC 0.820;
+  - a test entity's pick is good 50.0% of the time (top beam 41.3%, any candidate 64.8%);
+  - good among the head's most confident 50 / 70 / 80%: 72.0 / 64.8 / 61.5%.
+- **The judge** (`narration-note-judge.js --rubric quality --gate 1 --n 600`) was run twice:
+  - on the trainer-side picks (`narration-note-pick.py`; v3's head was taken from `notes.v3.json`), $0.126;
+  - on the notes the game shows (`student.note()` for both bundles, season ban on), $0.128.
+- **Entity count:** only 600 test sheets exist, and Haiku's note passes `noteOk` on about 65% of them. So 346 and 350 entities have all four notes; fewer than §1r's 600.
+- **The gate uses the runtime run** (350 entities):
+
+| | mean | good (4–5) | poor (1–2) | bodies | households | buildings | people |
+|---|---|---|---|---|---|---|---|
+| Haiku | 3.59 | 61.1% | 8.0% | 3.52 | 3.80 | 3.71 | 3.04 |
+| **notes v4** | **3.44** | **57.4%** | **14.6%** | 3.18 | 3.65 | 3.56 | 3.24 |
+| notes v3 (live) | 3.31 | 45.7% | 16.6% | 3.19 | 3.56 | 3.34 | 2.96 |
+| template | 2.70 | 20.6% | 49.1% | 1.96 | 3.45 | 2.86 | 2.39 |
+
+- The trainer-side run (346 entities, v3 decoded without the ban) agrees, with a wider gap:
+  - v4: 3.44 mean, 54.6% good, 11.6% poor;
+  - v3: 3.20, 35.8%, 17.3% (people 2.87, with 2% good).
+- On balanced seasons, v3 scores below its §1p 3.38: "Spring has come" in winter grades bland or poor.
+
+**Gate** (all pass):
+
+| check | needed | v4 |
+|---|---|---|
+| mean | within 0.05 of v3 | +0.13 |
+| good share | within 2 points of v3 | +11.7 points |
+| poor share | no worse than v3 | 14.6% against 16.6% |
+| bodies | at least 2.91 | 3.18 (v3 on the same sheets: 3.19) |
+| season words outside the "summer fair" fact | 0 | 0 |
+| parity | at least 6/8 | 8/8 |
+
+**Spend:** $1.66 labels + $0.80 grades + $0.25 judges = **$2.72**.
+
+**Where things are.**
+- rrh-llm-1 `~/narration/`:
+  - runs `notes4-s0`, `notes4-s1` and `notes4-v3dec` (with `.log`);
+  - `notes4-pairs.jsonl` and `notes4-pairs-season.jsonl` (about 0.9 GB together);
+  - `bpe4.json`.
+- That session's scratchpad `narration-v4/`:
+  - `collect/sheets.jsonl`;
+  - `notes1/` and `notes2/` (requests, manifest, labels);
+  - `notes-pairs*.jsonl`, `bpe.json`;
+  - `runs/` (run copies, verdicts, `quality.json`);
+  - `out/` (bundle, fixture, picks, `judge.jsonl`, `judge-runtime.jsonl`);
+  - the probe scripts.
+
+**Left to do.**
+- **Person openers:** "Oh, what a day" opens 15–18% of person notes. A soft opener penalty in the beam, or a more varied person prompt, would bring it under 15%.
+- **The ban hides real facts:** `NOTE_BANNED` also drops true "summer fair" notes (3.5% of Haiku's training notes name one). Now that the tic is gone, exempt "summer fair" (or any season word that the sheet's own texts use).
+- **Bodies** remain the gap to Haiku: 3.18 against 3.52.
+- **The card-quote student:** cards are spring-heavy and the sheets predate the docket calendar change, so recollect before a card retrain (`--stratify season,era` is ready for cards). Measure how often quotes open with the season.
+- **Hosting:** if hosted students are served from somewhere other than `public/`, the v4 files still have to go there.

@@ -1,5 +1,7 @@
 # Distilling routine decisions into the browser
 
+> **Status (October 2026).** This is the original plan, kept for its reasoning. It is not a description of what shipped. The game's students are the **set model** described in [the decision students paper](decision-students-paper.html) ([PDF](decision-students-paper.pdf)), not the MLP proposed below. That model is a transformer over (scope, attribute, value) triples with one question layer and no snapshot encoder (`config.arch: "set"`, `d_model` 32). It has a learned confidence head and int4 weights since v8, and answers 22 kinds, not only `resident_routine`. The bundle's format and the forward pass are in `src/decision-student.js`. The manifest is `public/students/manifest.json`. The continual-update loop of §7 exists twice, with the same gates: locally in `scripts/distill-loop.js`, and in the cloud in `cloudflare/training/loop.js`, published by `cloudflare/learning.js`. Rollback, the kill switch and independent verification are in `docs/hosting.md`. Where this plan and the paper disagree, trust the paper and the code.
+
 A plan to answer the town's highest-volume decision questions with a tiny model that runs in the sim worker, so they never reach a GPU. Written 21 October 2026 against `a5347fc`. Nothing here is built yet.
 
 ---

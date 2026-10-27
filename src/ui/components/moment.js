@@ -1,4 +1,6 @@
 // Moment title cards: era changes, a body founded, a major disaster.
+// items: up to four short lines under the text (an age's look back: its
+// three biggest changes and your rulings in it).
 // Blocking only when the caller says so (at 3× and 5×, or when the player
 // asked for them); the caller pauses the sim while one is open.
 //
@@ -27,7 +29,7 @@ export function createMoments(ctx) {
       <h2 id="moment-title">${esc(m.title)}</h2>
       <div class="rule-line"></div>
       ${m.text ? `<p id="moment-text">${esc(m.text)}</p>` : ''}
-      ${m.items?.length ? `<ul>${m.items.slice(0, 3).map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}
+      ${m.items?.length ? `<ul>${m.items.slice(0, 4).map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}
       <div class="moment-actions">
         <button class="btn btn-primary moment-go" type="button">Continue</button>
         <button class="btn btn-ghost moment-skip" type="button" hidden></button>

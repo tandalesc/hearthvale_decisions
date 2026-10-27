@@ -9,6 +9,8 @@
 // the Town Council: the bodies' budget cards, and the season beside them.
 // From the advisers' unlock an "Advisers" page follows: the bench (seats,
 // advisers, the slate) and the cards they will answer, for your review.
+// Once you have ruled on anything, "Your rulings" (ledger.js) closes the
+// list: every ruling, with what came of it.
 //
 // Desk and tablet: a HUD panel over the main area, between the left rail
 // and the dock, above the time strip. It is not a dialog: the top bar and
@@ -22,10 +24,12 @@ import {explainer, EXPLAINERS} from './explainer.js';
 import {createDocket} from './docket.js';
 import {seasonSummary, seasonStrip} from './budget.js';
 import {createAdvisersView} from './advisers.js';
+import {createLedger} from './ledger.js';
 
 const TOWN = 'moot';
 const BUDGETS = 'budgets';
 const ADVISERS = 'advisers';
+const RULINGS = 'rulings';
 const waiting = (cards) => cards.filter((c) => c.kind !== 'report').length;
 
 // ctx adds: bodyView(id) → the body's page view; onOpen(), onClose().
@@ -48,6 +52,7 @@ export function createCouncil(ctx) {
         <div class="dk-advisers" hidden></div>
         <div class="section-head dk-cards-head"><h3></h3><span class="count"></span></div>
         <div class="dk-strip"></div>
+        <button type="button" class="link-btn ledger-open" hidden>${icon('scroll')}Your rulings</button>
       </div>
       <aside class="dk-side" aria-label="The body's page">
         <div class="dk-page"></div>
@@ -73,6 +78,12 @@ export function createCouncil(ctx) {
   $('.dk-strip').append(strip.el);
   const bench = createAdvisersView({...ctx, focusCard: (id) => { docket.focus(id); }});
   $('.dk-advisers').append(bench.el);
+  // "Your rulings": the ledger, in the middle column in place of the cards.
+  const ledger = createLedger(ctx);
+  ledger.el.hidden = true;
+  $('.dk-cards').append(ledger.el);
+  // A young town's Council has no list down its side: a link under the cards opens the ledger.
+  $('.ledger-open').addEventListener('click', () => setPage(RULINGS));
 
   // page: the body shown (TOWN is every request); area: a category filter.
   let open = false, page = TOWN, area = 'all', data = null;
@@ -139,7 +150,7 @@ export function createCouncil(ctx) {
   function render() {
     if (!data) return;
     // A body that is gone (or a season that is over) takes the page back to the Town Council.
-    if (page === BUDGETS ? !inSeason() && !data.season : page === ADVISERS ? !data.advisers : page !== TOWN && !body()) return setPage(TOWN, {quiet: true});
+    if (page === BUDGETS ? !inSeason() && !data.season : page === ADVISERS ? !data.advisers : page !== TOWN && page !== RULINGS && !body()) return setPage(TOWN, {quiet: true});
     if (open) {   // the session decides who writes: the hosted narrator (Plus) or the local student
       // Narrate ahead only the next few cards on this page, in the order shown;
       // the rest are narrated as they move up or when opened. Budgets never
@@ -153,11 +164,18 @@ export function createCouncil(ctx) {
     renderIndex();
     renderHead();
     renderAreas();
-    const cards = shown();
+    // The ledger takes the cards' place on its page.
+    const ruling = page === RULINGS;
+    ledger.el.hidden = !ruling;
+    docket.el.hidden = ruling;
+    $('.dk-cards-head').hidden = ruling;
+    if (ruling) $('.dk-areas').hidden = true;
+    $('.ledger-open').hidden = ruling || hasIndex() || !(data.rulings?.total > 0);
+    const cards = ruling ? [] : shown();
     const b = body();
-    setText($('.dk-cards-head h3'), page === BUDGETS ? 'Budgets to answer' : page === ADVISERS ? 'Waiting for your review' : area !== 'all' ? `About ${catName(area).toLowerCase()}` : 'Needs your ruling');
+    if (!ruling) setText($('.dk-cards-head h3'), page === BUDGETS ? 'Budgets to answer' : page === ADVISERS ? 'Waiting for your review' : area !== 'all' ? `About ${catName(area).toLowerCase()}` : 'Needs your ruling');
     setText($('.dk-cards-head .count'), cards.length ? String(cards.length) : '');
-    docket.update(cards, {phone: data.phone});
+    if (!ruling) docket.update(cards, {phone: data.phone});
     const view = b ? ctx.bodyView(page) : null;
     if (view && $('.dk-page').firstChild !== view.el) $('.dk-page').replaceChildren(view.el);
     $('.dk-page').hidden = !view;
@@ -180,10 +198,15 @@ export function createCouncil(ctx) {
   function fit() {
     const page = $('.dk-page');
     const pageHas = (!page.hidden && [...page.querySelectorAll('.body-view > section')].some((sec) => !sec.hidden && sec.childElementCount)) || !$('.dk-season').hidden || !$('.dk-adv-side').hidden;
-    const bodies = (data?.bodies ?? []).some((x) => x.id !== TOWN) || Boolean(data?.season) || Boolean(data?.advisers);
-    el.classList.toggle('has-index', bodies);
+    el.classList.toggle('has-index', hasIndex());
     el.classList.toggle('has-side', pageHas);
     $('.dk-side-empty').hidden = true;
+  }
+
+  // The list down the side, once a body besides the Town Council sits (or a
+  // season, the advisers, or the ledger's own page is shown).
+  function hasIndex() {
+    return (data?.bodies ?? []).some((x) => x.id !== TOWN) || Boolean(data?.season) || Boolean(data?.advisers) || page === RULINGS;
   }
 
   function renderHead() {
@@ -192,10 +215,16 @@ export function createCouncil(ctx) {
     const asks = waiting(all), reports = all.length - asks;
     const s = data.season;
     const adv = data.advisers;
-    const sig = `${page}|${b?.name}|${b?.founded}|${b?.status}|${asks}|${reports}|${page === BUDGETS ? `${s?.answered}/${s?.total}` : ''}|${page === ADVISERS ? `${adv?.staged}/${adv?.seats?.filter((x) => x.adviser).length}` : ''}`;
+    const r = data.rulings;
+    const sig = `${page}|${b?.name}|${b?.founded}|${b?.status}|${asks}|${reports}|${page === RULINGS ? `${r?.total}:${r?.approved}:${r?.refused}:${r?.lapsed}` : ''}|${page === BUDGETS ? `${s?.answered}/${s?.total}` : ''}|${page === ADVISERS ? `${adv?.staged}/${adv?.seats?.filter((x) => x.adviser).length}` : ''}`;
     if (sig === headSig) return;
     headSig = sig;
-    $('.dk-head .seal-icon').innerHTML = icon(page === BUDGETS ? 'coin' : page === ADVISERS ? 'quill' : ctx.bodyIcon(page));
+    $('.dk-head .seal-icon').innerHTML = icon(page === BUDGETS ? 'coin' : page === ADVISERS ? 'quill' : page === RULINGS ? 'scroll' : ctx.bodyIcon(page));
+    if (page === RULINGS) {
+      setText($('#dk-title'), 'Your rulings');
+      $('#dk-sub').innerHTML = esc(ledger.tallyText(r));
+      return;
+    }
     if (page === ADVISERS) {
       const filled = adv?.seats?.filter((x) => x.adviser).length ?? 0, seats = adv?.seats?.length ?? 0;
       setText($('#dk-title'), 'Advisers');
@@ -227,7 +256,8 @@ export function createCouncil(ctx) {
     const rest = (data.bodies ?? []).filter((b) => b.id !== TOWN);
     const busy = (b) => (counts.get(b.id) ?? 0) > 0 || data.fresh?.has(`body:${b.id}`);
     const order = rest.length > 6 ? [...rest.filter(busy), ...rest.filter((b) => !busy(b))] : rest;
-    const sig = `${page}|${waiting(cards)}|${budgets}|${data.advisers?.staged}|${Boolean(data.advisers?.slate)}|${Boolean(data.advisers)}|${order.map((b) => `${b.id}:${b.name}:${counts.get(b.id) ?? 0}:${data.fresh?.has(`body:${b.id}`)}`).join()}`;
+    const ruled = data.rulings?.total > 0 || page === RULINGS;
+    const sig = `${page}|${ruled}|${waiting(cards)}|${budgets}|${data.advisers?.staged}|${Boolean(data.advisers?.slate)}|${Boolean(data.advisers)}|${order.map((b) => `${b.id}:${b.name}:${counts.get(b.id) ?? 0}:${data.fresh?.has(`body:${b.id}`)}`).join()}`;
     if (sig === indexSig) return;
     indexSig = sig;
     const button = (id, label, short, count, isNew, ic = ctx.bodyIcon(id)) => `<button type="button" class="dk-filter" data-page="${esc(id)}" aria-pressed="${id === page}" title="${esc(label)}">
@@ -235,6 +265,7 @@ export function createCouncil(ctx) {
     $('.dk-index').innerHTML = button(TOWN, 'Town Council', 'Council', waiting(cards))
       + (budgets || page === BUDGETS ? button(BUDGETS, 'Budget season', 'Budgets', budgets, false, 'coin') : '')
       + (data.advisers ? button(ADVISERS, 'Advisers', 'Advisers', data.advisers.staged, Boolean(data.advisers.slate), 'quill') : '')
+      + (ruled ? button(RULINGS, 'Your rulings', 'Rulings', 0, false, 'scroll') : '')
       + (order.length ? `<h3 class="dk-index-head">Bodies</h3>${order.map((b) => button(b.id, b.name, ctx.shortName?.(b) ?? b.name, counts.get(b.id) ?? 0, data.fresh?.has(`body:${b.id}`))).join('')}` : '');
   }
 
@@ -254,8 +285,10 @@ export function createCouncil(ctx) {
   }
 
   // ---------- open and close ----------
-  // opts: {page, cardId}; a cardId alone opens the page of the body that asks.
-  function show({page: p, cardId} = {}) {
+  // opts: {page, cardId, ledger}; a cardId alone opens the page of the body that
+  // asks; ledger: the filter "Your rulings" opens with ('lapsed', 'refused', 'body:<id>').
+  function show({page: p, cardId, ledger: filter} = {}) {
+    if (p === RULINGS) ledger.setFilter(filter ?? 'all');
     const card = cardId ? data?.cards?.find((c) => c.id === cardId) : null;
     const want = p ?? (card?.kind === 'budget' && page !== card.from ? BUDGETS : card && page !== TOWN && card.from !== page && !card.sides?.includes(page) ? card.from : null);
     if (want && want !== page) setPage(want, {quiet: true});
@@ -292,10 +325,14 @@ export function createCouncil(ctx) {
     fit: () => fit(),
     get isOpen() { return open; },
     get page() { return page; },
-    // {cards, bodies, cats (rules in force by area), phone, unlockedRules, unlocks, fresh, season, advisers}
+    // {cards, bodies, cats (rules in force by area), phone, unlockedRules, unlocks, fresh, season, advisers,
+    //  rulings: the tally {approved, refused, lapsed, total}}
     update(next) {
       data = next;
       render();
     },
+    // The ledger's rows (the snapshot's panels.rulings), while its page is open.
+    updateLedger(rows) { ledger.update(rows); },
+    ledger,
   };
 }

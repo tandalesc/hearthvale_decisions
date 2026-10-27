@@ -356,8 +356,10 @@ export function taggedLines(facts, {durable = false} = {}) {
   const subject = {person: 'Person', household: 'Household', building: 'Building', body: 'Town body'}[f.kind];
   add(`${subject}: ${f.name}`);
   tag = 'head';
-  if (durable) add(`It is year ${f.year}${f.era ? `. Hearthvale is a ${f.era}` : ''}`);
-  else if (f.season || f.era) add(`It is ${f.season ?? 'the'} of year ${f.year}${f.era ? `. Hearthvale is a ${f.era}` : ''}`);
+  // Never the season: a note is kept until something material changes, and a writer told
+  // "It is spring" opens with the weather ("Spring has come to Hearthvale") whatever the month
+  // the reader meets it in.
+  add(`It is year ${f.year}${f.era ? `. Hearthvale is a ${f.era}` : ''}`);
 
   tag = 'who';
   const w = f.who ?? {};

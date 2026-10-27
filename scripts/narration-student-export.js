@@ -52,7 +52,10 @@ const rolesVersion = args.includes('--roles') ? Number(args[args.indexOf('--role
 const noteTemplates = args.includes('--note-templates') ? Number(args[args.indexOf('--note-templates') + 1]) : 0;
 const heldOut = new Set(String(args.includes('--held-out') ? args[args.indexOf('--held-out') + 1] : '').split(',').filter(Boolean).map(Number));
 if (noteTemplates && !heldOut.size) throw new Error('--note-templates needs --held-out');
-const noteRows = (facts) => roleTriples(narrationTriples(facts), {version: rolesVersion});
+// --drop season: leave a fact out of the note triples (the bundle records it as config.drop, and
+// the runtime drops it too). Notes are kept past the season they were written in.
+const dropPaths = String(args.includes('--drop') ? args[args.indexOf('--drop') + 1] : '').split(',').filter(Boolean);
+const noteRows = (facts) => roleTriples(narrationTriples(facts, {drop: dropPaths}), {version: rolesVersion});
 const outFile = args[args.indexOf('--out') + 1];
 if (!sheetsFile || !outFile) throw new Error('usage: narration-student-export.js SHEETS.jsonl --labels FILE --out FILE');
 

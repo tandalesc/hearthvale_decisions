@@ -11,8 +11,8 @@
 //   card     every docket card when it first surfaces, before the council rules
 //   year     each year's chronicle sheet, once the year's line is written
 //   person, household, building, body
-//            --entities sheets of each kind a year, picked by a hash of the seed
-//            and year (all bodies, which are few)
+//            --entities sheets of each kind a year, a quarter of them each season at a
+//            month that varies with the seed and year (all bodies, in one season a year)
 //   end      the end page's sheet, once, at the last year
 // Every sheet is validated as the narrator validates it; refused ones are counted.
 //
@@ -84,11 +84,14 @@ async function runChild() {
 
     const t0 = performance.now();
     const seenCards = new Set();
-    let lastYear = state.time.year, yearDue = null;
+    let lastYear = state.time.year, yearDue = null, seasonDue = [], lastQuarter = '';
     while (state.time.year < years) {
       stepTick(state, 1, {decisions: bus}, {skipPeople: true});
       // Cards as the narrator sees them: before the council rules on them.
-      // Only the cards the game would narrate (cardsNeedingProse: no budget cards).
+      // Only the cards the game would narrate (cardsNeedingProse: surfaced, no budget
+      // cards), each taken the tick it surfaces, so its sheet's season is the one the
+      // player reads it in. A card drafted into the queue waits; one that lapses there
+      // unseen is never narrated and never taken.
       for (const card of cardsNeedingProse(state)) {
         const id = `${card.id}:${card.proseRevision ?? 0}`;
         if (seenCards.has(id)) continue;
@@ -105,10 +108,23 @@ async function runChild() {
       if (state.time.year !== lastYear) {
         lastYear = state.time.year;
         yearDue = lastYear - 1;
-        for (const p of sample(state.people ?? [], entities, 1)) keep(narrativeFacts(state, {personId: p.id}));
-        for (const h of sample(state.households ?? [], entities, 2)) keep(narrativeFacts(state, {householdId: h.id}));
-        for (const b of sample(state.buildings ?? [], entities, 3)) keep(narrativeFacts(state, {buildingId: b.id}));
-        for (const b of state.institutions ?? []) keep(narrativeFacts(state, {bodyId: b.id}));
+        // Entity sheets are taken once a season, not at the turn of the year: taken at month 0
+        // every sheet read "spring", and the notes student learned "Spring has come to
+        // Hearthvale" as a person's opening line. The month within each season varies with the
+        // seed and year, and each season takes a quarter of the year's entities, drawn with its
+        // own salt so the four samples differ. Bodies, which are few, are all taken in one
+        // season a year, rotating with the year.
+        const offset = hash32((seed * 31 + lastYear) * 7919 + 977) % 3;
+        seasonDue = [0, 3, 6, 9].map((m) => m + offset);
+      }
+      const quarter = seasonDue.indexOf(state.time.month);
+      if (quarter >= 0 && lastQuarter !== `${lastYear}:${quarter}`) {
+        lastQuarter = `${lastYear}:${quarter}`;
+        const per = Math.max(1, Math.ceil(entities / 4)), salt = 10 * (quarter + 1);
+        for (const p of sample(state.people ?? [], per, salt + 1)) keep(narrativeFacts(state, {personId: p.id}));
+        for (const h of sample(state.households ?? [], per, salt + 2)) keep(narrativeFacts(state, {householdId: h.id}));
+        for (const b of sample(state.buildings ?? [], per, salt + 3)) keep(narrativeFacts(state, {buildingId: b.id}));
+        if (quarter === (seed + lastYear) % 4) for (const b of state.institutions ?? []) keep(narrativeFacts(state, {bodyId: b.id}));
       }
     }
     keep(chronicleFacts(state, {end: true}));

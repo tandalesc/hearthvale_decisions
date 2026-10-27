@@ -10,20 +10,29 @@
   --paper-scrim: rgba(250, 251, 242, 0.6);
   --ink: #2f3f2f;
   --ink-2: #5a6a55;
-  --muted: #7f8a73;
+  /* Muted text: 4.99:1 on paper, 4.64:1 on paper-2 (tests/ui-tokens.test.js). */
+  --muted: #66705c;
   --line: #dde3cf;
   --line-2: #cfd7bd;
   --green: #526d42;
   --green-2: #6c8a58;
+  /* *-text: the same hues dark enough for text (4.5:1 on paper, paper-2 and their -soft chips).
+     The plain tokens stay for fills, bars and icons (3:1). */
+  --green-2-text: #4f6b44;
   --green-soft: #e3ead3;
   --on-green: #f7f6ea;
   --gold: #c9a24a;
   --gold-soft: rgba(201, 162, 74, 0.2);
+  /* Gold as an icon on paper: --gold is 2.30:1, this is 3.68:1 (3:1 on paper to paper-card). */
+  --gold-icon: #9e7e2c;
   --rust: #b2563f;
+  --rust-text: #9e4b37;
   --rust-soft: #f3dfd4;
   --river: #3f8a99;
+  --river-text: #296a77;
   --river-soft: #d9ebec;
-  --focus: #bc963f;
+  /* The focus ring: 4.83:1 on paper, still a Ledger gold. */
+  --focus: #8a6a24;
 
   /* Shape and depth */
   --radius: 14px;
@@ -96,13 +105,17 @@
   --line-2: #44523f;
   --green: #93b37a;
   --green-2: #a9c78f;
+  --green-2-text: #a9c78f;
   --green-soft: #2f3d2c;
   --on-green: #17201a;
   --gold: #d8b45e;
   --gold-soft: rgba(216, 180, 94, 0.18);
+  --gold-icon: #d8b45e;
   --rust: #dc8467;
+  --rust-text: #dc8467;
   --rust-soft: #3e2a24;
   --river: #74b8c6;
+  --river-text: #74b8c6;
   --river-soft: #22383b;
   --focus: #e0bf6a;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.38), 0 1px 2px rgba(0, 0, 0, 0.3);

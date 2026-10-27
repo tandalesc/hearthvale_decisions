@@ -13,7 +13,7 @@
 // already holds where it does not.
 
 import {hash32} from './rng.js';
-import {monthIndex} from './clock.js';
+import {monthIndex, MONTHS_PER_YEAR} from './clock.js';
 import {doorOf} from './people.js';
 import {POLICIES, activePolicies, levelOf} from './policies.js';
 import {INSTITUTIONS, TEMPLATES, bodyName, personaOf} from './institutions.js';
@@ -1005,7 +1005,12 @@ export function cardFacts(state, cardId) {
     traits: (persona.traits ?? []).slice(0, 3).map((t) => clean(t, 16)).filter(Boolean),
     body: !forms && INSTITUTIONS[card.from] ? clean(bodyName(state, card.from), 40) : undefined,
   };
-  const head = header(state, 'card', card.title);
+  // The card's moment is when the player first sees it: a surfaced card keeps the season (and
+  // year) it reached the council in, however long it then waits; a queued one reads as now.
+  const seen = card.surfacedMonth;
+  const time = seen == null ? state.time
+    : {year: Math.floor(seen / MONTHS_PER_YEAR), month: seen - Math.floor(seen / MONTHS_PER_YEAR) * MONTHS_PER_YEAR};
+  const head = header({...state, time}, 'card', card.title);
   const facts = {
     v: 1, type: 'card', id: clean(card.id, 16), kind: card.kind, template: clean(String(card.templateId ?? '').replace(/\|/g, ' '), 60),
     category: card.category ? clean(card.category, 24) : undefined,
@@ -1038,9 +1043,11 @@ export function cardFacts(state, cardId) {
 }
 
 // Cards that still want prose, oldest first. Budget cards have their own
-// layout and never show a quote, so they are never narrated.
+// layout and never show a quote, so they are never narrated. Queued cards wait:
+// the council only shows (and asks prose for) cards that have surfaced, and a
+// card's sheet carries the season it surfaced in, which a queued card has not got.
 export const cardsNeedingProse = (state) =>
-  (state?.docket ?? []).filter((c) => c.kind !== 'budget' && !c.prose && c.needsProse !== false).sort((a, b) => (a.createdMonth ?? 0) - (b.createdMonth ?? 0));
+  (state?.docket ?? []).filter((c) => c.kind !== 'budget' && c.surfacedMonth != null && !c.prose && c.needsProse !== false).sort((a, b) => (a.createdMonth ?? 0) - (b.createdMonth ?? 0));
 
 // ---------------------------------------------------------------------------
 // The chronicle: a year's line and the end page

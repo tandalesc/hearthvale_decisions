@@ -2,7 +2,7 @@
 // drawer, the notice stack at the top left, the inspector's actions row,
 // dismissable notices and title cards, and the tabbed settings.
 import {test} from '@playwright/test';
-import {expect, hv, open, settle} from './helpers.js';
+import {expect, hv, inSim, open, settle} from './helpers.js';
 
 const box = (page, sel) => hv(page, (s) => {
   const r = document.querySelector(s)?.getBoundingClientRect();
@@ -145,6 +145,54 @@ test('the town keeps running in the Council, even with an old save that asked to
   await page.locator('.dock [data-body="council"]').click();
   await expect(page.locator('.dk')).toBeVisible();
   expect(await hv(page, () => window.hearthvale.speed())).toBe(1);
+});
+
+test('Space pauses and never rules: on a focused card or its choices; Enter still rules', async ({page}) => {
+  const errors = await open(page, {fixture: 'city', stub: true, paused: false});
+  await hv(page, () => window.hearthvale.setSpeed(3));
+  const cid = await hv(page, async () => (await window.hearthvale.snapshot()).docket.find((c) => c.kind !== 'budget')?.id);
+  await hv(page, (id) => window.hearthvale.app.focusDocket(id), cid);
+  const card = page.locator(`.dk .card:not(.is-next)[data-id="${cid}"]`);
+  await expect(card).toBeVisible();
+  // Focus lands on the card itself, not on its first choice.
+  await expect(card).toBeFocused();
+  const waiting = () => hv(page, async (c) => (await window.hearthvale.snapshot()).docket.some((x) => x.id === c), cid);
+  await page.keyboard.press('Space');
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(0);
+  expect(await waiting()).toBe(true);
+  // Tab reaches the choices; Space on one pauses and resumes, it does not rule.
+  const option = card.locator('.option:not([disabled]), .minor').first();
+  await option.focus();
+  await page.keyboard.press('Space');
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
+  await settle(page);
+  expect(await waiting()).toBe(true);
+  // Enter rules.
+  await option.focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(waiting).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+test('free play: keys 4 and 5 keep the current speed and say 10× and 20× are part of Plus', async ({page}) => {
+  const errors = await open(page, {fixture: 'town', stub: true, paused: false});
+  await page.locator('.brand').click();
+  await page.keyboard.press('2');
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
+  await page.keyboard.press('4');
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
+  await expect(page.locator('.toast')).toHaveText(/10× is part of Plus\./);
+  await page.keyboard.press('5');
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
+  await expect(page.locator('.toast')).toHaveText(/20× is part of Plus\./);
+  // The host refuses a paid speed even when asked directly.
+  await hv(page, () => window.hearthvale.setSpeed(10));
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(3);
+  // Paused stays paused.
+  await page.keyboard.press('Space');
+  await page.keyboard.press('4');
+  expect(await hv(page, () => window.hearthvale.speed())).toBe(0);
+  expect(errors).toEqual([]);
 });
 
 test('phone: the Council is one tab in the sheet, its bodies a strip of chips, the time controls in reach', async ({page}) => {
@@ -405,6 +453,32 @@ test('settings: Battery saver is Off by default, reaches the world and is rememb
   expect(errors).toEqual([]);
 });
 
+test('settings: Plus sets what an urgent request does at 10× and above, next to New requests', async ({page}) => {
+  await page.route('**/api/session', (route) => route.fulfill({json: {tier: 'paid', authenticated: true}}));
+  const errors = await open(page, {fixture: 'town', stub: true});
+  await page.locator('.settings-btn').click();
+  const ctl = page.locator('[data-pref="requestsAtSpeed"]');
+  await expect(ctl.locator('[role="radio"]')).toHaveText(['Pause and open', 'Notify']);
+  await expect(ctl.locator('[data-value="pause"]')).toHaveAttribute('aria-checked', 'true');
+  // Straight after the New requests row.
+  expect(await hv(page, () => document.querySelector('.field:has([data-pref="requests"])')?.nextElementSibling?.querySelector('[data-pref]')?.dataset.pref)).toBe('requestsAtSpeed');
+  await ctl.locator('[data-value="notify"]').click();
+  await expect(ctl.locator('[data-value="notify"]')).toHaveAttribute('aria-checked', 'true');
+  expect(await hv(page, () => JSON.parse(localStorage.getItem('hearthvale-ui')).requestsAtSpeed)).toBe('notify');
+  await page.keyboard.press('Escape');
+  await page.locator('.settings-btn').click();
+  await expect(page.locator('[data-pref="requestsAtSpeed"] [data-value="notify"]')).toHaveAttribute('aria-checked', 'true');
+  expect(errors).toEqual([]);
+});
+
+test('settings: free play, which stops at 5×, has no fast-speed request control', async ({page}) => {
+  await page.route('**/api/session', (route) => route.fulfill({json: {tier: 'free', authenticated: false}}));
+  await open(page, {fixture: 'town', stub: true});
+  await page.locator('.settings-btn').click();
+  await expect(page.locator('[data-pref="requests"]')).toBeVisible();
+  await expect(page.locator('[data-pref="requestsAtSpeed"]')).toHaveCount(0);
+});
+
 test('phone: settings tabs scroll sideways inside the sheet without widening the page', async ({page}) => {
   await page.setViewportSize({width: 320, height: 568});
   await open(page, {fixture: 'town', stub: true});
@@ -415,4 +489,89 @@ test('phone: settings tabs scroll sideways inside the sheet without widening the
   await page.locator('#set-tab-access').click();
   await expect(page.locator('#set-tab-access')).toBeInViewport();
   expect(await hv(page, () => document.documentElement.scrollWidth)).toBe(320);
+});
+
+// Two plain requests from the Town Council, on the table at once: their ids.
+const twoRequests = (page) => inSim(page, (s, sim) => {
+  s.treasury = Math.max(s.treasury, 100000);
+  const d = sim.docket;
+  return ['a', 'b'].map((t) => d.addCard(s, d.makeCard(s, {kind: 'proposal', from: 'moot', category: 'food', salient: true,
+    title: `A seed store (${t})`, why: 'Farmers would keep their best seed.', cost: 40, helps: ['farm'], hurts: ['trade'], subjects: [`test:${t}`],
+    options: [{key: 'do', label: 'Build it', tradeoff: 'Small cost.', cost: 40, effects: [{tag: `test:${t}`}]}]}))?.id ?? null);
+});
+
+test('a ruling lands with a receipt, and focus moves on to the next waiting card', async ({page}) => {
+  const errors = await open(page, {fixture: 'town'});
+  test.skip(await hv(page, () => window.hearthvale.sim) !== 'real', 'real sim not present');
+  const [first, second] = await twoRequests(page);
+  expect(first && second).toBeTruthy();
+  await hv(page, () => window.hearthvale.app.refresh());
+  await hv(page, (id) => window.hearthvale.app.focusDocket(id), first);
+  const card = page.locator(`.dk .card:not(.is-next)[data-id="${first}"]`);
+  await expect(card).toBeFocused();
+  await card.locator('.option:not([disabled])').first().focus();
+  await page.keyboard.press('Enter');
+  // The receipt: what you chose, what it cost, who is pleased and who grumbles.
+  await expect(page.locator('.toast')).toHaveText(/^Approved: a seed store \(a\)\. −40 coin\. Farmers are pleased\. Merchants grumble\./);
+  // Focus is not dropped: it lands on the root of the card now open.
+  await expect.poll(() => hv(page, () => {
+    const a = document.activeElement;
+    return a?.matches('.dk .card:not(.is-next):not([data-leaving])') ? a.dataset.id : null;
+  })).not.toBeNull();
+  expect(await hv(page, () => document.activeElement.dataset.id)).not.toBe(first);
+  expect(errors).toEqual([]);
+});
+
+test('requests that lapse with the Council closed: one notice, which opens Your rulings at the lapsed ones', async ({page}) => {
+  const errors = await open(page, {fixture: 'town'});
+  test.skip(await hv(page, () => window.hearthvale.sim) !== 'real', 'real sim not present');
+  await settle(page);
+  const n = await inSim(page, (s, sim) => {
+    const picks = s.docket.filter((c) => c.surfacedMonth != null && c.kind !== 'report' && c.kind !== 'budget').slice(0, 2);
+    const m = sim.monthIndex(s.time);
+    for (const c of picks) c.expiresMonth = m;
+    sim.docket.docketMonthly(s);
+    return picks.length;
+  });
+  expect(n).toBeGreaterThan(0);
+  await hv(page, () => window.hearthvale.app.refresh());
+  const note = page.locator('.notice-major[data-key="lapsed"]');
+  await expect(note).toBeVisible();
+  await expect(note.locator('.notice-title')).toHaveText(n === 1 ? '1 request lapsed while you were away' : /^\d+ requests lapsed while you were away$/);
+  await note.locator('.notice-main').click();
+  await expect(page.locator('.dk')).toBeVisible();
+  await expect(page.locator('#dk-title')).toHaveText('Your rulings');
+  await expect(page.locator('.dk-index [data-page="rulings"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.ledger-filters [data-filter="lapsed"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.ledger-row').first()).toBeVisible();
+  const outcomes = await page.locator('.ledger-row').evaluateAll((els) => els.map((e) => e.dataset.outcome));
+  expect(outcomes.every((o) => o === 'lapsed' || o === 'enacted')).toBe(true);
+  // Refused, then one body's rulings.
+  await page.locator('.ledger-filters [data-filter="refused"]').click();
+  await expect.poll(() => page.locator('.ledger-row').evaluateAll((els) => els.every((e) => e.dataset.outcome === 'refused'))).toBe(true);
+  const body = page.locator('.ledger-filters [data-filter^="body:"]').first();
+  await body.click();
+  await expect(body).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.ledger-row').first()).toBeVisible();
+  // The Town Council page brings the cards back.
+  await page.locator('.dk-index [data-page="moot"]').click();
+  await expect(page.locator('.dk .ledger')).toBeHidden();
+  await expect(page.locator('.dk .docket')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('a new age opens with a look back: its biggest changes and your rulings in it', async ({page}) => {
+  await page.addInitScript(() => localStorage.setItem('hearthvale-ui', JSON.stringify({moments: 'always'})));
+  const errors = await open(page, {fixture: 'town'});
+  test.skip(await hv(page, () => window.hearthvale.sim) !== 'real', 'real sim not present');
+  await settle(page);
+  await inSim(page, (s) => { s.era += 1; s.eraEntered[s.era] = s.time.year; });
+  await hv(page, () => window.hearthvale.app.refresh());
+  const items = page.locator('.moment-card li');
+  await expect(items.last()).toHaveText(/^Your rulings this age: \S+ approved, \S+ refused, \S+ lapsed\.$/);
+  const n = await items.count();
+  expect(n).toBeGreaterThanOrEqual(2);
+  expect(n).toBeLessThanOrEqual(4);
+  await page.locator('.moment-go').click();
+  expect(errors).toEqual([]);
 });

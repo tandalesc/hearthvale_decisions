@@ -1,8 +1,9 @@
 {
-  "latest": 3,
+  "latest": 4,
   "versions": {
     "1": "notes.v1.json",
     "2": "notes.v2.json",
-    "3": "notes.v3.json"
+    "3": "notes.v3.json",
+    "4": "notes.v4.json"
   }
 }
